@@ -1,0 +1,10 @@
+# temporary work files
+tmp/
+
+# generated artifacts (build outputs, db, logs, test outputs)
+target/
+var/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results/

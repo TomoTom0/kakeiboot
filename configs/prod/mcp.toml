@@ -1,0 +1,66 @@
+# budget-book MCP tool settings (single source of truth; docs/spec_mcp-tools.md).
+# Values are the initial values of the spec (sections 3-5, 5-3, 11-5).
+
+[limits]
+# draft / receipt line count (spec 3-5)
+max_items = 200
+# name-like strings (store_name, item name, category path ...)
+max_name_chars = 200
+# note
+max_note_chars = 1000
+# search_receipts limit: default and upper bound
+search_default_limit = 20
+search_max_limit = 50
+# summarize_spending rows per section before "その他"
+stats_max_rows = 200
+# get_catalog stores (store_query)
+catalog_max_stores = 50
+# refresh_widget_images refs
+widget_refs_max = 20
+# get_receipt_drafts list limit: default and upper bound
+drafts_default_limit = 20
+drafts_max_limit = 50
+# label title (web PATCH /labels/{color}) and label_receipts batch size (TASK-17)
+max_label_title_chars = 20
+max_label_batch = 50
+# create_receipt_drafts elements per call; the overflow is returned as
+# not-saved entries, not rejected (TASK-18)
+batch_max_drafts = 10
+# approve_receipt_drafts items per call (whole-call validation error beyond)
+batch_max_approve = 20
+
+[image]
+# Hosts the receipt image download_url may point to (exact host, or "*.suffix"
+# for subdomains). Confirmed against the real ChatGPT file host in TASK-7 (T2).
+fetch_allowed_hosts = ["files.oaiusercontent.com", "*.oaiusercontent.com"]
+# Whole fetch + conversion deadline. Must be shorter than ChatGPT's tool
+# execution limit (TASK-7 T4 decides the final value).
+fetch_timeout_secs = 20
+# Maximum downloaded bytes (larger bodies are rejected as too_large).
+max_download_bytes = 20971520
+# Maximum decoded pixel count (width * height) before rejecting as too_large.
+max_pixels = 50000000
+# Longest edge after resizing (pixels).
+resize_max_edge = 2048
+# libwebp lossy quality (0-100).
+webp_quality = 80.0
+# /media/img/<token> URL lifetime in seconds (spec 11-5: 15 minutes).
+access_token_ttl_secs = 900
+# Dev/test only: allow http:// and loopback hosts for download_url. Must stay
+# false in production.
+allow_insecure_loopback = false
+# Concurrent downloads inside one create_receipt_drafts call (TASK-18).
+batch_fetch_concurrency = 3
+# Process-wide concurrent decode slots (single-tool calls included).
+decode_concurrency = 2
+# Decode slots a batch call may occupy; strictly below decode_concurrency so a
+# single-tool call always finds a free slot.
+batch_decode_concurrency = 1
+# Whole-call fetch + convert deadline of create_receipt_drafts. Must stay
+# shorter than ChatGPT's tool execution limit (TASK-18 T21 decides the value).
+batch_fetch_deadline_secs = 40
+
+[widget]
+# Single-file widget HTML built by the frontend (relative to the project root).
+# A placeholder page is served when the file does not exist yet.
+html_path = "frontend/dist/widget.html"

@@ -1,0 +1,123 @@
+# budget-book authentication settings (single source of truth, spec_auth.md section 10-3).
+# Non-secret values only. Any future secrets go to environment variables referenced by name here.
+
+[auth]
+# Which [auth.env.<profile>] section to use. Each environment has its own
+# configs/<env>/ directory (dev / stg / prod); this file holds the prod values.
+profile = "prod"
+
+# --- environment specific origin / Relying Party settings (spec_auth.md section 1) ---
+
+# Production: cf-tunnel host (backend on port 40283).
+[auth.env.prod]
+# WebAuthn Relying Party ID (host only, no scheme/port). Must equal the host of
+# both rp_origin and public_origin.
+rp_id = "kakeiboot.scioj.com"
+# Origin the browser uses for WebAuthn ceremonies.
+rp_origin = "https://kakeiboot.scioj.com"
+# Canonical public origin (Origin header value checked for /api mutations).
+public_origin = "https://kakeiboot.scioj.com"
+# OAuth issuer / MCP resource.
+issuer = "https://kakeiboot.scioj.com"
+resource = "https://kakeiboot.scioj.com/mcp"
+
+# --- web session (spec_auth.md section 3) ---
+
+[auth.session]
+# Idle timeout in days (last_seen_at based).
+idle_days = 14
+# Absolute session lifetime in days.
+absolute_days = 30
+# A passkey authentication (auth_at) counts as step-up for this many seconds.
+step_up_secs = 600
+# last_seen_at / idle_expires_at are written at most this often (seconds).
+last_seen_update_secs = 300
+
+# --- WebAuthn ceremony (spec_auth.md section 2-5) ---
+
+[auth.ceremony]
+# Ceremony state TTL in seconds (challenge validity).
+ttl_secs = 300
+
+# --- setup / invite / recovery tokens (spec_auth.md section 2-1) ---
+
+[auth.invitation]
+# setup token (operator CLI): default 24 hours.
+setup_ttl_hours = 24
+# invite token (web, ledger owner): 72 hours.
+invite_ttl_hours = 72
+# recovery token (operator CLI): default 1 hour.
+recovery_ttl_hours = 1
+# recovery --ttl upper bound.
+recovery_ttl_max_hours = 24
+
+# --- rate limits (spec_auth.md section 10-1; limiter wiring is a later phase) ---
+
+[auth.rate_limit]
+# /api/webauthn/* per IP per minute.
+webauthn_per_minute = 20
+# invitation / recovery / setup token acceptance per IP per minute.
+token_accept_per_minute = 10
+# token acceptance failures before blocking.
+token_accept_fail_block = 10
+# block duration for repeated token acceptance failures (minutes).
+token_accept_block_minutes = 15
+# /oauth/authorize + decision POST per IP per minute.
+authorize_per_minute = 30
+# /oauth/token + /oauth/revoke per client (IP before assertion validation).
+token_endpoint_per_minute = 60
+# /mcp per user per minute.
+mcp_per_minute = 120
+# anonymous request_recovery per IP per minute.
+recovery_anonymous_per_minute = 5
+# Trust CF-Connecting-IP (only when traffic arrives from local cloudflared).
+# true here: prod traffic arrives via the cf-tunnel.
+trust_cf_connecting_ip = true
+
+# --- OAuth 2.1 authorization server (Phase B values, validated for shape only) ---
+
+[auth.oauth]
+default_scopes = "ledger.read ledger.write"
+cimd_allowed_hosts = ["chatgpt.com"]
+redirect_uri_allowlist = ["https://chatgpt.com/connector_platform_oauth_redirect"]
+# authorization request TTL (seconds).
+authz_request_ttl_secs = 600
+# authorization code lifetime (seconds).
+code_ttl_secs = 60
+# access token lifetime (seconds).
+access_token_ttl_secs = 3600
+# refresh token sliding window (days).
+refresh_sliding_days = 30
+# grant (refresh family) absolute lifetime (days).
+grant_absolute_days = 90
+# refresh rotation grace period (seconds).
+rotation_grace_secs = 60
+# external JWT clock skew tolerance (seconds).
+clock_skew_secs = 60
+
+# --- dev/test only switches (never enable with a production origin) ---
+
+[auth.oauth.dev]
+# Accept http:// client_id / redirect URIs whose host is loopback and let
+# safe_fetch connect to loopback/private addresses, so CIMD / JWKS can be
+# served by a local mock server in tests. Rejected at startup when the
+# selected profile uses https.
+allow_insecure_loopback = false
+
+# --- anonymous recovery requests (spec_auth.md section 8-2; MCP tool is a later phase) ---
+
+[auth.recovery_request]
+# new request per subject hash.
+per_subject_hours = 24
+# note appends per open request per day.
+append_per_day = 3
+# requests per client IP per day.
+per_ip_per_day = 3
+# requests per day overall.
+global_per_day = 10
+# requests per IP per day when no subject hash is present.
+anonymous_ip_per_day = 1
+# single note length cap.
+note_max_chars = 200
+# total note length cap per request.
+note_total_max_chars = 1000

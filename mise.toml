@@ -1,0 +1,84 @@
+# Task runner for budget-book. `mise tasks` lists all tasks.
+# Settings (ports, paths, timeouts) live in configs/*.toml, not here.
+
+[tasks."frontend:install"]
+description = "Install frontend dependencies (frozen lockfile)"
+dir = "{{config_root}}/frontend"
+run = "pnpm install --frozen-lockfile"
+
+[tasks."backend:build"]
+description = "Build the Rust backend"
+run = "cargo build --workspace --all-targets"
+
+[tasks."frontend:build"]
+description = "Type-check and build the frontend (web + widget) into frontend/dist"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = "pnpm build"
+
+[tasks.build]
+description = "Build backend and frontend"
+depends = ["backend:build", "frontend:build"]
+
+[tasks."backend:test"]
+description = "Run backend unit and integration tests"
+run = "cargo test --workspace"
+
+[tasks."frontend:test"]
+description = "Run frontend unit tests (vitest)"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = "pnpm test"
+
+[tasks."frontend:browser"]
+description = "Real-browser capture (chromium headless, API stubbed) into frontend/test-results/browser/"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = ["pnpm exec playwright install chromium", "pnpm exec playwright test"]
+
+[tasks.test]
+description = "Run all tests"
+depends = ["backend:test", "frontend:test"]
+
+[tasks."backend:lint"]
+description = "rustfmt check and clippy (warnings are errors)"
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+]
+
+[tasks."frontend:lint"]
+description = "ESLint (vue/no-v-html enforced) and vue-tsc type check"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = ["pnpm lint", "pnpm typecheck"]
+
+[tasks.lint]
+description = "Run all linters"
+depends = ["backend:lint", "frontend:lint"]
+
+[tasks.verify]
+description = "All tests and lint; exit code is non-zero on any failure"
+depends = ["lint", "test"]
+
+[tasks."dev:backend"]
+description = "Run the dev backend server (reads configs/dev/*.toml)"
+run = "cargo run -p budget-book -- --config-dir configs/dev"
+
+[tasks."stg:backend"]
+description = "Run the staging backend server (reads configs/stg/*.toml; cf-tunnel host)"
+run = "cargo run -p budget-book -- --config-dir configs/stg"
+
+[tasks."prod:backend"]
+description = "Run the production backend server (reads configs/prod/*.toml; cf-tunnel host)"
+run = "cargo run -p budget-book -- --config-dir configs/prod"
+
+[tasks."dev:frontend"]
+description = "Run the Vite dev server"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = "pnpm dev"
+
+[tasks.dev]
+description = "Run backend and frontend dev servers in parallel"
+depends = ["dev:backend", "dev:frontend"]

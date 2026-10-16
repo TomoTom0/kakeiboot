@@ -1,0 +1,52 @@
+# budget-book application settings - staging environment (kakeiboot-stg.scioj.com).
+# Served through the cf-tunnel to https://kakeiboot-stg.scioj.com -> port 40282.
+# Relative paths are resolved against the project root (two levels above this
+# configs/stg/ directory).
+
+[server]
+# Listen on all interfaces so the origin address the cf-tunnel Service
+# points at (loopback, LAN IP, hostname - any) reaches the backend.
+# Both stacks so that clients resolving localhost to ::1 (Go resolvers, e.g.
+# cloudflared) and to 127.0.0.1 both reach the backend.
+hosts = ["::"]
+# Listen port. Fixed assignment (user-approved 2026-10-13): dev = 40280,
+# Vite dev = 40281, stg = 40282 (this file), prod = 40283.
+port = 40282
+# Graceful shutdown timeout in seconds.
+shutdown_timeout_secs = 10
+
+[mcp]
+# Mount path of the MCP Streamable HTTP endpoint.
+path = "/mcp"
+# Host header allowlist for the MCP endpoint (DNS rebinding protection).
+allowed_hosts = ["localhost", "127.0.0.1", "::1", "kakeiboot-stg.scioj.com"]
+# Maximum POST body size for MCP requests (bytes).
+max_request_body_bytes = 1048576
+
+[database]
+# SQLite database file (generated artifact under var/stg/).
+path = "var/stg/db.sqlite"
+# Connection pool size.
+max_connections = 5
+# Busy timeout in milliseconds.
+busy_timeout_ms = 5000
+
+[log]
+# tracing EnvFilter directive. RUST_LOG overrides this when set.
+filter = "info,budget_book=debug"
+
+[maintenance]
+# TTL sweep interval (seconds). Runs once at startup and then on this interval
+# (spec_data-model.md section 12).
+cleanup_interval_secs = 3600
+# Root directory of stored images (relative paths resolve against the project
+# root). Orphan-image cleanup deletes files under here.
+image_root = "var/stg/images"
+
+[frontend]
+# Vite dev server port (unused in stg; kept because the config schema requires
+# it. Local development uses configs/dev/).
+dev_port = 40281
+# Built frontend directory the backend serves (SPA shell + hashed assets;
+# relative paths resolve against the project root).
+static_dir = "frontend/dist"

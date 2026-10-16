@@ -1,0 +1,48 @@
+# budget-book application settings (single source of truth).
+# Relative paths are resolved against the project root (the parent of this configs/ directory).
+
+[server]
+# Listen addresses (loopback; both stacks).
+hosts = ["127.0.0.1", "::1"]
+# Listen port. Fixed assignment (user-approved 2026-10-13): 40280-40284 range.
+# dev backend = 40280, Vite dev server = [frontend].dev_port (40281),
+# stg backend = 40282 (configs/stg/), prod backend = 40283 (configs/prod/).
+port = 40280
+# Graceful shutdown timeout in seconds.
+shutdown_timeout_secs = 10
+
+[mcp]
+# Mount path of the MCP Streamable HTTP endpoint.
+path = "/mcp"
+# Host header allowlist for the MCP endpoint (DNS rebinding protection).
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+# Maximum POST body size for MCP requests (bytes).
+max_request_body_bytes = 1048576
+
+[database]
+# SQLite database file (generated artifact under var/<env>/).
+path = "var/dev/db.sqlite"
+# Connection pool size.
+max_connections = 5
+# Busy timeout in milliseconds.
+busy_timeout_ms = 5000
+
+[log]
+# tracing EnvFilter directive. RUST_LOG overrides this when set.
+filter = "info,budget_book=debug"
+
+[maintenance]
+# TTL sweep interval (seconds). Runs once at startup and then on this interval
+# (spec_data-model.md section 12).
+cleanup_interval_secs = 3600
+# Root directory of stored images (relative paths resolve against the project
+# root; per environment under var/<env>/). Orphan-image cleanup deletes files
+# under here.
+image_root = "var/dev/images"
+
+[frontend]
+# Vite dev server port (development only; user-approved 2026-10-13).
+dev_port = 40281
+# Built frontend directory the backend serves in production-style runs
+# (SPA shell + hashed assets; relative paths resolve against the project root).
+static_dir = "frontend/dist"
