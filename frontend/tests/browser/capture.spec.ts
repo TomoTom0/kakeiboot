@@ -11,12 +11,22 @@ import { expect, test, type Page } from '@playwright/test'
 import { installApiStub } from './stub'
 
 const OUT = 'test-results/browser/capture'
-const WIDTHS = [390, 360, 1280] as const
+const WIDTHS = [390, 360, 768, 1280] as const
 const SCREENS = [
   { name: 'home', path: '/' },
   { name: 'categories', path: '/categories' },
   { name: 'receipt-feed', path: '/receipts/101' },
+  // settings tabs (TASK-36 real-device rework: four horizontal tabs) and the
+  // label manage screen that lights the data tab
+  { name: 'settings-general', path: '/settings/general' },
+  { name: 'settings-auth', path: '/settings/auth' },
+  { name: 'settings-data', path: '/settings/data' },
+  { name: 'settings-others', path: '/settings/others' },
   { name: 'settings-labels', path: '/settings/labels' },
+  // usage pages (TASK-37); usage-connect shows the F2/F6 placeholders until
+  // the ChatGPT-side screenshots land, so it captures fine without them
+  { name: 'usage', path: '/usage' },
+  { name: 'usage-connect', path: '/usage/connect' },
 ] as const
 
 type Box = { x: number; y: number; width: number; height: number } | null
@@ -156,26 +166,39 @@ for (const width of WIDTHS) {
         metrics[s.name] = { shell: await shellMetrics(page), main: await mainRows(page) }
       }
 
-      // sidebar / drawer open (mobile: via the menu button)
+      // sidebar / drawer open. The shell class is the source of truth for
+      // the open state (the overlay hides via transform, not display):
+      // mobile starts closed, so the menu button opens it; desktop starts
+      // open (TASK-33 overlay unification) — and a closed shot follows.
       await page.goto('/')
       await expect(page.locator('.topbar')).toBeVisible()
       await page.waitForLoadState('networkidle')
       const menu = page.locator('[data-test="menu-button"]')
-      if (await menu.isVisible()) {
+      const navOpen = async () => ((await page.locator('.shell').getAttribute('class')) ?? '').includes('drawer-open')
+      if (!(await navOpen())) {
         await menu.click()
-        await page.waitForTimeout(400) // drawer transition
+        await page.waitForTimeout(400) // slide transition
       }
       await page.screenshot({ path: `${dir}/sidebar-open.png` })
       metrics['sidebar-open'] = { shell: await shellMetrics(page) }
       // the same on the receipt feed (toolbar under the top bar)
       await page.goto('/receipts/101')
       await page.waitForLoadState('networkidle')
-      if (await menu.isVisible()) {
+      if (!(await navOpen())) {
         await menu.click()
         await page.waitForTimeout(400)
       }
       await page.screenshot({ path: `${dir}/sidebar-open-feed.png` })
       metrics['sidebar-open-feed'] = { shell: await shellMetrics(page) }
+      // desktop only: the menu button slides the overlay closed (and back)
+      if (width >= 900) {
+        await menu.click()
+        await page.waitForTimeout(400)
+        await page.screenshot({ path: `${dir}/sidebar-closed.png` })
+        metrics['sidebar-closed'] = { shell: await shellMetrics(page) }
+        await menu.click()
+        await page.waitForTimeout(400)
+      }
 
       // enlarged logo crops (3x device pixels)
       const ctx = await browser.newContext({

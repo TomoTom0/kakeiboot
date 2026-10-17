@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { formatLabelQuery, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import DashSkeleton from '../components/DashSkeleton.vue'
 import LabelFilter from '../components/LabelFilter.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -404,11 +405,6 @@ const stores = computed(() => {
         </ul>
       </section>
     </div>
-    <p
-      v-else-if="loading"
-      class="muted"
-    >
-      読み込んでいます...
-    </p>
+    <DashSkeleton v-else-if="loading" />
   </div>
 </template>

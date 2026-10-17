@@ -10,6 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, Response};
 use budget_book::app::{self, AppState};
 use budget_book::auth::invitation::{self, InvitationKind, NewInvitation};
+use budget_book::auth::register_invitation;
 use budget_book::auth::session::now_ms;
 use budget_book::auth::tokens::{b64url_encode, sha256};
 use budget_book::config::Config;
@@ -53,6 +54,12 @@ pub async fn auth_setup_file() -> (Router, SqlitePool, tempfile::TempDir) {
 pub struct Client {
     auth: WebauthnAuthenticator<SoftPasskey>,
     pub cookies: HashMap<String, String>,
+    /// credential id -> the user handle from the registration challenge, i.e.
+    /// what a real discoverable authenticator reports back at login. The soft
+    /// token itself cannot do this, so `register` records it here and
+    /// `authenticate_discoverable` replays it (falling back to the explicit
+    /// argument for credentials seeded outside a challenge).
+    challenge_handles: HashMap<Vec<u8>, Vec<u8>>,
 }
 
 impl Default for Client {
@@ -68,6 +75,7 @@ impl Client {
             // the server always requires UV (spec_auth.md section 2-3).
             auth: WebauthnAuthenticator::new(SoftPasskey::new(true)),
             cookies: HashMap::new(),
+            challenge_handles: HashMap::new(),
         }
     }
 
@@ -214,9 +222,13 @@ impl Client {
     }
 
     pub fn register(&mut self, ccr: CreationChallengeResponse) -> RegisterPublicKeyCredential {
-        self.auth
+        let handle = ccr.public_key.user.id.to_vec();
+        let cred = self
+            .auth
             .do_registration(Url::parse(ORIGIN).unwrap(), ccr)
-            .unwrap()
+            .unwrap();
+        self.challenge_handles.insert(cred.raw_id.to_vec(), handle);
+        cred
     }
 
     pub fn authenticate(&mut self, rcr: RequestChallengeResponse) -> PublicKeyCredential {
@@ -238,7 +250,10 @@ impl Client {
 
     /// Discoverable assertion: emulate what a resident-key authenticator
     /// does for an empty allow list — select one of the user's credentials
-    /// and report its user handle (the soft token itself cannot).
+    /// and report the user handle bound to that credential at registration
+    /// (the challenge handle, NOT the current DB handle; the soft token
+    /// itself cannot, so `register` recorded it). `user_handle` is the
+    /// fallback for credentials seeded outside a challenge.
     pub fn authenticate_discoverable(
         &mut self,
         mut rcr: RequestChallengeResponse,
@@ -257,7 +272,12 @@ impl Client {
             .auth
             .do_authentication(Url::parse(ORIGIN).unwrap(), rcr)
             .unwrap();
-        cred.response.user_handle = Some(user_handle.to_vec().into());
+        let handle = self
+            .challenge_handles
+            .get(cred.raw_id.as_slice())
+            .cloned()
+            .unwrap_or_else(|| user_handle.to_vec());
+        cred.response.user_handle = Some(handle.into());
         cred
     }
 }
@@ -336,6 +356,15 @@ pub async fn issue_recovery_token(pool: &SqlitePool, target: i64) -> String {
     )
     .await
     .unwrap()
+}
+
+/// Issue a register invitation token through the real issuance path
+/// (TASK-32: `register_invitations`, web-issued registration-only tokens;
+/// 24h TTL, one call per test — the per-issuer open limit is 5).
+pub async fn issue_register_token(pool: &SqlitePool, created_by: i64, note: &str) -> String {
+    register_invitation::issue(pool, created_by, note, 24 * 3_600_000, now_ms())
+        .await
+        .expect("register token issues")
 }
 
 /// Run register/start + finish with a setup token; returns the new user id.

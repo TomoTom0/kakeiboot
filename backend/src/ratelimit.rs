@@ -43,6 +43,34 @@ pub enum Class {
     Media,
 }
 
+impl Class {
+    /// Stable label for logs (spec_auth.md 10-5, TASK-15).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Class::Webauthn => "webauthn",
+            Class::TokenAccept => "token_accept",
+            Class::Authorize => "authorize",
+            Class::TokenEndpoint => "token_endpoint",
+            Class::Mcp => "mcp",
+            Class::RecoveryAnonymous => "recovery_anonymous",
+            Class::McpUnauthenticated => "mcp_unauthenticated",
+            Class::Media => "media",
+        }
+    }
+}
+
+/// WARN one fired limiter (spec_auth.md 10-5, TASK-15): which class fired
+/// and for which key. Keys are identifiers only (IP or `user:<id>` /
+/// `client:<client_id>` labels); no secrets are involved.
+pub fn warn_limited(class: Class, key: &str, retry_after_secs: u32) {
+    tracing::warn!(
+        class = %class.as_str(),
+        key = %key,
+        retry_after_secs,
+        "rate limited"
+    );
+}
+
 /// GCRA state: the theoretical arrival time (unix ms) of the next request.
 struct Cell {
     tat: i64,
@@ -199,15 +227,22 @@ pub async fn api_limit_guard(
         state.auth.rate_limit.trust_cf_connecting_ip,
     );
     if state.limits.is_blocked(&ip, now) {
+        warn_limited(
+            Class::TokenAccept,
+            &ip,
+            state.auth.rate_limit.token_accept_block_minutes * 60,
+        );
         return too_many_requests(state.auth.rate_limit.token_accept_block_minutes * 60);
     }
     if let Some(retry) = state.limits.check(Class::Webauthn, &ip, now) {
+        warn_limited(Class::Webauthn, &ip, retry);
         return too_many_requests(retry);
     }
     let token_accept = path == "/api/webauthn/register/info"
         || path == "/api/webauthn/register/start"
         || path == "/api/webauthn/register/finish";
     if token_accept && let Some(retry) = state.limits.check(Class::TokenAccept, &ip, now) {
+        warn_limited(Class::TokenAccept, &ip, retry);
         return too_many_requests(retry);
     }
     let resp = next.run(req).await;

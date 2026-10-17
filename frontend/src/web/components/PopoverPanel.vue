@@ -49,6 +49,7 @@ const { toggle, close } = usePopover({
 
 // data-test and friends go to the dialog; class goes to the wrapper.
 const attrs = useAttrs()
+const hostClass = computed(() => (typeof attrs.class === 'string' && attrs.class !== '' ? attrs.class : null))
 const panelAttrs = computed(() => {
   const rest: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(attrs)) if (k !== 'class') rest[k] = v
@@ -62,7 +63,7 @@ defineOptions({ inheritAttrs: false })
   <div
     ref="rootEl"
     class="popover-host"
-    :class="`popover-${variant}`"
+    :class="[`popover-${variant}`, hostClass]"
   >
     <div
       ref="triggerWrap"

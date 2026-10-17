@@ -20,7 +20,13 @@ import { useSessionStore } from '../stores/session'
 // delete is preview -> confirm with the preview's revision; restore needs no
 // confirmation. The labels slot is the TASK-17 insertion point.
 const props = defineProps<{ ledgerId: number; receiptId: number }>()
-const emit = defineEmits<{ editingChange: [editing: boolean]; changed: [receipt: ReceiptView] }>()
+const emit = defineEmits<{
+  editingChange: [editing: boolean]
+  changed: [receipt: ReceiptView]
+  /** detail fetch settled (success or error): the feed's scroll
+   * compensation waits for this instead of racing the fetch (TASK-19 2-7) */
+  loaded: []
+}>()
 
 defineSlots<{
   labels(slotProps: {
@@ -72,6 +78,8 @@ async function load(): Promise<void> {
     imageFailed.value = false
   } catch (e) {
     error.value = errorMessage(e)
+  } finally {
+    emit('loaded')
   }
 }
 onMounted(load)
@@ -328,7 +336,7 @@ const labelSlotProps = computed(() => ({
           <p class="muted">
             {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}
           </p>
-          <p class="tags">
+          <div class="tags">
             <span
               v-if="receipt.payment_method"
               class="tag"
@@ -341,12 +349,12 @@ const labelSlotProps = computed(() => ({
               v-if="receipt.has_image"
               class="tag"
             >画像あり</span>
-          </p>
-          <!-- TASK-17 inserts the label picker here (labels slot) -->
-          <slot
-            name="labels"
-            v-bind="labelSlotProps"
-          />
+            <!-- TASK-17/26: the labels slot rides at the end of the tags row -->
+            <slot
+              name="labels"
+              v-bind="labelSlotProps"
+            />
+          </div>
         </div>
         <div class="receipt-total">
           <span class="muted small">合計</span>

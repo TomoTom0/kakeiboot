@@ -1,6 +1,7 @@
 // Ledger colors and the ledger switcher (TASK-16 item 3): initial selection
-// from me.default_ledger_id, the LedgerSwitcher (color chip + popover list),
-// the top bar color band and the color radiogroup on the settings screen.
+// from me.default_ledger_id, the LedgerSwitcher (color chip + popover list)
+// and the top bar color band. The settings-screen color radiogroup is gone
+// (TASK-34: display colors are assigned automatically, not user-chosen).
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Me } from '@/web/api/auth'
@@ -117,44 +118,5 @@ describe('LedgerSwitcher', () => {
     await router.push('/settings')
     await settle()
     expect(wrapper.find('.topbar').classes()).not.toContain('ledger-scoped')
-  })
-})
-
-describe('SettingsPage ledger color', () => {
-  it('[covers:web-settings.ledger-color] 色の radiogroup（表示名テキスト付き）で選ぶと PUT し me 再取得で反映', async () => {
-    const teal: Me = { ...TWO, ledgers: [TWO.ledgers[0]!] }
-    const orange: Me = { ...TWO, ledgers: [{ ...TWO.ledgers[0]!, color: 'orange' }] }
-    const f = mockFetch({
-      'GET /api/auth/me': [{ body: teal }, { body: orange }],
-      'GET /api/passkeys': { body: [] },
-      'PUT /api/ledgers/1/membership/color': { status: 204 },
-    })
-    const { wrapper, router } = await mountApp('/settings')
-    const group = wrapper.find('[role="radiogroup"]')
-    expect(group.exists()).toBe(true)
-    const radios = group.findAll('input[type="radio"], [role="radio"]')
-    expect(radios).toHaveLength(6)
-    const NAMES = ['ティール', 'オレンジ', 'ピンク', 'ブラウン', 'スレート', 'グラファイト']
-    const labelOf = (el: Element) =>
-      (el.closest('label')?.textContent ?? '') + (el.textContent ?? '') + (el.getAttribute('aria-label') ?? '')
-    for (const name of NAMES) {
-      expect(radios.some((r) => labelOf(r.element).includes(name)), name).toBe(true)
-    }
-    const isChecked = (el: Element) =>
-      (el instanceof HTMLInputElement && el.checked) || el.getAttribute('aria-checked') === 'true'
-    const tealRadio = radios.find((r) => labelOf(r.element).includes('ティール'))!
-    expect(isChecked(tealRadio.element)).toBe(true)
-
-    const orangeRadio = radios.find((r) => labelOf(r.element).includes('オレンジ'))!
-    await orangeRadio.trigger('click')
-    await settle()
-    const puts = f.to('PUT', '/api/ledgers/1/membership/color')
-    expect(puts).toHaveLength(1)
-    expect(puts[0]!.body).toEqual({ color: 'orange' })
-    expect(f.to('GET', '/api/auth/me')).toHaveLength(2)
-
-    await router.push('/')
-    await settle()
-    expect(wrapper.find('[data-test="ledger-switch"]').html()).toContain('var(--ledger-orange)')
   })
 })

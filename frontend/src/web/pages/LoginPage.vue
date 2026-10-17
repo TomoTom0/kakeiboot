@@ -23,12 +23,17 @@ const error = ref('')
 
 async function finish(credential: AssertionJson): Promise<void> {
   const res = await authApi.loginFinish(credential)
-  session.clear()
   if (res.next === 'consent' && req) {
+    // The consent screen is public: no shell, no session state needed.
+    session.clear()
     await router.replace({ path: '/oauth/consent', query: { req } })
-  } else {
-    await router.replace('/')
+    return
   }
+  // Settle the session BEFORE navigating (TASK-39 A-2): the shell and the
+  // route flip in the same frame, and the router guard sees session.me and
+  // skips its own /me round trip.
+  await session.loadMe()
+  await router.replace('/')
 }
 
 function showError(e: unknown): void {

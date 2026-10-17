@@ -280,60 +280,48 @@ pub async fn list(
         .collect())
 }
 
-/// Resolve a hash hex prefix (8+ chars) to a single token row, delete it,
-/// and return its hash. `NotFound` / `Ambiguous` for unknown or non-unique
-/// prefixes (spec_auth.md section 9: tokens are identified by the first 8
-/// hex chars of the hash).
-pub async fn revoke_by_prefix(
-    pool: &SqlitePool,
-    prefix: &str,
-    now: i64,
-) -> anyhow::Result<RevokeOutcome> {
-    let upper = prefix.trim().to_ascii_uppercase();
-    if upper.len() < 8 || !upper.bytes().all(|b| b.is_ascii_hexdigit()) {
-        anyhow::bail!("token id must be a hex prefix of at least 8 characters");
-    }
+/// Hashes whose hex form starts with the (validated, upper-cased) prefix.
+/// The caller (admin CLI) validates the prefix shape first; the token
+/// revoke flow resolves prefixes across `invitations` and
+/// `register_invitations` together (TASK-32).
+pub async fn hashes_by_prefix(pool: &SqlitePool, prefix: &str) -> anyhow::Result<Vec<Vec<u8>>> {
     let rows: Vec<(Vec<u8>,)> =
         sqlx::query_as("SELECT token_hash FROM invitations WHERE hex(token_hash) LIKE ?")
-            .bind(format!("{upper}%"))
+            .bind(format!("{prefix}%"))
             .fetch_all(pool)
             .await?;
-    match rows.len() {
-        0 => Ok(RevokeOutcome::NotFound),
-        1 => {
-            let hash = rows[0].0.clone();
-            let mut conn = pool.acquire().await?;
-            let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-            sqlx::query("DELETE FROM invitations WHERE token_hash = ?")
-                .bind(&hash)
-                .execute(&mut *tx)
-                .await?;
-            super::audit(
-                &mut tx,
-                "system",
-                "invitation",
-                0,
-                "token_revoke",
-                None,
-                &serde_json::json!({
-                    "token_hash_prefix": super::tokens::to_hex(&hash)[..8].to_string(),
-                    "os_user": os_user()
-                }),
-                now,
-            )
-            .await?;
-            tx.commit().await?;
-            Ok(RevokeOutcome::Deleted(hash))
-        }
-        _ => Ok(RevokeOutcome::Ambiguous(rows.len())),
-    }
+    Ok(rows.into_iter().map(|(h,)| h).collect())
 }
 
-#[derive(Debug, PartialEq)]
-pub enum RevokeOutcome {
-    Deleted(Vec<u8>),
-    NotFound,
-    Ambiguous(usize),
+/// Delete the token row with this exact hash in one transaction and audit
+/// it. The caller (admin CLI) resolves the hash prefix and enforces
+/// uniqueness across `invitations` and `register_invitations` together
+/// (spec_auth.md section 9: tokens are identified by the first 8 hex chars
+/// of the hash); deleting by the resolved hash keeps resolve and delete on
+/// the same row without a second prefix SELECT.
+pub async fn revoke_by_hash(pool: &SqlitePool, hash: &[u8], now: i64) -> anyhow::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    sqlx::query("DELETE FROM invitations WHERE token_hash = ?")
+        .bind(hash)
+        .execute(&mut *tx)
+        .await?;
+    super::audit(
+        &mut tx,
+        "system",
+        "invitation",
+        0,
+        "token_revoke",
+        None,
+        &serde_json::json!({
+            "token_hash_prefix": super::tokens::to_hex(hash)[..8].to_string(),
+            "os_user": os_user()
+        }),
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// OS user name recorded in CLI audit rows (spec_auth.md section 9).

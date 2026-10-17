@@ -43,6 +43,11 @@ export const usePeriodStore = defineStore('web-period', () => {
 
   // Labels belong to a ledger: switching the book resets the shared filter.
   // The initial selection (null -> id) is not a switch.
+  // flush: 'sync' makes the reset land BEFORE the pages' useLedger watchers
+  // reload — their relative scheduler order is not guaranteed (it depends on
+  // the component-tree uid allocation, and the reset ran after the reload
+  // once App.vue gained one more wrapper component: TASK-39 branch
+  // transition), which sent the stale label filter to the new ledger.
   watch(
     () => session.selectedLedgerId,
     (_id, prev) => {
@@ -50,6 +55,7 @@ export const usePeriodStore = defineStore('web-period', () => {
       labelColors.value = []
       labelDirty.value = true
     },
+    { flush: 'sync' },
   )
 
   /** Inclusive date range of the selected period. */

@@ -14,7 +14,8 @@ use uuid::Uuid;
 use webauthn_rs::prelude::*;
 use webauthn_rs_proto::{ResidentKeyRequirement, UserVerificationPolicy};
 
-use super::invitation::{self, InvitationKind, InvitationRow};
+use super::invitation;
+use super::register_invitation::{self, RegistrationToken, UserOrigin};
 use super::session::{self, ValidSession};
 use super::tokens::{self, TOKEN_LEN, from_hex, random_token, sha256, to_hex};
 use crate::config::ResolvedAuth;
@@ -27,6 +28,14 @@ struct Envelope {
     invitation_hash: Option<String>,
     /// Display name captured at register/start (setup / invite only).
     display_name: Option<String>,
+    /// The user handle (uuid bytes) issued in the register/start challenge.
+    /// New-user registrations MUST persist this exact handle as
+    /// `users.webauthn_user_handle`: a discoverable credential returns the
+    /// challenge handle at login, so the stored handle has to be the same
+    /// value. Absent on ceremonies written before this field existed and on
+    /// every other ceremony kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user_handle: Option<Vec<u8>>,
     /// The webauthn-rs ceremony state.
     state: serde_json::Value,
 }
@@ -161,8 +170,10 @@ pub struct RegisterStartOutcome {
     pub ttl_secs: i64,
 }
 
-/// Validate the invitation, start a discoverable-credential registration
-/// with `resident_key = preferred` (spec_auth.md section 2-3).
+/// Validate the token (invitations / register_invitations), start a
+/// discoverable-credential registration with `resident_key = preferred`
+/// (spec_auth.md section 2-3). Recovery targets an existing user; every
+/// other kind (setup / invite / register) creates a new one.
 pub async fn register_start(
     pool: &SqlitePool,
     webauthn: &Webauthn,
@@ -173,58 +184,58 @@ pub async fn register_start(
 ) -> Result<RegisterStartOutcome, RegisterStartError> {
     let token = invitation::parse_token(token_str).ok_or(RegisterStartError::InvalidToken)?;
     let mut conn = pool.acquire().await.map_err(anyhow::Error::from)?;
-    let inv = invitation::find_by_token(&mut conn, &token)
+    let reg = register_invitation::find_registration_token(&mut conn, &token)
         .await
         .map_err(anyhow::Error::from)?
         .ok_or(RegisterStartError::InvalidToken)?;
-    if !invitation::is_usable(&inv, now) {
+    if !reg.is_usable(now) {
         return Err(RegisterStartError::InvalidToken);
     }
-    let display_name = match inv.kind {
-        InvitationKind::Setup | InvitationKind::Invite => Some(
+    let display_name = if reg.is_recovery() {
+        if display_name.is_some_and(|s| !s.trim().is_empty()) {
+            return Err(RegisterStartError::DisplayNameNotAllowed);
+        }
+        None
+    } else {
+        Some(
             display_name
                 .map(str::trim)
                 // 100 characters (not bytes), matching the label rule.
                 .filter(|s| !s.is_empty() && s.chars().count() <= 100)
                 .ok_or(RegisterStartError::DisplayNameRequired)?,
-        ),
-        InvitationKind::Recovery => {
-            if display_name.is_some_and(|s| !s.trim().is_empty()) {
-                return Err(RegisterStartError::DisplayNameNotAllowed);
-            }
-            None
-        }
+        )
     };
-    let (uuid, ceremony_user, exclude, user_display) = match inv.kind {
-        InvitationKind::Recovery => {
-            // recovery targets an existing, enabled user (spec 2-1).
-            let row: Option<(Vec<u8>, String)> = sqlx::query_as(
-                "SELECT webauthn_user_handle, display_name FROM users
-                 WHERE id = ? AND disabled_at IS NULL",
-            )
-            .bind(inv.target_user_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(anyhow::Error::from)?;
-            let Some((handle, display)) = row else {
-                return Err(RegisterStartError::InvalidToken);
-            };
-            let creds: Vec<Vec<u8>> = sqlx::query_scalar(
-                "SELECT credential_id FROM webauthn_credentials WHERE user_id = ?",
-            )
-            .bind(inv.target_user_id)
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(anyhow::Error::from)?;
-            let uuid = Uuid::from_slice(&handle).map_err(|e| RegisterStartError::Db(e.into()))?;
-            (uuid, inv.target_user_id, creds, display)
-        }
-        InvitationKind::Setup | InvitationKind::Invite => (
+    let (uuid, ceremony_user, exclude, user_display) = if reg.is_recovery() {
+        let RegistrationToken::Invitation(inv) = &reg else {
+            return Err(RegisterStartError::InvalidToken);
+        };
+        // recovery targets an existing, enabled user (spec 2-1).
+        let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+            "SELECT webauthn_user_handle, display_name FROM users
+             WHERE id = ? AND disabled_at IS NULL",
+        )
+        .bind(inv.target_user_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(anyhow::Error::from)?;
+        let Some((handle, display)) = row else {
+            return Err(RegisterStartError::InvalidToken);
+        };
+        let creds: Vec<Vec<u8>> =
+            sqlx::query_scalar("SELECT credential_id FROM webauthn_credentials WHERE user_id = ?")
+                .bind(inv.target_user_id)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(anyhow::Error::from)?;
+        let uuid = Uuid::from_slice(&handle).map_err(|e| RegisterStartError::Db(e.into()))?;
+        (uuid, inv.target_user_id, creds, display)
+    } else {
+        (
             Uuid::new_v4(),
             None,
             Vec::new(),
             display_name.expect("checked above").to_string(),
-        ),
+        )
     };
     let user_name = format!("{user_display} (kakeiboot)");
     let exclude: Option<Vec<CredentialID>> = if exclude.is_empty() {
@@ -232,14 +243,20 @@ pub async fn register_start(
     } else {
         Some(exclude.into_iter().map(CredentialID::from).collect())
     };
+    let new_user_handle = if reg.is_recovery() {
+        None
+    } else {
+        Some(uuid.into_bytes().to_vec())
+    };
     let (mut ccr, state) = webauthn
         .start_passkey_registration(uuid, &user_name, &user_display, exclude)
         .map_err(|e| RegisterStartError::Webauthn(e.to_string()))?;
     overwrite_resident_key_preferred(&mut ccr);
 
     let envelope = Envelope {
-        invitation_hash: Some(to_hex(&inv.token_hash)),
+        invitation_hash: Some(to_hex(reg.token_hash())),
         display_name: display_name.map(str::to_string),
+        user_handle: new_user_handle,
         state: serde_json::to_value(&state).map_err(|e| RegisterStartError::Db(e.into()))?,
     };
     let state_json =
@@ -323,39 +340,48 @@ pub async fn register_finish(
         .await
         .map_err(anyhow::Error::from)?;
     let hash = from_hex(&invitation_hash).ok_or(RegisterFinishError::Invariant)?;
-    let inv = invitation::find_by_hash(&mut tx, &hash)
+    let reg = register_invitation::find_registration_by_hash(&mut tx, &hash)
         .await
         .map_err(anyhow::Error::from)?
         .ok_or(RegisterFinishError::TokenInvalid)?;
-    if !invitation::is_usable(&inv, now) {
+    if !reg.is_usable(now) {
         return Err(RegisterFinishError::TokenInvalid);
     }
-    let user_id = match inv.kind {
-        InvitationKind::Setup | InvitationKind::Invite => {
-            let display_name = envelope
-                .display_name
-                .clone()
-                .ok_or(RegisterFinishError::Invariant)?;
-            create_user_with_personal_ledger(
-                &mut tx,
-                &display_name,
-                &inv,
-                use_invited_ledger_as_default,
-                now,
-            )
-            .await?
+    let user_id = if reg.is_recovery() {
+        let uid = match &reg {
+            RegistrationToken::Invitation(inv) => inv.target_user_id,
+            RegistrationToken::Register(_) => None,
         }
-        InvitationKind::Recovery => {
-            let uid = inv.target_user_id.ok_or(RegisterFinishError::Invariant)?;
-            if ceremony_user != Some(uid) {
-                return Err(RegisterFinishError::Invariant);
-            }
-            // recovery invalidates all existing web sessions (spec 2-8).
-            session::revoke_user_sessions(&mut tx, uid, now)
-                .await
-                .map_err(anyhow::Error::from)?;
-            uid
+        .ok_or(RegisterFinishError::Invariant)?;
+        if ceremony_user != Some(uid) {
+            return Err(RegisterFinishError::Invariant);
         }
+        // recovery invalidates all existing web sessions (spec 2-8).
+        session::revoke_user_sessions(&mut tx, uid, now)
+            .await
+            .map_err(anyhow::Error::from)?;
+        uid
+    } else {
+        let display_name = envelope
+            .display_name
+            .clone()
+            .ok_or(RegisterFinishError::Invariant)?;
+        // the stored handle must be the challenge's uuid: a discoverable
+        // credential returns that handle at every login (spec 2-2).
+        let handle = envelope
+            .user_handle
+            .clone()
+            .ok_or(RegisterFinishError::Invariant)?;
+        let handle = Uuid::from_slice(&handle).map_err(|_| RegisterFinishError::Invariant)?;
+        create_user_with_personal_ledger(
+            &mut tx,
+            &handle,
+            &display_name,
+            &reg.user_origin(),
+            use_invited_ledger_as_default,
+            now,
+        )
+        .await?
     };
     let label =
         normalize_label(label).or_else(|| user_agent.map(super::tokens::default_label_from_ua));
@@ -372,8 +398,10 @@ pub async fn register_finish(
     .fetch_one(&mut *tx)
     .await
     .map_err(anyhow::Error::from)?;
-    // single-use token: the conditional UPDATE decides the winner.
-    if !invitation::mark_used(&mut tx, &inv.token_hash, Some(user_id), now)
+    // single-use token: the conditional UPDATE decides the winner (on the
+    // table owning the token).
+    if !reg
+        .mark_used(&mut tx, Some(user_id), now)
         .await
         .map_err(anyhow::Error::from)?
     {
@@ -382,47 +410,48 @@ pub async fn register_finish(
     super::audit(
         &mut tx,
         "web",
-        "invitation",
+        if matches!(reg, RegistrationToken::Register(_)) {
+            "register_invitation"
+        } else {
+            "invitation"
+        },
         0,
         "token_use",
         Some(user_id),
         &serde_json::json!({
-            "kind": inv.kind.as_str(),
-            "token_hash_prefix": to_hex(&inv.token_hash)[..8].to_string()
+            "kind": reg.kind_str(),
+            "token_hash_prefix": to_hex(reg.token_hash())[..8].to_string()
         }),
         now,
     )
     .await
     .map_err(anyhow::Error::from)?;
-    match inv.kind {
-        InvitationKind::Setup | InvitationKind::Invite => {
-            super::audit(
-                &mut tx,
-                "web",
-                "user",
-                user_id,
-                "create",
-                Some(user_id),
-                &serde_json::json!({ "kind": inv.kind.as_str() }),
-                now,
-            )
-            .await
-            .map_err(anyhow::Error::from)?;
-        }
-        InvitationKind::Recovery => {
-            super::audit(
-                &mut tx,
-                "web",
-                "webauthn_credential",
-                cred_row_id,
-                "create",
-                Some(user_id),
-                &serde_json::json!({ "via": "recovery" }),
-                now,
-            )
-            .await
-            .map_err(anyhow::Error::from)?;
-        }
+    if reg.is_recovery() {
+        super::audit(
+            &mut tx,
+            "web",
+            "webauthn_credential",
+            cred_row_id,
+            "create",
+            Some(user_id),
+            &serde_json::json!({ "via": "recovery" }),
+            now,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+    } else {
+        super::audit(
+            &mut tx,
+            "web",
+            "user",
+            user_id,
+            "create",
+            Some(user_id),
+            &serde_json::json!({ "kind": reg.kind_str() }),
+            now,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
     }
     let out = issue_session_in_tx(&mut tx, user_id, user_agent, now, cfg).await?;
     tx.commit().await.map_err(anyhow::Error::from)?;
@@ -430,29 +459,34 @@ pub async fn register_finish(
 }
 
 /// Create a user with a personal ledger (owner) and the category seed, then
-/// set `default_ledger_id` (spec_data-model.md section 4). For invites the
-/// user additionally joins the invited ledger with the invited role.
+/// set `default_ledger_id` (spec_data-model.md section 4). Lineage comes
+/// from the `UserOrigin`; when it carries an invited-ledger join (invite
+/// only) the user additionally joins that ledger with the invited role, and
+/// `use_invited_ledger_as_default` may make it the default instead. Setup
+/// and register (no join) behave identically. `handle` is the uuid from the
+/// register/start challenge — the value the credential will present at every
+/// login, so it must be the stored `webauthn_user_handle` verbatim.
 async fn create_user_with_personal_ledger(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    handle: &Uuid,
     display_name: &str,
-    inv: &InvitationRow,
+    origin: &UserOrigin,
     use_invited_ledger_as_default: bool,
     now: i64,
 ) -> Result<i64, RegisterFinishError> {
-    let handle = Uuid::new_v4().into_bytes();
     let account_number = generate_unique_account_number(tx).await?;
     let user_id: i64 = sqlx::query_scalar(
         "INSERT INTO users (webauthn_user_handle, account_number, display_name, admin_note,
             invite_note, invited_by, invited_via_kind, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
-    .bind(handle.as_slice())
+    .bind(handle.as_bytes().as_slice())
     .bind(&account_number)
     .bind(display_name)
-    .bind(&inv.operator_note)
-    .bind(&inv.inviter_note)
-    .bind(inv.created_by)
-    .bind(inv.kind.as_str())
+    .bind(&origin.admin_note)
+    .bind(&origin.invite_note)
+    .bind(origin.invited_by)
+    .bind(origin.via_kind)
     .bind(now)
     .bind(now)
     .fetch_one(&mut **tx)
@@ -479,19 +513,18 @@ async fn create_user_with_personal_ledger(
     .execute(&mut **tx)
     .await
     .map_err(anyhow::Error::from)?;
-    let default_ledger_id = if inv.kind == InvitationKind::Invite && use_invited_ledger_as_default {
-        inv.ledger_id
-    } else {
-        Some(ledger_id)
+    let default_ledger_id = match (&origin.join_ledger, use_invited_ledger_as_default) {
+        (Some((join_ledger, _)), true) => Some(*join_ledger),
+        _ => Some(ledger_id),
     };
-    if inv.kind == InvitationKind::Invite {
+    if let Some((join_ledger, role)) = &origin.join_ledger {
         let color = store::assign_member_color(tx, user_id).await?;
         sqlx::query(
             "INSERT INTO ledger_members (ledger_id, user_id, role, created_at, color) VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(inv.ledger_id)
+        .bind(join_ledger)
         .bind(user_id)
-        .bind(&inv.role)
+        .bind(role)
         .bind(now)
         .bind(color)
         .execute(&mut **tx)
@@ -615,6 +648,7 @@ pub async fn login_start(
     let envelope = Envelope {
         invitation_hash: None,
         display_name: None,
+        user_handle: None,
         state: serde_json::to_value(&state).map_err(|e| LoginStartError::Db(e.into()))?,
     };
     let state_json = serde_json::to_string(&envelope).map_err(|e| LoginStartError::Db(e.into()))?;
@@ -676,7 +710,12 @@ pub async fn login_finish(
     let state: DiscoverableAuthentication =
         serde_json::from_value(envelope.state).map_err(|_| LoginFinishError::CeremonyInvalid)?;
 
-    // identify + the user-handle/credential-id joint lookup (spec 2-4).
+    // identify + resolve the owner by credential id (spec 2-4). The
+    // credential id is UNIQUE and maps 1:1 to a user server-side, so it is
+    // the resolution key; the presented user handle is compared against the
+    // stored handle for audit only. Requiring handle equality here would
+    // permanently lock out credentials registered before 2026-10-17, whose
+    // stored handle was generated independently of the challenge handle.
     let (uuid, cred_id) = match webauthn.identify_discoverable_authentication(credential) {
         Ok((uuid, cred_id)) => (uuid, cred_id.to_vec()),
         Err(_) => {
@@ -684,19 +723,20 @@ pub async fn login_finish(
             return Err(LoginFinishError::Mismatch);
         }
     };
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT u.id FROM users u JOIN webauthn_credentials c ON c.user_id = u.id
-         WHERE u.webauthn_user_handle = ? AND c.credential_id = ? AND u.disabled_at IS NULL",
+    let row: Option<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT u.id, u.webauthn_user_handle FROM users u
+         JOIN webauthn_credentials c ON c.user_id = u.id
+         WHERE c.credential_id = ? AND u.disabled_at IS NULL",
     )
-    .bind(uuid.as_bytes().as_slice())
     .bind(&cred_id)
     .fetch_optional(&mut *conn)
     .await
     .map_err(anyhow::Error::from)?;
-    let Some((user_id,)) = row else {
+    let Some((user_id, stored_handle)) = row else {
         mismatch_audit(&mut conn, Some((&uuid, &cred_id)), now).await?;
         return Err(LoginFinishError::Mismatch);
     };
+    let handle_matches = stored_handle.as_slice() == uuid.as_bytes();
     let creds = load_passkeys(&mut conn, user_id).await?;
     if creds.is_empty() {
         mismatch_audit(&mut conn, Some((&uuid, &cred_id)), now).await?;
@@ -785,7 +825,13 @@ pub async fn login_finish(
         user_id,
         "login",
         Some(user_id),
-        &serde_json::json!({}),
+        &if handle_matches {
+            serde_json::json!({})
+        } else {
+            // legacy credentials registered before the challenge handle was
+            // persisted still log in; the flag makes those rows visible.
+            serde_json::json!({ "user_handle_match": false })
+        },
         now,
     )
     .await
@@ -920,6 +966,7 @@ pub async fn reauth_start(
     let envelope = Envelope {
         invitation_hash: None,
         display_name: None,
+        user_handle: None,
         state: serde_json::to_value(&state).map_err(|e| ReauthError::Db(e.into()))?,
     };
     let state_json = serde_json::to_string(&envelope).map_err(|e| ReauthError::Db(e.into()))?;
@@ -973,9 +1020,15 @@ pub async fn reauth_finish(
         serde_json::from_str(&state_json).map_err(|_| ReauthError::CeremonyInvalid)?;
     let state: PasskeyAuthentication =
         serde_json::from_value(envelope.state).map_err(|_| ReauthError::CeremonyInvalid)?;
-    let result = webauthn
-        .finish_passkey_authentication(credential, &state)
-        .map_err(|_| ReauthError::Authentication)?;
+    let result = match webauthn.finish_passkey_authentication(credential, &state) {
+        Ok(r) => r,
+        Err(e) => {
+            // step-up failure (spec_auth.md 10-5, TASK-15): WARN with the
+            // reason; the error text carries no secrets.
+            tracing::warn!(action = %"reauth_failed", error = %e, "auth failure");
+            return Err(ReauthError::Authentication);
+        }
+    };
     // the authenticated credential must belong to this user (spec 2-6).
     let owned: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT credential_id FROM webauthn_credentials WHERE user_id = ? AND credential_id = ?",
@@ -986,6 +1039,7 @@ pub async fn reauth_finish(
     .await
     .map_err(anyhow::Error::from)?;
     if owned.is_none() {
+        tracing::warn!(action = %"reauth_mismatch", "auth failure");
         return Err(ReauthError::Authentication);
     }
     let creds = load_passkeys(&mut conn, s.user_id).await?;
@@ -1051,6 +1105,7 @@ pub async fn passkey_add_start(
     let envelope = Envelope {
         invitation_hash: None,
         display_name: None,
+        user_handle: None,
         state: serde_json::to_value(&state).map_err(|e| ReauthError::Db(e.into()))?,
     };
     let state_json = serde_json::to_string(&envelope).map_err(|e| ReauthError::Db(e.into()))?;

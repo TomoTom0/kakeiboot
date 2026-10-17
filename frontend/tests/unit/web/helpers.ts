@@ -6,7 +6,7 @@ import { createMemoryHistory, type Router } from 'vue-router'
 import { vi } from 'vitest'
 import App from '@/web/App.vue'
 import type { Me } from '@/web/api/auth'
-import { createAppRouter, routes } from '@/web/router'
+import { createAppRouter } from '@/web/router'
 import { installHttpHooks } from '@/web/setup'
 
 export interface Reply {
@@ -66,31 +66,23 @@ export async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
     await flushPromises()
     await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => requestAnimationFrame(() => r(null)))
   }
 }
 
 const mounted: VueWrapper[] = []
 
-// Route components are lazy; load them up front so navigation in a test
-// does not race the dynamic import.
-let preloaded: Promise<unknown> | null = null
-function preloadPages(): Promise<unknown> {
-  preloaded ??= Promise.all(
-    routes.map((r) => (typeof r.component === 'function' ? (r.component as () => Promise<unknown>)() : null)),
-  )
-  return preloaded
-}
-
 export interface MountOptions {
   /** attach to document.body (needed for focus / document-level key events) */
   attach?: boolean
+  /** pass through to mount() (e.g. { transition: false } for real Transitions) */
+  stubs?: Record<string, boolean>
 }
 
 export async function mountApp(
   path: string,
   options: MountOptions = {},
 ): Promise<{ wrapper: VueWrapper; router: Router; pinia: Pinia }> {
-  await preloadPages()
   installScrollMocks()
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -99,7 +91,7 @@ export async function mountApp(
   await router.push(path)
   await router.isReady()
   const attachTo = options.attach ? document.body.appendChild(document.createElement('div')) : undefined
-  const wrapper = mount(App, { attachTo, global: { plugins: [pinia, router] } })
+  const wrapper = mount(App, { attachTo, global: { plugins: [pinia, router], stubs: options.stubs } })
   mounted.push(wrapper)
   await settle()
   return { wrapper, router, pinia }
@@ -108,15 +100,29 @@ export async function mountApp(
 export function cleanup(): void {
   while (mounted.length) mounted.pop()?.unmount()
   uninstallScrollMocks()
+  delete (navigator as { clipboard?: unknown }).clipboard
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 }
 
 // ---------------------------------------------------------------------------
+// Clipboard double (TASK-37): jsdom ships no navigator.clipboard. Installs a
+// writeText spy that resolves — or rejects with `error` for the failure path
+// — and returns it. cleanup() removes the property again.
+
+export function stubClipboard(error?: Error): ReturnType<typeof vi.fn> {
+  const writeText = error ? vi.fn().mockRejectedValue(error) : vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  return writeText
+}
+
+// ---------------------------------------------------------------------------
 // Scroll / visibility test doubles for the receipt feed (TASK-16): a manually
 // fired IntersectionObserver, a recording Element.scrollIntoView, a
-// window.scrollBy spy and a matchMedia stub (prefers-reduced-motion; 'change'
-// listeners are recorded so tests can fire breakpoint crossings).
+// window.scrollBy spy and a matchMedia stub (prefers-reduced-motion; queries
+// default to matches=false and can be preset with setMediaMatches / flipped
+// with fireMediaChange, whose 'change' listeners are recorded so tests can
+// fire breakpoint crossings).
 
 type ObserverCallback = (entries: IntersectionObserverEntry[], observer: IntersectionObserver) => void
 
@@ -158,6 +164,10 @@ let reducedMotion = false
 // (e.g. the shell's '(min-width: 900px)' desktop watcher).
 type MediaChangeListener = (event: { matches: boolean; media: string }) => void
 const mediaChangeListeners = new Map<string, Set<MediaChangeListener>>()
+// preset per-query results so a test can mount inside a viewport class
+// (e.g. setMediaMatches('(min-width: 900px)', true) before mountApp for the
+// desktop shell). fireMediaChange keeps this map in sync with fired events.
+const mediaMatches = new Map<string, boolean>()
 const originalScrollIntoView = Element.prototype.scrollIntoView
 
 function installScrollMocks(): void {
@@ -169,7 +179,11 @@ function installScrollMocks(): void {
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
   vi.stubGlobal('scrollBy', s.scrollBy)
   vi.stubGlobal('matchMedia', (media: string) => ({
-    matches: media.includes('prefers-reduced-motion') && media.includes('reduce') ? reducedMotion : false,
+    matches: mediaMatches.has(media)
+      ? mediaMatches.get(media)!
+      : media.includes('prefers-reduced-motion') && media.includes('reduce')
+        ? reducedMotion
+        : false,
     media,
     onchange: null,
     addEventListener: (type: string, listener: unknown) => {
@@ -195,6 +209,7 @@ function uninstallScrollMocks(): void {
   scroll = null
   MockIntersectionObserver.instances = []
   mediaChangeListeners.clear()
+  mediaMatches.clear()
   Element.prototype.scrollIntoView = originalScrollIntoView
 }
 
@@ -209,8 +224,14 @@ export function setReducedMotion(value: boolean): void {
   reducedMotion = value
 }
 
+/** Preset matchMedia(`media`).matches from now on (e.g. desktop at mount). */
+export function setMediaMatches(media: string, matches: boolean): void {
+  mediaMatches.set(media, matches)
+}
+
 /** Fire the 'change' listeners of `media` (e.g. a breakpoint crossing). */
 export function fireMediaChange(media: string, matches: boolean): void {
+  mediaMatches.set(media, matches)
   for (const fn of mediaChangeListeners.get(media) ?? []) fn({ matches, media })
 }
 

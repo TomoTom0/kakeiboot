@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { formatLabelQuery, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult, type StoreRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import DashSkeleton from '../components/DashSkeleton.vue'
 import LabelFilter from '../components/LabelFilter.vue'
 import PeriodBar from '../components/PeriodBar.vue'
 import RankedList from '../components/RankedList.vue'
@@ -293,11 +294,6 @@ function diffText(d: number | null | undefined): string {
         </ul>
       </section>
     </div>
-    <p
-      v-else-if="loading"
-      class="muted"
-    >
-      読み込んでいます...
-    </p>
+    <DashSkeleton v-else-if="loading" />
   </div>
 </template>

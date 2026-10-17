@@ -19,6 +19,7 @@ use webauthn_rs_proto::RegisterPublicKeyCredential;
 
 use super::ceremony;
 use super::invitation::{self, InvitationKind};
+use super::register_invitation::{self, RegistrationToken};
 use super::session::{self, ValidSession};
 use super::tokens::TOKEN_LEN;
 use crate::config::ResolvedAuth;
@@ -135,6 +136,29 @@ impl From<ceremony::ReauthError> for ApiError {
     }
 }
 
+/// Token acceptance failure (spec_auth.md 10-5, TASK-15): WARN with the
+/// endpoint, a coarse reason and the token hash prefix so failed register
+/// URLs are diagnosable from the journal. The prefix matches the DB token
+/// hash when the token parses (the raw string is hashed otherwise); the
+/// token itself is never logged. `None` when the raw token is not at hand
+/// (register/finish: the token was consumed at start).
+fn warn_token_rejected(endpoint: &str, reason: &str, token_str: Option<&str>) {
+    let prefix = token_str.map(|t| match invitation::parse_token(t) {
+        Some(bytes) => crate::auth::tokens::sha256(&bytes),
+        None => crate::auth::tokens::sha256(t.as_bytes()),
+    });
+    let prefix = prefix.map(|h| crate::auth::tokens::to_hex(&h)[..8].to_string());
+    match prefix {
+        Some(p) => tracing::warn!(
+            endpoint = %endpoint,
+            reason = %reason,
+            token_hash_prefix = %p,
+            "token rejected"
+        ),
+        None => tracing::warn!(endpoint = %endpoint, reason = %reason, "token rejected"),
+    }
+}
+
 /// All /api routes of the auth module (state applied by the caller). The
 /// Origin / JSON guard runs first, then the rate limit guard
 /// (spec_auth.md 3-1, 10-1).
@@ -155,6 +179,10 @@ pub fn routes(state: AuthApiState) -> Router {
             axum::routing::patch(rename_passkey).delete(delete_passkey),
         )
         .route("/api/invitations", post(create_invitation))
+        .route(
+            "/api/register-invitations",
+            post(create_register_invitation),
+        )
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/logout-all", post(logout_all))
@@ -302,55 +330,67 @@ struct RegisterInfoReq {
 
 /// Minimal token introspection for the registration landing form: the kind
 /// and the bits the form needs to render (display name input, invited ledger,
-/// recovery target). Tokens travel in the POST body, not the URL.
+/// recovery target). Tokens travel in the POST body, not the URL. The token
+/// resolves across `invitations` (setup / invite / recovery) and
+/// `register_invitations` (register).
 async fn register_info(
     State(state): State<AuthApiState>,
     Json(req): Json<RegisterInfoReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let now = session::now_ms();
     let Some(token) = invitation::parse_token(&req.token) else {
+        warn_token_rejected("register/info", "parse_failed", Some(&req.token));
         return Err(ApiError::bad_request("invalid_token"));
     };
     let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
-    let inv = invitation::find_by_token(&mut conn, &token)
+    let reg = register_invitation::find_registration_token(&mut conn, &token)
         .await
         .map_err(ApiError::sqlx)?
-        .ok_or_else(|| ApiError::bad_request("invalid_token"))?;
-    if !invitation::is_usable(&inv, now) {
+        .ok_or_else(|| {
+            warn_token_rejected("register/info", "unknown_token", Some(&req.token));
+            ApiError::bad_request("invalid_token")
+        })?;
+    if !reg.is_usable(now) {
+        warn_token_rejected("register/info", "expired_or_used", Some(&req.token));
         return Err(ApiError::bad_request("invalid_token"));
     }
-    let body = match inv.kind {
-        InvitationKind::Setup => json!({ "kind": "setup", "needs_display_name": true }),
-        InvitationKind::Invite => {
-            let ledger: Option<String> =
-                sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
-                    .bind(inv.ledger_id)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .map_err(ApiError::sqlx)?;
-            json!({
-                "kind": "invite",
-                "needs_display_name": true,
-                "ledger_name": ledger,
-                "role": inv.role,
-            })
-        }
-        InvitationKind::Recovery => {
-            let display: Option<String> = sqlx::query_scalar(
-                "SELECT display_name FROM users WHERE id = ? AND disabled_at IS NULL",
-            )
-            .bind(inv.target_user_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(ApiError::sqlx)?;
-            if display.is_none() {
-                return Err(ApiError::bad_request("invalid_token"));
+    let body = match &reg {
+        RegistrationToken::Invitation(inv) => match inv.kind {
+            InvitationKind::Setup => json!({ "kind": "setup", "needs_display_name": true }),
+            InvitationKind::Invite => {
+                let ledger: Option<String> =
+                    sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+                        .bind(inv.ledger_id)
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(ApiError::sqlx)?;
+                json!({
+                    "kind": "invite",
+                    "needs_display_name": true,
+                    "ledger_name": ledger,
+                    "role": inv.role,
+                })
             }
-            json!({
-                "kind": "recovery",
-                "needs_display_name": false,
-                "user_display_name": display,
-            })
+            InvitationKind::Recovery => {
+                let display: Option<String> = sqlx::query_scalar(
+                    "SELECT display_name FROM users WHERE id = ? AND disabled_at IS NULL",
+                )
+                .bind(inv.target_user_id)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(ApiError::sqlx)?;
+                if display.is_none() {
+                    return Err(ApiError::bad_request("invalid_token"));
+                }
+                json!({
+                    "kind": "recovery",
+                    "needs_display_name": false,
+                    "user_display_name": display,
+                })
+            }
+        },
+        RegistrationToken::Register(_) => {
+            json!({ "kind": "register", "needs_display_name": true })
         }
     };
     Ok(Json(body))
@@ -368,7 +408,7 @@ async fn register_start(
     Json(req): Json<RegisterStartReq>,
 ) -> Result<Response, ApiError> {
     let now = session::now_ms();
-    let outcome = ceremony::register_start(
+    let outcome = match ceremony::register_start(
         &state.db,
         &state.webauthn,
         &state.auth,
@@ -376,7 +416,16 @@ async fn register_start(
         req.display_name.as_deref(),
         now,
     )
-    .await?;
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            if matches!(e, ceremony::RegisterStartError::InvalidToken) {
+                warn_token_rejected("register/start", "invalid_token", Some(&req.token));
+            }
+            return Err(e.into());
+        }
+    };
     let resp = Json(outcome.ccr).into_response();
     Ok(with_ceremony_cookie(
         resp,
@@ -407,7 +456,7 @@ async fn register_finish(
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let outcome = ceremony::register_finish(
+    let outcome = match ceremony::register_finish(
         &state.db,
         &state.webauthn,
         &state.auth,
@@ -418,7 +467,16 @@ async fn register_finish(
         user_agent.as_deref(),
         now,
     )
-    .await?;
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            if matches!(e, ceremony::RegisterFinishError::TokenInvalid) {
+                warn_token_rejected("register/finish", "invalid_token", None);
+            }
+            return Err(e.into());
+        }
+    };
     let resp = Json(json!({})).into_response();
     let resp = with_session_cookie(resp, &outcome.session, outcome.absolute_expires_at);
     Ok(with_ceremony_cleared(resp))
@@ -778,6 +836,63 @@ async fn create_invitation(
         "create",
         Some(s.user_id),
         &json!({ "ledger_id": ledger_id, "role": req.role }),
+        now,
+    )
+    .await
+    .map_err(ApiError::sqlx)?;
+    let url = format!("{}/register?token={token}", state.auth.public_origin);
+    let mut resp = Json(json!({ "url": url, "expires_at": expires_at })).into_response();
+    *resp.status_mut() = StatusCode::CREATED;
+    Ok(resp)
+}
+
+// ---------------------------------------------------------------------------
+// register invitations from the web (TASK-32, spec_auth.md sections 2-1, 3-2)
+
+#[derive(Deserialize)]
+struct CreateRegisterInvitationReq {
+    // serde 必須. A missing field is rejected by axum's JsonRejection (a 400
+    // without an error code) before the handler runs.
+    inviter_note: String,
+}
+
+/// Issue a registration-only invitation URL. Any active user may issue
+/// (session + step-up, no ledger ownership); the note is mandatory and
+/// capped at 200 characters, and unused tokens are capped per issuer
+/// (register_invitation::OPEN_LIMIT).
+async fn create_register_invitation(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateRegisterInvitationReq>,
+) -> Result<Response, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    require_step_up(&s, &state)?;
+    let note = req.inviter_note.trim();
+    if note.is_empty() {
+        return Err(ApiError::bad_request("inviter_note_required"));
+    }
+    if note.chars().count() > 200 {
+        return Err(ApiError::bad_request("inviter_note_too_long"));
+    }
+    let now = session::now_ms();
+    let ttl = state.auth.invitation.register_ttl_hours * 3_600_000;
+    let expires_at = now + ttl;
+    let token = match register_invitation::issue(&state.db, s.user_id, note, ttl, now).await {
+        Ok(token) => token,
+        Err(register_invitation::IssueRegisterError::OpenLimit) => {
+            return Err(ApiError::bad_request("register_open_limit"));
+        }
+        Err(e) => return Err(ApiError::internal(anyhow::Error::new(e))),
+    };
+    let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
+    super::audit(
+        &mut conn,
+        "web",
+        "register_invitation",
+        0,
+        "create",
+        Some(s.user_id),
+        &json!({ "kind": "register" }),
         now,
     )
     .await

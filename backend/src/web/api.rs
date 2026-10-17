@@ -60,10 +60,6 @@ pub fn routes(state: AuthApiState) -> Router {
             "/api/ledgers/{ledger_id}/receipts/{receipt_id}/delete",
             post(delete_receipt),
         )
-        .route(
-            "/api/ledgers/{ledger_id}/membership/color",
-            axum::routing::put(update_membership_color),
-        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::api::api_guard,
@@ -825,38 +821,4 @@ pub async fn delete_receipt(
             .into_response());
     }
     Ok(Json(body).into_response())
-}
-
-// ---------------------------------------------------------------------------
-// membership color (TASK-16, spec_auth.md 3-2)
-
-#[derive(Debug, Deserialize)]
-pub struct MembershipColorBody {
-    color: String,
-}
-
-/// PUT /api/ledgers/{ledger_id}/membership/color: change the caller's own
-/// display color for a ledger they belong to. A display-only setting: any
-/// role may change it (viewer included), only the caller's own row is
-/// updated, non-members get the same 404 as a missing ledger, and a color
-/// outside the six-key palette is 400 (spec_auth.md 3-2).
-pub async fn update_membership_color(
-    State(state): State<AuthApiState>,
-    headers: HeaderMap,
-    Path(ledger_id): Path<i64>,
-    Json(body): Json<MembershipColorBody>,
-) -> Result<StatusCode, DataError> {
-    let s = session(&state, &headers).await?;
-    member_ledger(&state.db, ledger_id, s.user_id).await?;
-    if !crate::store::is_ledger_color(&body.color) {
-        return Err(DataError::invalid());
-    }
-    sqlx::query("UPDATE ledger_members SET color = ? WHERE ledger_id = ? AND user_id = ?")
-        .bind(&body.color)
-        .bind(ledger_id)
-        .bind(s.user_id)
-        .execute(&state.db)
-        .await
-        .map_err(DataError::sqlx)?;
-    Ok(StatusCode::NO_CONTENT)
 }

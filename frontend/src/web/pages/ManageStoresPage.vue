@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router'
 import { computed, ref } from 'vue'
 import { useDataApi, type StoreRow } from '../api/data'
 import { errorMessage } from '../composables/format'
@@ -98,13 +97,8 @@ function doMerge(): Promise<void> {
 </script>
 
 <template>
-  <p class="page-back">
-    <RouterLink to="/settings">
-      設定
-    </RouterLink>
-    <span class="muted"> / 店の管理</span>
-  </p>
   <section class="card">
+    <h2>店</h2>
     <form
       class="inline-form"
       @submit.prevent="search"

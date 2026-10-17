@@ -170,6 +170,49 @@ async fn login_mismatch_is_uniform_401_and_audited() {
     assert_eq!(sessions, 1, "no session issued on mismatch");
 }
 
+// [covers:auth-login.resolves-by-credential-id]
+// Legacy compat (2026-10-17 prod incident): credentials created before the
+// challenge handle was persisted present the challenge handle at login while
+// users.webauthn_user_handle holds a different uuid. Login resolves the
+// owner by credential id (UNIQUE) and must still succeed.
+#[tokio::test]
+async fn login_succeeds_when_presented_handle_differs_from_stored() {
+    let (router, pool) = setup().await;
+    let mut client = Client::new();
+    register_setup_user(&mut client, &router, &pool, "legacy").await;
+
+    // reproduce the pre-fix row: the stored handle is NOT the challenge
+    // handle the credential answers with
+    sqlx::query("UPDATE users SET webauthn_user_handle = ?")
+        .bind(uuid::Uuid::new_v4().as_bytes().as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // authenticate_discoverable replays the recorded CHALLENGE handle, so
+    // the assertion presents a handle != stored handle
+    let (stored_handle, ids) = user_webauthn_ids(&pool, only_user(&pool).await).await;
+    let (rcr, _) = login_start_raw(&mut client, &router).await;
+    let cred = client.authenticate_discoverable(rcr, &stored_handle, &ids);
+    assert_ne!(
+        cred.response.user_handle.as_ref().unwrap().as_slice(),
+        stored_handle.as_slice(),
+        "premise: presented handle differs from the stored one"
+    );
+    let resp = login_finish_raw(&mut client, &router, &cred_value(&cred)).await;
+    assert_eq!(resp.status(), 200);
+
+    // the divergence stays visible in the login audit
+    let flagged: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events WHERE action = 'login'
+         AND after_json LIKE '%user_handle_match%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 1);
+}
+
 // [covers:auth-login.disabled-user-rejected]
 #[tokio::test]
 async fn login_rejects_disabled_user() {

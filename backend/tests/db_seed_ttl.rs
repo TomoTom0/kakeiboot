@@ -694,6 +694,63 @@ async fn ttl_deletes_invitations() {
     assert_eq!(remaining, vec!["03", "04"]);
 }
 
+// [covers:db-schema.ttl-deletes-invitations]
+// TASK-32: register_invitations follow the same TTL rule, verified through
+// both the deleted_register_invitations report column and the remaining rows
+// (a sweep! field-ident mix-up would only be caught by the report column).
+#[tokio::test]
+async fn ttl_deletes_register_invitations() {
+    let pool = mem_pool().await;
+    ttl_fixture(&pool).await;
+    // unused + expired a day ago: deleted
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at)
+         VALUES (x'01', 1, 'a', 0, ?)",
+    )
+    .bind(NOW - 2 * DAY_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // used 31 days ago: deleted
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at, used_at)
+         VALUES (x'02', 1, 'b', 0, ?, ?)",
+    )
+    .bind(NOW - 40 * DAY_MS)
+    .bind(NOW - 31 * DAY_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // unused but still within expiry + 1 day: kept
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at)
+         VALUES (x'03', 1, 'c', 0, ?)",
+    )
+    .bind(NOW)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // used 29 days ago: kept
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at, used_at)
+         VALUES (x'04', 1, 'd', 0, ?, ?)",
+    )
+    .bind(NOW - 40 * DAY_MS)
+    .bind(NOW - 29 * DAY_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let r = run_cleanup(&pool).await;
+    assert_eq!(r.deleted_register_invitations, 2);
+    let remaining: Vec<String> = sqlx::query_scalar(
+        "SELECT substr(hex(token_hash), 1, 2) FROM register_invitations ORDER BY token_hash",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, vec!["03", "04"]);
+}
+
 // [covers:db-schema.ttl-recovery-request-lifecycle]
 #[tokio::test]
 async fn ttl_recovery_request_lifecycle() {

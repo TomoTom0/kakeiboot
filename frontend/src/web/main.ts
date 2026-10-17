@@ -10,4 +10,9 @@ const pinia = createPinia()
 const router = createAppRouter(createWebHistory(), pinia)
 installHttpHooks(router, pinia)
 
-createApp(App).use(pinia).use(router).mount('#app')
+const app = createApp(App)
+app.use(pinia).use(router)
+// Wait for the initial navigation (guard included) before mounting: the
+// first paint is the settled screen, never an in-between frame of the
+// shell / public layout racing the session check (TASK-39 A-1).
+void router.isReady().then(() => app.mount('#app'))

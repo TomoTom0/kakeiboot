@@ -105,6 +105,25 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(false)
   })
+
+  it('[covers:web-shell.loading-skeleton] レシート一覧も初回 loading は skeleton で統一', async () => {
+    const orig = api.listReceipts.bind(api)
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    vi.spyOn(api, 'listReceipts').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/receipts')
+    const sk = wrapper.find('[data-test="loading"]')
+    expect(sk.exists()).toBe(true)
+    expect(sk.classes()).toContain('skeleton')
+    expect(wrapper.find('[data-test="summary"]').exists()).toBe(false)
+    release()
+    await settle()
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="summary"]').text()).toContain('948円')
+  })
 })
 
 describe('ReceiptDetail (view first)', () => {
@@ -126,21 +145,38 @@ describe('ReceiptDetail (view first)', () => {
 })
 
 describe('SettingsPage data management', () => {
-  it('[covers:web-settings.data-manage-links] カテゴリ・店・ラベルの編集は設定のデータの管理から開き、設定節として示す', async () => {
+  it('[covers:web-settings.data-manage-links] カテゴリ・店・ラベルの編集は設定のデータtabから開き、設定節として示す', async () => {
     const { wrapper, router } = await mountApp('/settings')
-    expect(wrapper.find('[data-test="manage-categories"]').attributes('href')).toBe('/settings/categories')
+    expect(router.currentRoute.value.path).toBe('/settings/general')
+    await wrapper.find('[data-test="settings-tab-data"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/settings/data')
+    for (const [key, href] of [
+      ['settings-data-categories', '/settings/categories'],
+      ['settings-data-stores', '/settings/stores'],
+      ['settings-data-labels', '/settings/labels'],
+    ] as const) {
+      expect(wrapper.find(`[data-test="${key}"]`).attributes('href'), key).toBe(href)
+    }
     // TASK-17: the label management joins the data-management links
-    expect(wrapper.find('[data-test="manage-labels"]').attributes('href')).toBe('/settings/labels')
-    await wrapper.find('[data-test="manage-labels"]').trigger('click')
+    await wrapper.find('[data-test="settings-data-labels"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.path).toBe('/settings/labels')
+    // the manage panels carry no page-back breadcrumb (the tab strip is the way back)
+    expect(wrapper.find('.page-back').exists()).toBe(false)
+    // and the manage screen lights the data tab as its way back
+    expect(wrapper.find('[data-test="settings-tab-data"]').attributes('aria-current')).toBe('page')
+    await router.push('/settings/categories')
+    await settle()
+    expect(wrapper.find('.page-back').exists()).toBe(false)
 
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const stores = await mountApp('/settings')
-    await stores.wrapper.find('[data-test="manage-stores"]').trigger('click')
+    const stores = await mountApp('/settings/data')
+    await stores.wrapper.find('[data-test="settings-data-stores"]').trigger('click')
     await settle()
     expect(stores.router.currentRoute.value.path).toBe('/settings/stores')
+    expect(stores.wrapper.find('.page-back').exists()).toBe(false)
     // the main nav has no settings item: the title and the account menu show the section
     expect(stores.wrapper.find('.topbar-title').text()).toBe('設定')
     for (const link of stores.wrapper.findAll('[data-test="sidebar"] .side-link')) {
@@ -219,14 +255,21 @@ describe('StoresPage long names (TASK-16)', () => {
   })
 })
 
-describe('Dashboard label filter (TASK-17)', () => {
+describe('Dashboard label filter (TASK-17/26)', () => {
+  /** Open the current screen's label filter popover (the toggles live in it). */
+  async function openFilter(wrapper: Awaited<ReturnType<typeof mountApp>>['wrapper']): Promise<void> {
+    await wrapper.find('[data-test="label-filter-button"]').trigger('click')
+    await settle()
+  }
+
   it('[covers:web-dashboard.label-filter] Home・Categories・Stores は period store に結合、ReceiptsPage は URL を補い書き戻す、Feed は URL のみ、ledger 切替で空', async () => {
     const stats = vi.spyOn(api, 'getStats')
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper, router, pinia } = await mountApp('/')
 
-    // Home: the LabelFilter binds to the period store's labelColors and both
-    // getStats and the recent-receipts listReceipts carry the filter
+    // Home: the LabelFilter button binds to the period store's labelColors
+    // and both getStats and the recent-receipts listReceipts carry the filter
+    await openFilter(wrapper)
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
     expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
@@ -242,6 +285,7 @@ describe('Dashboard label filter (TASK-17)', () => {
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
 
     // changing (or clearing) the selection on ReceiptsPage writes back
+    await openFilter(wrapper)
     await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query['labels']).toBe('red,blue')
@@ -268,13 +312,14 @@ describe('Dashboard label filter (TASK-17)', () => {
       expect.objectContaining({ label_colors: ['blue'], from: '2026-10-01', to: '2026-10-31' }),
     )
 
-    // switching the ledger resets the filter
+    // switching the ledger resets the filter (fresh popover on Home)
     await router.push('/')
     await settle()
     const { useSessionStore } = await import('@/web/stores/session')
     useSessionStore(pinia).selectedLedgerId = 2
     await settle()
     expect(stats).toHaveBeenLastCalledWith(2, expect.objectContaining({ label_colors: [] }))
+    await openFilter(wrapper)
     expect(wrapper.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('false')
     expect(wrapper.find('[data-test="label-filter-blue"]').attributes('aria-pressed')).toBe('false')
   })

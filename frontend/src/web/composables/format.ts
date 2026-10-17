@@ -45,6 +45,8 @@ const MESSAGES: Record<string, string> = {
   owner_required: '家計簿のオーナーのみ招待できます。',
   no_default_ledger: '招待先の家計簿が決まっていません。',
   inviter_note_too_long: 'メモは200文字以内で入力してください。',
+  inviter_note_required: 'メモを入力してください。',
+  register_open_limit: '発行できる登録招待 URL は同時に5件までです。古いものが使用・期限切れになるのを待つか、運用者に失効を依頼してください。',
   invalid_role: '権限の指定が正しくありません。',
   ledger_not_selectable: 'この家計簿は選択できません（所属していない可能性があります）。',
   not_found: '対象が見つかりません。',

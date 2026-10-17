@@ -9,7 +9,7 @@ import { useSessionStore } from '../stores/session'
 import AppIcon from '../components/AppIcon.vue'
 import BrandLogo from '@/shared/components/BrandLogo.vue'
 
-// Registration landing for setup / invite / recovery URLs
+// Registration landing for setup / invite / register / recovery URLs
 // (spec_auth.md 2-1, 2-3, 3-2). The token is read once, removed from the
 // URL with a history replace, and only sent in POST bodies afterwards.
 const route = useRoute()
@@ -69,7 +69,9 @@ async function submit(): Promise<void> {
       ...(label.value.trim() ? { label: label.value.trim() } : {}),
       ...(info.value.kind === 'invite' ? { use_invited_ledger_as_default: useInvitedDefault.value } : {}),
     })
-    session.clear()
+    // Settle the session BEFORE navigating so the shell mounts together with
+    // the home route (TASK-39 A-2; login/finish response has no user).
+    await session.loadMe()
     await router.replace('/')
   } catch (e) {
     error.value = isCancel(e) ? 'パスキーの作成が完了しませんでした。もう一度お試しください。' : errorMessage(e)
@@ -112,7 +114,7 @@ async function submit(): Promise<void> {
       class="form"
       @submit.prevent="submit"
     >
-      <p v-if="info.kind === 'setup'">
+      <p v-if="info.kind === 'setup' || info.kind === 'register'">
         新しいアカウントと、あなた専用の家計簿を作成します。
       </p>
       <div

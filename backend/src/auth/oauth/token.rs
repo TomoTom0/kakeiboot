@@ -830,24 +830,24 @@ fn ip_limit(
         extensions.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>(),
         state.auth.rate_limit.trust_cf_connecting_ip,
     );
+    let key = format!("ip:{ip}");
     state
         .limits
-        .check(
-            crate::ratelimit::Class::TokenEndpoint,
-            &format!("ip:{ip}"),
-            now,
-        )
-        .map(crate::ratelimit::too_many_requests)
+        .check(crate::ratelimit::Class::TokenEndpoint, &key, now)
+        .map(|retry| {
+            crate::ratelimit::warn_limited(crate::ratelimit::Class::TokenEndpoint, &key, retry);
+            crate::ratelimit::too_many_requests(retry)
+        })
 }
 
 /// Post-authentication limiter keyed by the verified client_id.
 fn client_limit(state: &State_, client_id: &str, now: i64) -> Option<Response> {
+    let key = format!("client:{client_id}");
     state
         .limits
-        .check(
-            crate::ratelimit::Class::TokenEndpoint,
-            &format!("client:{client_id}"),
-            now,
-        )
-        .map(crate::ratelimit::too_many_requests)
+        .check(crate::ratelimit::Class::TokenEndpoint, &key, now)
+        .map(|retry| {
+            crate::ratelimit::warn_limited(crate::ratelimit::Class::TokenEndpoint, &key, retry);
+            crate::ratelimit::too_many_requests(retry)
+        })
 }

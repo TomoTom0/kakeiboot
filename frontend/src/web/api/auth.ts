@@ -41,7 +41,7 @@ export interface Passkey {
 }
 
 export interface RegisterInfo {
-  kind: 'setup' | 'invite' | 'recovery'
+  kind: 'setup' | 'invite' | 'register' | 'recovery'
   needs_display_name: boolean
   ledger_name?: string | null
   role?: LedgerRole | null
@@ -117,9 +117,14 @@ export const authApi = {
       '/api/invitations',
       inviterNote ? { role, inviter_note: inviterNote } : { role },
     ),
-  /** Change the caller's own display color of one membership (TASK-16 item 3). */
-  setMembershipColor: (ledgerId: number, color: LedgerColor) =>
-    request<void>('PUT', `/api/ledgers/${ledgerId}/membership/color`, { color }),
+  // Registration-only invitation (TASK-32): any active user, the note is
+  // mandatory, no ledger join. Separate endpoint from /api/invitations.
+  createRegisterInvitation: (inviterNote: string) =>
+    request<{ url: string; expires_at: number }>(
+      'POST',
+      '/api/register-invitations',
+      { inviter_note: inviterNote },
+    ),
 }
 
 export const oauthApi = {

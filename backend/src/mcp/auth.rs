@@ -303,11 +303,17 @@ pub async fn auth_layer(
         state.auth.rate_limit.trust_cf_connecting_ip,
     );
     let reject = |invalid: bool| -> Response {
-        if let Some(retry) = state.limits.check(
-            crate::ratelimit::Class::McpUnauthenticated,
-            &format!("ip:{ip}"),
-            now,
-        ) {
+        let key = format!("ip:{ip}");
+        if let Some(retry) =
+            state
+                .limits
+                .check(crate::ratelimit::Class::McpUnauthenticated, &key, now)
+        {
+            crate::ratelimit::warn_limited(
+                crate::ratelimit::Class::McpUnauthenticated,
+                &key,
+                retry,
+            );
             return crate::ratelimit::too_many_requests(retry);
         }
         unauthorized(&state.auth, invalid)
@@ -333,11 +339,12 @@ pub async fn auth_layer(
             return reject(true);
         }
     };
-    if let Some(retry) = state.limits.check(
-        crate::ratelimit::Class::Mcp,
-        &format!("user:{}", ctx.user_id),
-        now,
-    ) {
+    let user_key = format!("user:{}", ctx.user_id);
+    if let Some(retry) = state
+        .limits
+        .check(crate::ratelimit::Class::Mcp, &user_key, now)
+    {
+        crate::ratelimit::warn_limited(crate::ratelimit::Class::Mcp, &user_key, retry);
         return crate::ratelimit::too_many_requests(retry);
     }
     req.extensions_mut().insert(ctx);

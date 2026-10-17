@@ -87,7 +87,7 @@ function item(id: number, line: number, name: string, amount: number, category: 
   }
 }
 
-function seedLedger(): Ledger {
+function seedLedger(opts: { feed?: number } = {}): Ledger {
   let id = 1
   const cats: Cat[] = []
   const add = (kind: CategoryKind, name: string, parentId: number | null, archived = false) => {
@@ -151,19 +151,44 @@ function seedLedger(): Ledger {
     receipt(102, 2, '2026-10-08', [item(1003, 1, '洗剤', 398, '日用品')]),
     { ...receipt(103, 3, '2026-10-05', [item(1004, 1, 'おにぎり', 150, '食費/外食')]), labels: [{ color: 'blue' as const, title: null }] },
   ]
+  // feed option (TASK-19 design_browser.md §2-6): extra receipts for the
+  // real-browser feed tests — id 104..112, purchased_on one day later per id
+  // (2026-10-11..19) so the descending order is 112..104, 101, 102, 103
+  // (idx = 112 - id). The fixed 6-item composition with short names keeps
+  // the 390px panel rows on one line, so panel heights do not depend on text
+  // wrapping. Default (no option) leaves the 3 receipts above unchanged.
+  let feedItemId = 2001
+  for (let i = 0; i < (opts.feed ?? 0); i++) {
+    const composition: Array<[name: string, amount: number]> = [
+      ['牛乳', 220],
+      ['食パン', 180],
+      ['卵', 258],
+      ['納豆', 98],
+      ['バナナ', 198],
+      ['豆腐', 148],
+    ]
+    receipts.push(
+      receipt(
+        104 + i,
+        (i % 3) + 1,
+        `2026-10-${String(11 + i).padStart(2, '0')}`,
+        composition.map(([name, amount], line) => item(feedItemId++, line + 1, name, amount, '食費/食料品')),
+      ),
+    )
+  }
   // fixed 5-color label definitions, title NULL = color only (TASK-17)
   const labels: Label[] = LABEL_COLORS.map((color) => ({ color, title: null }))
   return { cats, stores, receipts, labels }
 }
 
-export function createMockDataApi(): DataApi {
+export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
   const ledgers = new Map<number, Ledger>()
   let seq = 5000
 
   const ledger = (id: number): Ledger => {
     let l = ledgers.get(id)
     if (!l) {
-      l = seedLedger()
+      l = seedLedger(opts)
       ledgers.set(id, l)
     }
     return l

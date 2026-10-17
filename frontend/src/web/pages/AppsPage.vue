@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { oauthApi, type Grant } from '../api/auth'
 import { errorMessage, formatDateTime } from '../composables/format'
 import { useSessionStore } from '../stores/session'
@@ -95,15 +96,33 @@ function switchLedger(g: Grant): Promise<void> {
     >
       {{ info }}
     </p>
-    <p v-if="loading">
-      読み込んでいます...
-    </p>
+    <div
+      v-if="loading"
+      class="card skeleton"
+      aria-hidden="true"
+      data-test="loading"
+    >
+      <p class="sr-only">
+        読み込んでいます...
+      </p>
+      <span class="sk sk-label" />
+      <span class="sk sk-line" />
+      <span class="sk sk-line short" />
+    </div>
     <p
       v-else-if="grants.length === 0"
       data-test="empty"
     >
       接続中のアプリはありません。
     </p>
+    <RouterLink
+      v-if="!loading && grants.length === 0"
+      to="/usage/connect"
+      class="more"
+      data-test="usage-link"
+    >
+      ChatGPTとの接続方法を見る
+    </RouterLink>
     <ul
       v-else
       class="rows"

@@ -86,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
     for res in results {
         res??;
     }
+    tracing::info!("shutdown complete");
     pool.close().await;
     Ok(())
 }

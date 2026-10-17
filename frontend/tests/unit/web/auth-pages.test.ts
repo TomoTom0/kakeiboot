@@ -70,6 +70,23 @@ describe('LoginPage', () => {
     expect(b.router.currentRoute.value.fullPath).toBe('/')
   })
 
+  it('[covers:web-shell.atomic-mount] login 完了は me 確定後に遷移し shell が即時（me 取得は1回）', async () => {
+    const f = mockFetch({
+      'POST /api/webauthn/login/start': { body: RCR },
+      'POST /api/webauthn/login/finish': { body: { next: 'home' } },
+      'GET /api/auth/me': { body: ME },
+      'GET /api/passkeys': { body: [] },
+    })
+    const { wrapper, router } = await mountApp('/login')
+    await wrapper.find('[data-test="login"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/')
+    // the session settled before the navigation: the shell is up with the
+    // route and the router guard did not fetch /me again (exactly one call)
+    expect(wrapper.find('[data-test="sidebar"]').exists()).toBe(true)
+    expect(f.to('GET', '/api/auth/me')).toHaveLength(1)
+  })
+
   it('[covers:web-login.failure-message] 401 は区別しない文言を出し遷移しない', async () => {
     mockFetch({
       'POST /api/webauthn/login/start': { body: RCR },
@@ -158,8 +175,28 @@ describe('RegisterPage', () => {
     })
   })
 
+  it('[covers:web-register.register-landing] register は setup と同じ画面で招待元家計簿の選択なし', async () => {
+    const f = mockFetch({
+      'POST /api/webauthn/register/info': { body: { kind: 'register', needs_display_name: true } },
+      'POST /api/webauthn/register/start': { body: CCR },
+      'POST /api/webauthn/register/finish': { body: {} },
+      'GET /api/auth/me': { body: ME },
+      'GET /api/passkeys': { body: [] },
+    })
+    const { wrapper } = await mountApp('/register?token=T')
+    // the setup explanation and the display-name input; no ledger choice
+    expect(wrapper.text()).toContain('新しいアカウントと、あなた専用の家計簿を作成します。')
+    expect(wrapper.find('[data-test="display-name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="use-invited-default"]').exists()).toBe(false)
+    await wrapper.find('[data-test="display-name"]').setValue('花子')
+    await wrapper.find('form').trigger('submit')
+    await settle()
+    // the finish body carries no use_invited_ledger_as_default
+    expect(f.to('POST', '/api/webauthn/register/finish')[0]!.body).toEqual({ credential: ATTESTATION })
+  })
+
   it('[covers:web-register.success-navigates-home] 登録完了でホームへ', async () => {
-    mockFetch({
+    const f = mockFetch({
       'POST /api/webauthn/register/info': { body: { kind: 'setup', needs_display_name: true } },
       'POST /api/webauthn/register/start': { body: CCR },
       'POST /api/webauthn/register/finish': { body: {} },
@@ -173,6 +210,9 @@ describe('RegisterPage', () => {
     await settle()
     expect(webauthn.createPasskey).toHaveBeenCalledWith(CCR)
     expect(router.currentRoute.value.path).toBe('/')
+    // me settled before the navigation (TASK-39): shell up, one /me call
+    expect(wrapper.find('[data-test="sidebar"]').exists()).toBe(true)
+    expect(f.to('GET', '/api/auth/me')).toHaveLength(1)
   })
 
   it('[covers:web-register.invalid-token-message] 無効な token は案内のみ', async () => {

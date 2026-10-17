@@ -50,6 +50,8 @@ invite_ttl_hours = 72
 recovery_ttl_hours = 1
 # recovery --ttl upper bound.
 recovery_ttl_max_hours = 24
+# register invitation (web, any active user): 24 hours.
+register_ttl_hours = 24
 
 # --- rate limits (spec_auth.md section 10-1; limiter wiring is a later phase) ---
 

@@ -1,8 +1,10 @@
-// LabelPicker in the ReceiptPanel labels slot (TASK-17): immediate toggles
-// with per-receipt serialization, diff composition, per-color rollback and
-// the applyReceipt write-back through the real Feed mount. The slot contract
-// itself is covered by receipt-panel.test.ts; this file fills the slot with
-// the real component (the TASK-17 implementation of ReceiptDetailPage).
+// LabelPicker in the ReceiptPanel labels slot (TASK-17, reshaped in
+// TASK-26): the assigned labels show as chips at the end of the tags row
+// and a small tag-plus button opens the popover with the five-label toggle
+// group — with per-receipt serialization, diff composition, per-color
+// rollback and the applyReceipt write-back through the real Feed mount.
+// The slot contract itself is covered by receipt-panel.test.ts; this file
+// fills the slot with the real component (the ReceiptDetailPage wiring).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setDataApi, type DataApi, type ReceiptView } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
@@ -55,12 +57,19 @@ function injectSetLabels(
 }
 
 const picker = (w: W, id = 101) => w.find(`[data-test="receipt-panel-${id}"] [data-test="label-picker"]`)
+const addBtn = (w: W, id = 101) => w.find(`[data-test="receipt-panel-${id}"] [data-test="label-add"]`)
 const toggle = (w: W, color: string, id = 101) =>
   w.find(`[data-test="receipt-panel-${id}"] [data-test="label-toggle-${color}"]`)
 const isPressed = (w: W, color: string, id = 101) => toggle(w, color, id).attributes('aria-pressed') === 'true'
 
+/** Open the picker popover (the toggles live inside it). */
+async function openPopover(w: W, id = 101): Promise<void> {
+  await addBtn(w, id).trigger('click')
+  await settle()
+}
+
 describe('LabelPicker (Feed)', () => {
-  it('[covers:web-receipts.label-picker] トグルで即時 setReceiptLabels・aria-pressed・applyReceipt 書き戻し・タイトル編集リンク', async () => {
+  it('[covers:web-receipts.label-picker][covers:web-labels.no-color-names-on-screen] popover 内トグルで即時 setReceiptLabels・aria-pressed・applyReceipt 書き戻し・可視テキストに色名なし', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     let confirmed: string[] = []
@@ -69,23 +78,24 @@ describe('LabelPicker (Feed)', () => {
       return { receipt_id: r, labels: confirmed.map((color) => ({ color, title: null })) }
     })
     const { wrapper } = await mountApp(DETAIL)
+    await openPopover(wrapper)
 
     expect(toggle(wrapper, 'red').attributes('aria-pressed')).toBe('false')
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenCalledWith(1, 101, { add: ['red'] })
-    // the response writes back through applyReceipt: pressed + dot stay on
+    // the response writes back through applyReceipt: pressed + chip stay on
     expect(isPressed(wrapper, 'red')).toBe(true)
-    expect(picker(wrapper).find('[data-test="label-dot"]').exists()).toBe(true)
+    expect(picker(wrapper).find('.label-chip').exists()).toBe(true)
     // off again is a remove
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenLastCalledWith(1, 101, { remove: ['red'] })
     expect(isPressed(wrapper, 'red')).toBe(false)
-    // the visible text is the color name (or the title when set)
-    expect(picker(wrapper).text()).toContain('赤')
-    // the edit link points at the settings page
-    expect(picker(wrapper).find('[data-test="label-edit-link"]').attributes('href')).toBe('/settings/labels')
+    // the visible text carries no color names (open popover included) and
+    // the name-edit link is gone
+    expect(picker(wrapper).text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
+    expect(picker(wrapper).find('[data-test="label-edit-link"]').exists()).toBe(false)
   })
 
   it('[covers:web-receipts.label-picker] 連続タップは1要求に合成される', async () => {
@@ -97,6 +107,7 @@ describe('LabelPicker (Feed)', () => {
       return { receipt_id: r, labels: confirmed.map((color) => ({ color, title: null })) }
     })
     const { wrapper } = await mountApp(DETAIL)
+    await openPopover(wrapper)
 
     // two taps in the same tick compose into one request
     await toggle(wrapper, 'red').trigger('click')
@@ -130,6 +141,7 @@ describe('LabelPicker (Feed)', () => {
         }),
     )
     const { wrapper } = await mountApp(DETAIL)
+    await openPopover(wrapper)
 
     await toggle(wrapper, 'red').trigger('click')
     await settle()
@@ -148,7 +160,7 @@ describe('LabelPicker (Feed)', () => {
     expect(isPressed(wrapper, 'blue')).toBe(true)
   })
 
-  it('[covers:web-receipts.label-picker] 失敗時は要求に含めた色を confirmed へ戻しメッセージ表示', async () => {
+  it('[covers:web-receipts.label-picker] 失敗時は要求に含めた色を confirmed へ戻し、popover 内とボタン部に表示', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     let confirmed: string[] = []
@@ -158,6 +170,7 @@ describe('LabelPicker (Feed)', () => {
       return { receipt_id: r, labels: confirmed.map((color) => ({ color, title: null })) }
     })
     const { wrapper } = await mountApp(DETAIL)
+    await openPopover(wrapper)
 
     await toggle(wrapper, 'red').trigger('click')
     await toggle(wrapper, 'blue').trigger('click')
@@ -166,17 +179,36 @@ describe('LabelPicker (Feed)', () => {
     // colors with unsent changes keep their intent (not exercised here)
     expect(isPressed(wrapper, 'red')).toBe(false)
     expect(isPressed(wrapper, 'blue')).toBe(false)
-    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(true)
     expect(set).toHaveBeenCalledTimes(1)
+    // the error line lives inside the open popover
+    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(true)
+    expect(picker(wrapper).find('[data-test="label-error"]').attributes('role')).toBe('alert')
+    // closing the popover puts a warning badge + a visually-hidden note on
+    // the button instead of a new row
+    await addBtn(wrapper).trigger('click')
+    await settle()
+    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(false)
+    expect(addBtn(wrapper).find('.label-add-badge').exists()).toBe(true)
+    expect(addBtn(wrapper).find('.sr-only').exists()).toBe(true)
+    // reopening resurfaces the error in the popover; a fresh tap clears it
+    await openPopover(wrapper)
+    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(true)
+    await toggle(wrapper, 'green').trigger('click')
+    await settle()
+    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(false)
   })
 
-  it('[covers:web-receipts.label-picker] viewer と削除済み（canEdit=false）は LabelDots にフォールバックし操作不可', async () => {
+  it('[covers:web-receipts.label-picker] viewer と削除済み（canEdit=false）はチップ表示のみで操作不可', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME_VIEWER } })
     await withLabels([{ color: 'red', title: '旅行' }])
     const set = injectSetLabels(async (_l, r) => ({ receipt_id: r, labels: [] }))
     const viewer = await mountApp(DETAIL)
+    expect(addBtn(viewer.wrapper).exists()).toBe(false)
+    // the chips carry the spoken name as aria; the visible text has no color names
+    const chip = picker(viewer.wrapper).find('.label-chip')
+    expect(chip.attributes('aria-label')).toBe('旅行')
+    expect(chip.text()).toBe('旅行')
     expect(picker(viewer.wrapper).find('[data-test="label-toggle-red"]').exists()).toBe(false)
-    expect(picker(viewer.wrapper).find('[data-test="label-dot"]').attributes('aria-label')).toBe('赤: 旅行')
     expect(set).not.toHaveBeenCalled()
     viewer.wrapper.unmount()
     cleanup()
@@ -185,11 +217,11 @@ describe('LabelPicker (Feed)', () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await api.deleteReceipt(1, 102, { confirm: true, revision: 1 })
     const deleted = await mountApp('/receipts/102?from=2026-10-01&to=2026-10-31&include_deleted=1')
-    expect(picker(deleted.wrapper, 102).find('[data-test="label-toggle-red"]').exists()).toBe(false)
+    expect(addBtn(deleted.wrapper, 102).exists()).toBe(false)
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('[covers:web-receipts.label-picker] editing=true はトグル disabled（送信中の要求とキューは止めない）', async () => {
+  it('[covers:web-receipts.label-picker] editing=true はボタン disabled（送信中の要求とキューは止めない）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     let confirmed: string[] = []
@@ -202,15 +234,16 @@ describe('LabelPicker (Feed)', () => {
 
     await p.find('[data-test="edit"]').trigger('click')
     await settle()
-    const red = toggle(wrapper, 'red')
-    expect(red.attributes('disabled')).toBeDefined()
-    await red.trigger('click')
+    const btn = addBtn(wrapper)
+    expect(btn.attributes('disabled')).toBeDefined()
+    await btn.trigger('click')
     await settle()
-    expect(set).not.toHaveBeenCalled()
-    // leaving edit mode re-enables the toggles
+    expect(picker(wrapper).find('[data-test="label-toggle-red"]').exists()).toBe(false)
+    // leaving edit mode re-enables the button and the popover works again
     await p.find('[data-test="cancel-edit"]').trigger('click')
     await settle()
-    expect(toggle(wrapper, 'red').attributes('disabled')).toBeUndefined()
+    expect(addBtn(wrapper).attributes('disabled')).toBeUndefined()
+    await openPopover(wrapper)
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenCalledWith(1, 101, { add: ['red'] })
@@ -228,6 +261,7 @@ describe('LabelPicker (Feed)', () => {
     )
     const { wrapper } = await mountApp(DETAIL)
     const p = wrapper.find('[data-test="receipt-panel-101"]')
+    await openPopover(wrapper)
 
     await toggle(wrapper, 'red').trigger('click')
     await settle()
@@ -264,8 +298,55 @@ describe('LabelPicker (Feed)', () => {
     await p.find('[data-test="edit-form"]').trigger('submit')
     await settle()
     expect(update).toHaveBeenCalled()
+    await openPopover(wrapper)
     expect(isPressed(wrapper, 'green')).toBe(true)
     expect(isPressed(wrapper, 'red')).toBe(false)
     expect(set).not.toHaveBeenCalled()
+  })
+
+  it('[covers:web-receipts.label-picker-compact] ボタンは .tags 内末尾・押下で PopoverPanel・Escape・外側押下で閉じトリガへ・editing で disabled', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    await withLabels([])
+    injectSetLabels(async (_l, r) => ({ receipt_id: r, labels: [] }))
+    const { wrapper } = await mountApp(DETAIL, { attach: true })
+    const p = wrapper.find('[data-test="receipt-panel-101"]')
+
+    // the button rides at the end of the tags row (no dedicated label row)
+    const btn = addBtn(wrapper)
+    expect(btn.element.closest('.tags')).not.toBeNull()
+    const tags = p.find('.receipt-head .tags').element
+    expect(tags.lastElementChild?.contains?.(btn.element)).toBe(true)
+    expect(btn.attributes('aria-label')).toBe('ラベルを付ける・外す')
+
+    // pressing it opens the PopoverPanel dialog with the toggle group
+    await btn.trigger('click')
+    await settle()
+    const dialog = p.find('[role="dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('aria-label')).toBe('ラベルの選択')
+    expect(dialog.find('.label-toggle-group').exists()).toBe(true)
+    expect(dialog.findAll('.label-toggle-group button')).toHaveLength(5)
+
+    // Escape closes and returns the focus to the trigger
+    ;(btn.element as HTMLElement).focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await settle()
+    expect(p.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(btn.element)
+
+    // an outside pointerdown closes too; the trigger aria-expanded follows
+    await btn.trigger('click')
+    await settle()
+    expect(btn.attributes('aria-expanded')).toBe('true')
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(p.find('[role="dialog"]').exists()).toBe(false)
+    expect(btn.attributes('aria-expanded')).toBe('false')
+
+    // editing disables the button (covered in detail above, pinned here for
+    // the compact condition as well)
+    await p.find('[data-test="edit"]').trigger('click')
+    await settle()
+    expect(addBtn(wrapper).attributes('disabled')).toBeDefined()
   })
 })

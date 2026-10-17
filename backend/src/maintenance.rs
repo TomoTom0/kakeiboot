@@ -48,9 +48,10 @@ pub async fn run_cleanup_loop(
             }
         })
         .await;
-        match result {
-            Ok(report) => tracing::debug!(?report, "cleanup sweep finished"),
-            Err(e) => tracing::warn!(error = %e, "cleanup sweep failed"),
+        // per-target counts are logged at INFO by cleanup_expired itself
+        // (spec_auth.md 10-5); the loop only reports failures.
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "cleanup sweep failed");
         }
         tokio::select! {
             () = ct.cancelled() => break,

@@ -28,6 +28,17 @@ use crate::ratelimit::{Class, RateLimits, client_ip, too_many_requests};
 /// Redacted path used in every log line touching a media URL.
 const REDACTED: &str = "/media/img/<redacted>";
 
+/// Path as it may appear in a log line: `/media/img/*` collapses to the
+/// redacted form (spec_auth.md 10-2, TASK-15 request log); anything else
+/// passes through unchanged. Query strings never reach this function.
+pub(crate) fn redact_path(path: &str) -> &str {
+    if path.starts_with("/media/img/") {
+        REDACTED
+    } else {
+        path
+    }
+}
+
 #[derive(Clone)]
 struct MediaState {
     db: SqlitePool,
@@ -63,6 +74,7 @@ async fn img(State(st): State<MediaState>, req: Request) -> Response {
         st.trust_cf,
     );
     if let Some(retry) = st.limits.check(Class::Media, &ip, now) {
+        crate::ratelimit::warn_limited(Class::Media, &ip, retry);
         return too_many_requests(retry);
     }
 

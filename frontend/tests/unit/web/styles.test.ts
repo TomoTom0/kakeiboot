@@ -113,11 +113,25 @@ describe('receipt feed CSS (no snap)', () => {
 })
 
 describe('topbar title', () => {
-  it('[covers:web-shell.topbar-title-ellipsis] .topbar-title は 1 行 ellipsis（nowrap + hidden + ellipsis + min-width 0）で折り返さない', () => {
+  it('[covers:web-shell.topbar-title-ellipsis] .topbar-title は icon + .topbar-title-text の flex 行で、テキスト側が 1 行 ellipsis（nowrap + hidden + ellipsis + min-width 0）', () => {
+    // the h1 is a flex row (icon + text, TASK-35) that shrinks without overflowing
     const titles = rulesFor('.topbar-title')
     expect(titles.length).toBeGreaterThan(0)
     expect(
       titles.some(
+        (r) =>
+          decl(r.body, 'display') === 'flex' &&
+          decl(r.body, 'gap') === '0.375rem' &&
+          decl(r.body, 'min-width') === '0' &&
+          decl(r.body, 'overflow') === 'hidden',
+      ),
+    ).toBe(true)
+    // the icon keeps its size; the text takes the rest and ellipsizes there
+    expect(rulesFor('.topbar-title .icon').some((r) => decl(r.body, 'flex') === 'none')).toBe(true)
+    const texts = rulesFor('.topbar-title-text')
+    expect(texts.length).toBeGreaterThan(0)
+    expect(
+      texts.some(
         (r) =>
           decl(r.body, 'white-space') === 'nowrap' &&
           decl(r.body, 'overflow') === 'hidden' &&
@@ -125,12 +139,14 @@ describe('topbar title', () => {
           decl(r.body, 'min-width') === '0',
       ),
     ).toBe(true)
-    for (const r of titles) expect(decl(r.body, 'overflow-wrap') ?? '', 'overflow-wrap').not.toBe('anywhere')
+    for (const r of [...titles, ...texts]) {
+      expect(decl(r.body, 'overflow-wrap') ?? '', 'overflow-wrap').not.toBe('anywhere')
+    }
   })
 })
 
 describe('shell: topbar over drawer (TASK-27)', () => {
-  it('[covers:web-shell.drawer-below-topbar] topbar は .shell 直下（.main-col の外）の全幅で、899px 以下の sidebar・scrim は topbar の下端から展開し z-index も topbar が上', async () => {
+  it('[covers:web-shell.drawer-below-topbar] topbar は .shell 直下（.main-col の外）の全幅で、sidebar（全幅 overlay）・899px 以下の scrim は topbar の下端から展開し z-index も topbar が上', async () => {
     // template structure: the topbar is a direct child of the shell, never
     // inside the main column (so the drawer cannot cover it)
     setDataApi(createMockDataApi())
@@ -142,10 +158,11 @@ describe('shell: topbar over drawer (TASK-27)', () => {
     setDataApi(null)
     cleanup()
 
-    // CSS: the mobile drawer and its scrim start at the topbar's bottom edge
+    // CSS: the sidebar overlay (every width, TASK-33) and the mobile scrim
+    // start at the topbar's bottom edge
+    expect(rulesFor('.sidebar', css).map((r) => decl(r.body, 'top'))).toContain('var(--topbar-h)')
     const mobile = blockAfter(/@media\s*\(max-width:\s*899px\)/)
     expect(mobile).toBeDefined()
-    expect(rulesFor('.sidebar', mobile!).map((r) => decl(r.body, 'top'))).toContain('var(--topbar-h)')
     expect(rulesFor('.drawer-open .scrim', mobile!).some((r) => decl(r.body, 'top') === 'var(--topbar-h)')).toBe(true)
     // and the topbar stacks above both
     const zOf = (sel: string, text: string) =>
@@ -163,34 +180,54 @@ describe('shell: topbar over drawer (TASK-27)', () => {
   })
 })
 
-describe('shell: menu button breakpoint (TASK-27)', () => {
-  it('[covers:web-shell.menu-btn-desktop-hidden] .menu-btn の display:none は .icon-btn の display 規則より後に定義され 900px 以上で非表示・899px 以下は 44x44 で表示', () => {
-    // the element carries both classes (icon-btn menu-btn), so the hiding
-    // rule only wins over .icon-btn's display by coming later in source
-    // order (same specificity)
+describe('shell: sidebar overlay at every width (TASK-33 real-device review)', () => {
+  it('[covers:web-shell.sidebar-overlay] .sidebar は全幅で fixed overlay（translateX slide 0.2s・reduced-motion で無効）、.shell-body は main 1列のみ、scrim は899px 以下のみ', () => {
+    // the sidebar is the same fixed overlay at every width: closed it sits
+    // off-canvas via transform, open it slides in — at 900px+ too, in place
+    // of the old instant grid-column swap
+    const top = topLevel()
+    const side = rulesFor('.sidebar', top)
+    expect(side.some((r) => decl(r.body, 'position') === 'fixed')).toBe(true)
+    expect(side.some((r) => decl(r.body, 'transform') === 'translateX(-100%)')).toBe(true)
+    expect(side.some((r) => decl(r.body, 'transition') === 'transform 0.2s ease')).toBe(true)
+    expect(rulesFor('.drawer-open .sidebar', top).some((r) => decl(r.body, 'transform') === 'none')).toBe(true)
+    // the main column is a single grid column at every width: no sidebar
+    // column to swap away, so main never moves or reflows
+    expect(
+      rulesFor('.shell-body', top).some((r) => decl(r.body, 'grid-template-columns') === 'minmax(0, 1fr)'),
+    ).toBe(true)
+    expect(top).not.toMatch(/grid-template-columns:\s*var\(--sidebar-w\)/)
+    // the fold mechanism is gone entirely
+    expect(css).not.toMatch(/sidebar-collapsed/)
+    // the scrim is a mobile-only layer: display:none at the top level, the
+    // only rule showing it lives inside the 899px block
+    expect(rulesFor('.scrim', top).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+    const mobile = blockAfter(/@media\s*\(max-width:\s*899px\)/)!
+    expect(rulesFor('.drawer-open .scrim', mobile).some((r) => decl(r.body, 'display') === 'block')).toBe(true)
+    expect(rulesFor('.drawer-open .scrim', top)).toHaveLength(0)
+    // reduced motion disables the slide
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
+    expect(rulesFor('.sidebar', rm).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
+  })
+})
+
+describe('shell: menu button at every width (real-device review)', () => {
+  it('[covers:web-shell.menu-btn-always-visible] .menu-btn はどの幅でも非表示にされず、desktop も同じ slide overlay の開閉に使う', () => {
+    // the old desktop hiding (top-level .menu-btn { display: none }) is
+    // gone: the button stays visible at every width so it can toggle the
+    // sidebar overlay at 900px+ too
     const top = rules(topLevel())
-    const iconAt = top.findIndex(
-      (r) => r.selectors.includes('.icon-btn') && decl(r.body, 'display') !== undefined,
-    )
-    expect(iconAt, '.icon-btn display rule').toBeGreaterThanOrEqual(0)
-    const menuAt = top.findIndex(
-      (r) => r.selectors.includes('.menu-btn') && decl(r.body, 'display') === 'none',
-    )
-    expect(menuAt, 'top-level .menu-btn display:none rule').toBeGreaterThanOrEqual(0)
-    expect(menuAt, '.menu-btn hides after .icon-btn').toBeGreaterThan(iconAt)
-    // no later top-level .menu-btn rule turns the button back on
-    for (const r of top.slice(menuAt + 1).filter((r) => r.selectors.includes('.menu-btn'))) {
-      expect(decl(r.body, 'display'), 'later .menu-btn display').toBeUndefined()
+    const menuRules = top.filter((r) => r.selectors.includes('.menu-btn'))
+    expect(menuRules.length, 'top-level .menu-btn rules').toBeGreaterThan(0)
+    for (const r of menuRules) {
+      expect(decl(r.body, 'display'), 'top-level .menu-btn display').toBeUndefined()
     }
     // below 900px the button is a 44x44 tap target
     const mobile = blockAfter(/@media\s*\(max-width:\s*899px\)/)
     expect(mobile).toBeDefined()
     expect(
       rulesFor('.menu-btn', mobile!).some(
-        (r) =>
-          decl(r.body, 'display') === 'inline-grid' &&
-          decl(r.body, 'width') === '44px' &&
-          decl(r.body, 'height') === '44px',
+        (r) => decl(r.body, 'width') === '44px' && decl(r.body, 'height') === '44px',
       ),
     ).toBe(true)
   })
@@ -207,6 +244,43 @@ describe('topbar logo switch (520px)', () => {
         return d !== undefined && d !== 'none'
       }),
     ).toBe(true)
+  })
+})
+
+describe('motion: page transition, message fade, skeleton (TASK-39)', () => {
+  it('[covers:web-shell.page-transition] .page-* は opacity + 軽い translateY の 0.2s、reduced-motion で無効化、.msg は fade-in', () => {
+    // the page transition: fade with a slight drift, 200ms class
+    expect(
+      rulesFor('.page-enter-active').some(
+        (r) => decl(r.body, 'transition') === 'opacity 0.2s ease, transform 0.2s ease',
+      ),
+    ).toBe(true)
+    expect(
+      rulesFor('.page-enter-from').some(
+        (r) => decl(r.body, 'opacity') === '0' && decl(r.body, 'transform') === 'translateY(8px)',
+      ),
+    ).toBe(true)
+    expect(rulesFor('.page-leave-to').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
+    // reduced motion turns it off entirely (instant swap, no drift)
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(rm).toBeDefined()
+    expect(rulesFor('.page-enter-active', rm!).some((r) => decl(r.body, 'transition-duration') === '0s')).toBe(true)
+    expect(rulesFor('.page-enter-from', rm!).some((r) => decl(r.body, 'transform') === 'none')).toBe(true)
+    expect(rulesFor('.page-leave-to', rm!).some((r) => decl(r.body, 'transform') === 'none')).toBe(true)
+    // messages (errors / notices / copy confirmations) fade in on insert
+    expect(rulesFor('.msg').some((r) => decl(r.body, 'animation') === 'bb-fade-in 0.16s ease')).toBe(true)
+    expect(rulesFor('.msg', rm!).some((r) => decl(r.body, 'animation') === 'none')).toBe(true)
+  })
+
+  it('[covers:web-shell.loading-skeleton] .skeleton は単色 block（shimmer 定義なし）・.sr-only があり reduced-motion で静止', () => {
+    expect(css).toMatch(/@keyframes bb-fade-in/)
+    expect(rulesFor('.skeleton .sk').some((r) => decl(r.body, 'background') === 'var(--bb-surface-2)')).toBe(true)
+    // single flat color: no shimmer keyframes / gradient animation
+    expect(css).not.toMatch(/shimmer/)
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
+    expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'animation') === 'none')).toBe(true)
+    // the loading state stays readable for screen readers
+    expect(rulesFor('.sr-only').some((r) => decl(r.body, 'position') === 'absolute' && decl(r.body, 'width') === '1px')).toBe(true)
   })
 })
 
@@ -233,8 +307,19 @@ describe('ledger palette CSS', () => {
     }
   })
 
-  it('[covers:web-shell.ledger-color-band] .topbar.ledger-scoped に --ledger-current の下端色帯', () => {
+  it('[covers:web-shell.ledger-color-band] .topbar.ledger-scoped に --ledger-current の下端色帯、色帯・チップは遷移的に変わる', () => {
     const band = rulesFor('.topbar.ledger-scoped').map((r) => decl(r.body, 'box-shadow') ?? '')
     expect(band.some((v) => /inset 0 -3px 0 var\(--ledger-current\)/.test(v))).toBe(true)
+    // the band and the switcher chip cross-fade on a ledger switch (TASK-39)
+    // so the color change reads with the dimming main, not ahead of it
+    expect(
+      rulesFor('.topbar.ledger-scoped').some((r) => decl(r.body, 'transition') === 'box-shadow 0.2s ease'),
+    ).toBe(true)
+    expect(
+      rulesFor('.ledger-chip').some((r) => decl(r.body, 'transition') === 'background-color 0.2s ease'),
+    ).toBe(true)
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(rm).toBeDefined()
+    expect(rulesFor('.ledger-chip', rm!).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
   })
 })

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router'
 import { computed, ref, watch } from 'vue'
 import { useDataApi, type Catalog, type CategoryKind, type CategoryNode } from '../api/data'
 import { errorMessage } from '../composables/format'
@@ -89,13 +88,8 @@ function rowsOf(): { node: CategoryNode; path: string; depth: number; parent: st
 </script>
 
 <template>
-  <p class="page-back">
-    <RouterLink to="/settings">
-      設定
-    </RouterLink>
-    <span class="muted"> / カテゴリの管理</span>
-  </p>
   <section class="card">
+    <h2>カテゴリ</h2>
     <div class="tabs">
       <button
         class="tab"

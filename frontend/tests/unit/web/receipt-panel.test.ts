@@ -69,11 +69,13 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     expect(editor.last().ledgerId).toBe(1)
     expect(editor.last().canEdit).toBe(true)
     expect(editor.last().editing).toBe(false)
-    // placed in .receipt-head after the tags row
+    // placed at the end of the tags row inside .receipt-head (TASK-26: the
+    // tags element is a div so the labels slot rides as its last child)
     const probe = editor.wrapper.find('[data-test="labels-probe"]').element
     const tags = editor.wrapper.find('.receipt-head .tags').element
-    expect(probe.closest('.receipt-head')).not.toBeNull()
-    expect(tags.compareDocumentPosition(probe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(probe.closest('.tags')).toBe(tags)
+    expect(tags.tagName).toBe('DIV')
+    expect(tags.lastElementChild).toBe(probe)
 
     // edit mode
     await editor.wrapper.find('[data-test="edit"]').trigger('click')

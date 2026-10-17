@@ -372,6 +372,7 @@ async fn authorize_limit_guard(
                 .limits
                 .check(crate::ratelimit::Class::Authorize, &ip, session_now())
         {
+            crate::ratelimit::warn_limited(crate::ratelimit::Class::Authorize, &ip, retry);
             return crate::ratelimit::too_many_requests(retry);
         }
     }

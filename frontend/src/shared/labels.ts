@@ -1,7 +1,9 @@
-// Receipt color labels (TASK-17): the fixed 5-color palette shared by the
-// web screens and the widget, the label -> text conversions (a11y: the
-// color name is always present, spec_mcp-tools.md 12) and the URL query
-// conversion used by the receipt context (labels=red,blue).
+// Receipt labels (TASK-17, redesigned as managed labels in TASK-26): the
+// fixed 5-label palette shared by the web screens and the widget, the
+// spoken (aria-only) names and the URL query conversion used by the receipt
+// context (labels=red,blue). The screen never shows color-name text: a
+// titled label renders as a colored name chip and an untitled one as a bare
+// color chip (LabelChip.vue); the names below exist for assistive tech only.
 // Keep the color set in sync with the backend enum (domain labels.rs) and
 // the SQL seed (migration 0009).
 
@@ -16,7 +18,7 @@ export interface Label {
 
 /**
  * Loose display input: test data and hand-built envelopes carry plain string
- * colors; unknown keys fall back to the raw string in the display text.
+ * colors; unknown keys fall back to the raw string in the spoken name.
  */
 export interface LabelLike {
   color: string
@@ -32,27 +34,29 @@ export const LABEL_COLORS: readonly LabelColor[] = ['red', 'yellow', 'green', 'b
  */
 export const MAX_LABEL_TITLE_CHARS = 20
 
-export const LABEL_NAME: Record<LabelColor, string> = {
-  red: '赤',
-  yellow: '黄',
-  green: '緑',
-  blue: '青',
-  purple: '紫',
-}
-
 export function isLabelColor(v: string): v is LabelColor {
   return (LABEL_COLORS as readonly string[]).includes(v)
 }
 
-/** "赤: 旅行" when titled, otherwise just the color name. */
-export function labelText(label: LabelLike): string {
-  const name = isLabelColor(label.color) ? LABEL_NAME[label.color] : label.color
-  return label.title ? `${name}: ${label.title}` : name
+/** Position of a color in LABEL_COLORS (the definition / display order). */
+export function labelIndexOf(color: string): number {
+  return (LABEL_COLORS as readonly string[]).indexOf(color)
 }
 
-/** Color names joined with "・": "赤・青". Empty for no colors. */
-export function labelColorsText(colors: readonly LabelColor[]): string {
-  return colors.map((c) => LABEL_NAME[c]).join('・')
+/**
+ * Spoken name (TASK-26 1-3 R2): the title when set, otherwise the neutral
+ * "ラベルN" (N = position in LABEL_COLORS, 1-based). aria-label only —
+ * never a visible text node or a title attribute (the screen shows no
+ * color-name or placeholder text). Unknown colors fall back to the raw key.
+ */
+export function labelAriaName(label: LabelLike, index: number): string {
+  if (label.title) return label.title
+  return index >= 0 && index < LABEL_COLORS.length ? `ラベル${index + 1}` : label.color
+}
+
+/** Spoken names joined with "、": "旅行、ラベル2". Empty for no labels. */
+export function labelAriaList(labels: readonly LabelLike[] | null | undefined): string {
+  return (labels ?? []).map((l) => labelAriaName(l, labelIndexOf(l.color))).join('、')
 }
 
 /** URL query value ("red,blue") -> colors in definition order; unknown colors are dropped. */

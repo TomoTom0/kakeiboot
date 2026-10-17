@@ -139,10 +139,41 @@ impl ServerHandler for BudgetBookMcp {
             .or_else(|| context.meta.0.get("openai/subject"))
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        // tool-call log (spec_auth.md 10-5, TASK-15): name, actor and
+        // outcome only — arguments and result contents are never logged.
+        let tool = request.name.to_string();
+        let start = std::time::Instant::now();
         let result = {
             let tcc = ToolCallContext::new(self, request, context);
             self.tool_router.call(tcc).await
         };
+        let latency_ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Ok(resp) => {
+                let is_error = matches!(
+                    resp,
+                    CallToolResponse::Complete(r) if r.is_error.unwrap_or(false)
+                );
+                tracing::info!(
+                    tool = %tool,
+                    user_id = auth_context.user_id,
+                    client_id = %auth_context.client_id,
+                    is_error,
+                    latency_ms,
+                    "tool call"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tool = %tool,
+                    user_id = auth_context.user_id,
+                    client_id = %auth_context.client_id,
+                    error = %e,
+                    latency_ms,
+                    "tool call failed"
+                );
+            }
+        }
         if let Some(subject) = subject {
             let hash = oauth_assertion::subject_hash(&subject);
             let now = now_ms();

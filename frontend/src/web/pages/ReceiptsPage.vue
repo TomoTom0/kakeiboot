@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import LabelChip from '@/shared/components/LabelChip.vue'
 import LabelDots from '@/shared/components/LabelDots.vue'
-import { labelColorsText, parseLabelQuery, type LabelColor } from '@/shared/labels'
+import { labelIndexOf, parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import DashSkeleton from '../components/DashSkeleton.vue'
 import LabelFilter from '../components/LabelFilter.vue'
 import PeriodBar from '../components/PeriodBar.vue'
 import RankedList from '../components/RankedList.vue'
@@ -12,6 +14,7 @@ import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { dayLabel } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
+import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
 // Receipts dashboard (read-only): the period's total / count / average,
@@ -59,6 +62,9 @@ const overview = ref<StatsResult | null>(null)
 const payments = ref<StatsResult | null>(null)
 const error = ref('')
 const loading = ref(false)
+// first load finished at least once: until then the screen shows the
+// skeleton; later reloads keep the grid and dim it (TASK-39 D)
+const loaded = ref(false)
 
 function listQuery(cursor?: string): ReceiptListQuery {
   const [from, to] = period.range
@@ -105,11 +111,17 @@ async function load(id?: number): Promise<void> {
     nextCursor.value = list.next_cursor
     overview.value = ov
     payments.value = pm
-    void scrollToReturned()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
-    if (n === seq) loading.value = false
+    if (n === seq) {
+      // settle the render-affecting state first: the scroll lookup below
+      // rides the nextTick after this render, and the skeleton branch does
+      // not depend on the list refs, so the flip must come first
+      loading.value = false
+      loaded.value = true
+      void scrollToReturned()
+    }
   }
 }
 
@@ -137,6 +149,11 @@ async function more(): Promise<void> {
 
 const ledgerId = useLedger((id) => load(id))
 watch(() => period.range, () => void load())
+
+const labelsStore = useLabelsStore()
+/** Definition of a selected filter color, for the filter-chip LabelChips. */
+const labelDefOf = (c: LabelColor): Label =>
+  labelsStore.definitions(ledgerId.value ?? -1).find((l) => l.color === c) ?? { color: c, title: null }
 
 function applyFilters(): void {
   // label colors are toggled immediately and never come from this form
@@ -298,8 +315,15 @@ const groups = computed(() => {
       /></button></span>
       <span
         v-if="filters.labelColors.length"
-        class="filter-chip"
-      >ラベル: {{ labelColorsText(filters.labelColors) }}<button
+        class="filter-chip label-filter-chips"
+      >ラベル<LabelChip
+        v-for="c in filters.labelColors"
+        :key="c"
+        class="chip-label"
+        :label="labelDefOf(c)"
+        :index="labelIndexOf(c)"
+        size="sm"
+      /><button
         class="chip-x"
         aria-label="ラベルの条件を外す"
         data-test="clear-labels"
@@ -319,7 +343,9 @@ const groups = computed(() => {
       {{ error }}
     </p>
 
+    <DashSkeleton v-if="loading && !loaded" />
     <div
+      v-else
       class="dash-grid"
       :class="{ loading }"
     >

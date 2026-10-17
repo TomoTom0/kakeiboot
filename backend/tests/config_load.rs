@@ -157,3 +157,131 @@ fn mcp_toml_batch_keys_and_startup_validation() {
         "batch_decode_concurrency = decode_concurrency must be a config error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// TASK-32: register invitation TTL (auth.toml [auth.invitation])
+
+/// Every configs/<env>/auth.toml in the repo as (env, text).
+fn env_auth_tomls() -> Vec<(String, String)> {
+    let configs = common::repo_config_dir().parent().unwrap().to_path_buf();
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&configs).unwrap() {
+        let path = entry.unwrap().path();
+        let file = path.join("auth.toml");
+        if path.is_dir() && file.exists() {
+            out.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                std::fs::read_to_string(&file).unwrap(),
+            ));
+        }
+    }
+    out
+}
+
+/// The canonical valid auth.toml (mirrors the AUTH_VALID_TOML fixture in
+/// src/config.rs) with the TASK-32 `register_ttl_hours` key added.
+fn auth_toml_with_register_ttl(hours: i64) -> String {
+    format!(
+        r#"
+[auth]
+profile = "dev"
+
+[auth.env.dev]
+rp_id = "localhost"
+rp_origin = "http://localhost:40281"
+public_origin = "http://localhost:40281"
+issuer = "http://localhost:40281"
+resource = "http://localhost:40281/mcp"
+
+[auth.session]
+idle_days = 14
+absolute_days = 30
+step_up_secs = 600
+last_seen_update_secs = 300
+
+[auth.ceremony]
+ttl_secs = 300
+
+[auth.invitation]
+setup_ttl_hours = 24
+invite_ttl_hours = 72
+recovery_ttl_hours = 1
+recovery_ttl_max_hours = 24
+register_ttl_hours = {hours}
+
+[auth.rate_limit]
+webauthn_per_minute = 20
+token_accept_per_minute = 10
+token_accept_fail_block = 10
+token_accept_block_minutes = 15
+authorize_per_minute = 30
+token_endpoint_per_minute = 60
+mcp_per_minute = 120
+recovery_anonymous_per_minute = 5
+trust_cf_connecting_ip = false
+
+[auth.oauth]
+default_scopes = "ledger.read ledger.write"
+cimd_allowed_hosts = ["chatgpt.com"]
+redirect_uri_allowlist = ["https://chatgpt.com/connector_platform_oauth_redirect"]
+authz_request_ttl_secs = 600
+code_ttl_secs = 60
+access_token_ttl_secs = 3600
+refresh_sliding_days = 30
+grant_absolute_days = 90
+rotation_grace_secs = 60
+clock_skew_secs = 60
+
+[auth.oauth.dev]
+allow_insecure_loopback = false
+
+[auth.recovery_request]
+per_subject_hours = 24
+append_per_day = 3
+per_ip_per_day = 3
+global_per_day = 10
+anonymous_ip_per_day = 1
+note_max_chars = 200
+note_total_max_chars = 1000
+"#
+    )
+}
+
+// [covers:auth-invitation.register-ttl-config]
+#[test]
+fn register_ttl_hours_config() {
+    // 1. every environment's auth.toml carries register_ttl_hours = 24
+    //    (deny_unknown_fields: the key is mandatory once the code knows it)
+    let tomls = env_auth_tomls();
+    assert_eq!(tomls.len(), 3, "dev / stg / prod");
+    for (env, text) in &tomls {
+        let v: toml::Value = toml::from_str(text).unwrap();
+        let invitation = v
+            .get("auth")
+            .and_then(|a| a.get("invitation"))
+            .unwrap_or_else(|| panic!("configs/{env}/auth.toml is missing [auth.invitation]"));
+        let hours = invitation
+            .get("register_ttl_hours")
+            .unwrap_or_else(|| panic!("configs/{env}/auth.toml is missing register_ttl_hours"))
+            .as_integer()
+            .unwrap_or_else(|| {
+                panic!("configs/{env}/auth.toml register_ttl_hours is not an integer")
+            });
+        assert_eq!(hours, 24, "{env}");
+    }
+
+    // 2. the key is a known field and the default 24 resolves cleanly
+    let file = budget_book::config::parse_auth(&auth_toml_with_register_ttl(24))
+        .expect("register_ttl_hours must be a known auth.toml key");
+    file.auth
+        .resolve("/mcp")
+        .expect("register_ttl_hours = 24 resolves");
+
+    // 3. startup validation: register_ttl_hours = 0 is rejected
+    let zero = budget_book::config::parse_auth(&auth_toml_with_register_ttl(0))
+        .expect("parses; the rejection happens at resolve time");
+    assert!(
+        zero.auth.resolve("/mcp").is_err(),
+        "register_ttl_hours = 0 must be a config error"
+    );
+}

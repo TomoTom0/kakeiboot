@@ -6,6 +6,7 @@ mod common;
 use axum::http::StatusCode;
 use common::auth::*;
 use sqlx::SqlitePool;
+use webauthn_rs::prelude::CreationChallengeResponse;
 
 async fn setup() -> (axum::Router, SqlitePool) {
     let (router, pool, _cfg) = auth_setup().await;
@@ -150,6 +151,29 @@ async fn register_start_display_name_rules() {
         .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(resp).await["error"], "display_name_not_allowed");
+
+    // register (TASK-32): same rule as setup — display_name is required.
+    // The token comes from another active user (any user may issue).
+    let inviter_id = user;
+    let token = issue_register_token(&pool, inviter_id, "note").await;
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/start",
+            serde_json::json!({ "token": token }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "display_name_required");
+    // blank display_name is rejected the same way
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/start",
+            serde_json::json!({ "token": token, "display_name": "   " }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 // [covers:auth-register.info-for-landing-form]
@@ -186,6 +210,22 @@ async fn register_info_reports_kind_for_landing_form() {
     assert_eq!(body["kind"], "recovery");
     assert_eq!(body["needs_display_name"], false);
     assert_eq!(body["user_display_name"], "recoveree");
+
+    // register (TASK-32): setup-shaped landing info — display name needed,
+    // no invited ledger to mention
+    let token = issue_register_token(&pool, user, "note").await;
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/info",
+            serde_json::json!({ "token": token }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body_text(resp).await);
+    let body = body_json(resp).await;
+    assert_eq!(body["kind"], "register");
+    assert_eq!(body["needs_display_name"], true);
+    assert!(body.get("ledger_name").is_none(), "no ledger join");
 
     // invalid token
     let resp = client
@@ -357,6 +397,47 @@ async fn setup_finish_creates_user_and_personal_ledger() {
     assert!(actions.contains(&"create".to_string()));
 }
 
+// [covers:auth-register.persists-challenge-user-handle]
+// A discoverable credential presents the register/start challenge handle at
+// every login, so the stored users.webauthn_user_handle must be exactly that
+// uuid. (2026-10-17 prod incident: register/finish used to store a fresh
+// uuid instead, so the credential created at registration could never log
+// in — login_mismatch on the joint user-handle/credential-id lookup.)
+#[tokio::test]
+async fn setup_finish_persists_challenge_user_handle() {
+    let (router, pool) = setup().await;
+    let token = issue_setup_token(&pool, "n").await;
+    let mut client = Client::new();
+
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/start",
+            serde_json::json!({ "token": token, "display_name": "first" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    client.store_cookies(&resp);
+    let ccr: CreationChallengeResponse = serde_json::from_value(body_json(resp).await).unwrap();
+    let challenge_handle = ccr.public_key.user.id.to_vec();
+
+    let cred = client.register(ccr);
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/finish",
+            serde_json::json!({ "credential": cred, "label": "first" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "{}", body_text(resp).await);
+
+    let stored: Vec<u8> = sqlx::query_scalar("SELECT webauthn_user_handle FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, challenge_handle);
+}
+
 // [covers:auth-register.invite-finish-membership-and-lineage]
 #[tokio::test]
 async fn invite_finish_joins_ledger_and_records_lineage() {
@@ -446,6 +527,120 @@ async fn invite_finish_joins_ledger_and_records_lineage() {
         assert_eq!(personal_color, "teal");
         assert_eq!(invited_color, "orange");
     }
+}
+
+// [covers:auth-register.register-token-creates-user-and-personal-ledger]
+#[tokio::test]
+async fn register_token_creates_user_and_personal_ledger() {
+    let (router, pool) = setup().await;
+    let mut inviter = Client::new();
+    let inviter_id = register_setup_user(&mut inviter, &router, &pool, "reg-inviter").await;
+    let inviter_ledger: i64 =
+        sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+            .bind(inviter_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let token = issue_register_token(&pool, inviter_id, "妹に渡す分").await;
+    let mut client = Client::new();
+    let user = register_with_token(
+        &mut client,
+        &router,
+        &pool,
+        &token,
+        Some("registered"),
+        None,
+    )
+    .await;
+
+    // lineage: invited_by = issuer, via register, inviter note copied over,
+    // no operator note (registration-only tokens carry no admin note)
+    #[allow(clippy::type_complexity)]
+    let row: (
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = sqlx::query_as(
+        "SELECT invited_by, invited_via_kind, invite_note, admin_note, default_ledger_id
+         FROM users WHERE id = ?",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (invited_by, via, invite_note, admin_note, default_ledger) = row;
+    assert_eq!(invited_by, Some(inviter_id));
+    assert_eq!(via.as_deref(), Some("register"));
+    assert_eq!(invite_note.as_deref(), Some("妹に渡す分"));
+    assert_eq!(admin_note, None);
+
+    // personal ledger: owner membership, first palette color, category seed
+    let personal = default_ledger.expect("default ledger set");
+    assert_ne!(personal, inviter_ledger, "own personal ledger, no join");
+    let (ledger_name, role, color): (String, String, String) = sqlx::query_as(
+        "SELECT l.name, m.role, m.color FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
+         WHERE m.user_id = ? AND m.ledger_id = ?",
+    )
+    .bind(user)
+    .bind(personal)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ledger_name, "default book");
+    assert_eq!(role, "owner");
+    assert_eq!(color, "teal");
+    let cats: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_categories WHERE ledger_id = ?")
+        .bind(personal)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cats, 22, "category seed applied");
+    // no membership anywhere else (the register token joins no ledger)
+    let memberships: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM ledger_members WHERE user_id = ?")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(memberships, 1, "only the personal ledger");
+
+    // audit: token_use on register_invitation + user create {kind:register}
+    let token_use: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events
+         WHERE entity_type = 'register_invitation' AND action = 'token_use' AND user_id = ?",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(token_use, 1);
+    let (create_after,): (String,) = sqlx::query_as(
+        "SELECT after_json FROM audit_events
+         WHERE entity_type = 'user' AND action = 'create' AND user_id = ?",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(create_after, r#"{"kind":"register"}"#);
+
+    // single use: a second start with the same token is rejected
+    let resp = client
+        .post(
+            &router,
+            "/api/webauthn/register/start",
+            serde_json::json!({ "token": token, "display_name": "second" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE display_name = 'second'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 0, "no second user");
 }
 
 // [covers:auth-register.recovery-finish-adds-passkey-revokes-sessions]

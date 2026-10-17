@@ -42,14 +42,25 @@
   --ledger-brown: #7a5236;
   --ledger-slate: #6f7b86;
   --ledger-graphite: #3a3f44;
-  /* receipt label palette (TASK-17): 5 colors with a lightness spread so
-     they stay distinguishable next to each other (a11y: the color name is
-     always rendered as text as well) */
+  /* receipt label palette (TASK-17 / TASK-26): 5 colors with a lightness
+     spread so they stay distinguishable next to each other. The screen never
+     shows color-name text: a titled label is a name chip on the soft -bg
+     tint with the -fg text (4.5:1+), an untitled one is the solid color */
   --label-red: #c0392b;
   --label-yellow: #a8820c;
   --label-green: #2f8f4a;
   --label-blue: #2f62c4;
   --label-purple: #7d4fae;
+  --label-red-bg: #f8e3e0;
+  --label-red-fg: #8c2317;
+  --label-yellow-bg: #f5ecd2;
+  --label-yellow-fg: #66500a;
+  --label-green-bg: #e1f1e6;
+  --label-green-fg: #1e5c32;
+  --label-blue-bg: #e1eaf8;
+  --label-blue-fg: #1f4390;
+  --label-purple-bg: #ede5f6;
+  --label-purple-fg: #53317e;
   color-scheme: light dark;
 }
 
@@ -89,6 +100,16 @@
     --label-green: #64b97e;
     --label-blue: #7ea2e8;
     --label-purple: #ab8ad6;
+    --label-red-bg: #48231e;
+    --label-red-fg: #f4b6ae;
+    --label-yellow-bg: #433714;
+    --label-yellow-fg: #eed48c;
+    --label-green-bg: #1c3a27;
+    --label-green-fg: #a8debb;
+    --label-blue-bg: #1d2b4a;
+    --label-blue-fg: #b5c9f3;
+    --label-purple-bg: #322349;
+    --label-purple-fg: #d5bff1;
   }
 }
 
@@ -163,16 +184,29 @@ html.drawer-lock { overflow: hidden; }
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--bb-border);
 }
-/* selected ledger paints a band on the bottom edge of the top bar */
-.topbar.ledger-scoped { box-shadow: inset 0 -3px 0 var(--ledger-current); }
+/* selected ledger paints a band on the bottom edge of the top bar; the band
+   and the switcher chip cross-fade on a switch so the color change reads as
+   one motion with the dimming main column (TASK-39) */
+.topbar.ledger-scoped {
+  box-shadow: inset 0 -3px 0 var(--ledger-current);
+  transition: box-shadow 0.2s ease;
+}
 .topbar-brand { display: inline-flex; flex: none; }
 .topbar-logo-compact { display: none; }
-/* the title keeps one line and ellipsizes (TASK-27 §2) */
+/* the title keeps one line and ellipsizes (TASK-27 §2; icon added in TASK-35) */
 .topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
   font-size: 1.15rem;
+  overflow: hidden;
+}
+.topbar-title .icon { flex: none; }
+.topbar-title-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -180,20 +214,31 @@ html.drawer-lock { overflow: hidden; }
 .topbar-actions { display: flex; align-items: center; flex: none; gap: 0.75rem; margin-left: auto; }
 .app-main { min-width: 0; }
 
-/* below the topbar: the sidebar column (desktop) or the drawer (mobile) */
-.shell-body { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
+/* below the topbar: the main column alone — the sidebar is a fixed overlay
+   at every width (TASK-33 real-device review), so the main column never
+   moves or reflows when the sidebar opens or closes */
+.shell-body { display: grid; grid-template-columns: minmax(0, 1fr); }
+/* the sidebar slides in from the topbar's bottom edge at every width: the
+   transform transition animates the open/close at 900px+ too, in place of
+   the old instant grid-column swap (grid fold / display:none is gone) */
 .sidebar {
-  position: sticky;
+  position: fixed;
   top: var(--topbar-h);
+  bottom: 0;
+  left: 0;
   z-index: 30;
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - var(--topbar-h));
+  width: min(var(--sidebar-w), 85vw);
   overflow-y: auto;
   padding: 1rem 0.75rem;
   background: var(--bb-surface);
   border-right: 1px solid var(--bb-border);
+  box-shadow: var(--bb-shadow-pop);
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
 }
+.drawer-open .sidebar { transform: none; }
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-link {
   display: flex;
@@ -226,7 +271,9 @@ html.drawer-lock { overflow: hidden; }
   font-size: 0.9rem;
 }
 
-/* the scrim covers only the area below the topbar and closes the drawer */
+/* the scrim is a mobile-only layer: it covers the area below the topbar and
+   closes the drawer (the rule that shows it lives inside the 899px block;
+   the desktop overlay opens without one) */
 .scrim { display: none; }
 
 .main-col { min-height: 100vh; min-width: 0; }
@@ -257,6 +304,7 @@ html.drawer-lock { overflow: hidden; }
   border-radius: 8px;
   background: var(--ledger-teal);
   color: #fff;
+  transition: background-color 0.2s ease;
 }
 .ledger-option { justify-content: flex-start; }
 .ledger-option-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -277,10 +325,10 @@ html.drawer-lock { overflow: hidden; }
 }
 .icon-btn:hover:not(:disabled) { background: var(--bb-hover); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
-/* the drawer's menu button shows only below 900px; this rule must stay
-   after .icon-btn — same specificity, source order decides, and the
-   button on desktop would lock the layout behind an open drawer */
-.menu-btn { display: none; flex: none; }
+/* the menu button stays visible at every width (real-device review): it
+   toggles the one sidebar overlay — the modal drawer below 900px, the
+   plain slide at 900px+ (TASK-33 overlay unification) */
+.menu-btn { flex: none; }
 
 /* shared popover menu (PopoverMenu.vue): the wrapper anchors the panel */
 .popover-menu { position: relative; }
@@ -389,23 +437,13 @@ html.drawer-lock { overflow: hidden; }
   .topbar { gap: 6px; padding: 0 0.5rem; }
   .topbar-title { font-size: 1rem; }
   .topbar-actions { gap: 6px; }
-  /* the drawer slides in below the topbar; the scrim covers the rest */
-  .shell-body { display: block; }
+  /* the drawer keeps the shared slide and gains the modal layer: the scrim
+     covers the area below the topbar and closes the drawer (the desktop
+     overlay carries no scrim) */
   .sidebar {
-    position: fixed;
-    top: var(--topbar-h);
-    bottom: 0;
-    left: 0;
-    z-index: 30;
-    width: min(var(--sidebar-w), 85vw);
-    height: auto;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease;
     overscroll-behavior: contain;
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
-    box-shadow: var(--bb-shadow-pop);
   }
-  .drawer-open .sidebar { transform: none; }
   .drawer-open .scrim {
     display: block;
     position: fixed;
@@ -418,9 +456,14 @@ html.drawer-lock { overflow: hidden; }
   }
   .main-col { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   /* menu button + full logo; the name leaves the ledger chip */
-  .menu-btn { display: inline-grid; width: 44px; height: 44px; }
+  .menu-btn { width: 44px; height: 44px; }
   .ledger-name { display: none; }
   .app-main { padding: 1rem; }
+
+  /* the settings tab strip scrolls sideways when the four tabs do not
+     fit (each tab keeps its own width instead of sharing the row) */
+  .settings-tabs { flex-wrap: nowrap; overflow-x: auto; }
+  .settings-tabs .tab { flex: 0 0 auto; }
 
   .tabbar {
     position: fixed;
@@ -920,83 +963,173 @@ a.sub-row:hover { background: var(--bb-hover); }
 .row-labels { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; margin-left: 0.4rem; vertical-align: middle; }
 .more-btn { width: 100%; margin-top: 0.75rem; }
 
-/* ------------------------------------------------------ labels (TASK-17) */
+/* ------------------------------------------------------ labels (TASK-17/26) */
 
-/* display-only dots (shared LabelDots): the color name is always present as
-   aria-label / title; the text sits next to the dot unless compact */
+/* display-only (shared LabelDots): compact = 8px color dots (the spoken
+   name rides as aria-label only); the default renders the LabelChip list */
 .label-dots { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.3rem; }
 .label-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  width: 0.65rem;
-  height: 0.65rem;
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--bb-muted);
-  overflow: hidden;
-}
-.label-dot-lg { width: 1rem; height: 1rem; flex: none; }
-.label-dots:not(.compact) .label-dot {
-  width: auto;
-  height: auto;
-  border-radius: 999px;
-  padding: 0.05rem 0.5rem;
-  color: #fff;
-  font-size: 0.72rem;
-  line-height: 1.5;
 }
 .label-red { background: var(--label-red); }
 .label-yellow { background: var(--label-yellow); }
 .label-green { background: var(--label-green); }
 .label-blue { background: var(--label-blue); }
 .label-purple { background: var(--label-purple); }
-.label-dots:not(.compact) .label-yellow { color: #241d05; }
 
-/* picker (feed panel) and filter (toolbar) toggles */
-.label-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
-.label-picker-controls,
-.label-filter { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.3rem; }
+/* LabelChip (shared component, TASK-26): titled = a colored name chip (the
+   label color as the border, its soft tint as the background, a 4.5:1+
+   foreground), untitled = a bare color chip with no text. selected adds a
+   2px fg ring and a check (white, centered, when bare) */
+.label-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: none;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.label-chip.titled { padding: 0 8px; }
+.label-chip.titled.label-red { background: var(--label-red-bg); border-color: var(--label-red); color: var(--label-red-fg); }
+.label-chip.titled.label-yellow { background: var(--label-yellow-bg); border-color: var(--label-yellow); color: var(--label-yellow-fg); }
+.label-chip.titled.label-green { background: var(--label-green-bg); border-color: var(--label-green); color: var(--label-green-fg); }
+.label-chip.titled.label-blue { background: var(--label-blue-bg); border-color: var(--label-blue); color: var(--label-blue-fg); }
+.label-chip.titled.label-purple { background: var(--label-purple-bg); border-color: var(--label-purple); color: var(--label-purple-fg); }
+.label-chip.sm { height: 20px; min-width: 20px; border-radius: 7px; font-size: 0.7rem; }
+.label-chip.titled.sm { padding: 0 7px; }
+.label-chip.selected { box-shadow: 0 0 0 2px var(--bb-fg); }
+.label-chip.bare .label-check { color: #fff; }
+.label-chip-name { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the five labels as toggle chips (LabelToggleGroup): 32px chips inside a
+   44px-tall tap target; shared by the picker and filter popovers */
+.label-toggle-group { display: flex; flex-wrap: wrap; gap: 6px; }
 .label-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.15rem 0.55rem;
+  padding: 6px 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.label-toggle:disabled { cursor: default; opacity: 0.55; }
+.label-toggle .label-chip { height: 32px; min-width: 32px; border-radius: 10px; font-size: 0.8rem; }
+.label-toggle .label-chip.titled { padding: 0 10px; }
+
+/* picker (feed panel tags row): the chips plus one small tag-plus button
+   (28px look, 44px tap via the inset visual and negative margins) */
+.label-picker { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.3rem; }
+.label-picker-pop { position: relative; }
+.label-add-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: -8px 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--bb-muted);
+  cursor: pointer;
+}
+.label-add-btn::before {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+  background: var(--bb-surface);
+}
+.label-add-btn > * { position: relative; }
+.label-add-btn:disabled { cursor: default; opacity: 0.55; }
+.label-add-badge {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bb-warn);
+}
+.label-error { margin: 0 0 0.5rem; color: var(--bb-danger); font-size: 0.78rem; }
+
+/* filter (toolbar, TASK-26 2-4): one button, max 88px. Unselected carries
+   the word; a selection shows 6px dots and the accent border instead */
+.label-filter { position: relative; display: inline-flex; }
+.label-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 88px;
+  height: 36px;
+  margin: -4px 0;
+  padding: 0 10px;
   border: 1px solid var(--bb-border);
   border-radius: 999px;
   background: var(--bb-surface);
   color: var(--bb-fg);
-  font-size: 0.78rem;
-  line-height: 1.5;
+  font-size: 0.8rem;
   cursor: pointer;
 }
-.label-toggle::before {
-  content: '';
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: var(--bb-muted);
+.label-filter-btn.active { border-color: var(--bb-accent); color: var(--bb-accent); }
+.label-filter-btn.compact {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
 }
-.label-toggle.label-red::before { background: var(--label-red); }
-.label-toggle.label-yellow::before { background: var(--label-yellow); }
-.label-toggle.label-green::before { background: var(--label-green); }
-.label-toggle.label-blue::before { background: var(--label-blue); }
-.label-toggle.label-purple::before { background: var(--label-purple); }
-.label-toggle.on { border-color: currentColor; font-weight: 600; }
-.label-toggle.on.label-red { color: var(--label-red); border-color: var(--label-red); }
-.label-toggle.on.label-yellow { color: var(--label-yellow); border-color: var(--label-yellow); }
-.label-toggle.on.label-green { color: var(--label-green); border-color: var(--label-green); }
-.label-toggle.on.label-blue { color: var(--label-blue); border-color: var(--label-blue); }
-.label-toggle.on.label-purple { color: var(--label-purple); border-color: var(--label-purple); }
-.label-toggle:disabled { cursor: default; opacity: 0.55; }
-.label-toggle-title { font-weight: 400; opacity: 0.85; }
-.label-toggle-sm { padding: 0.1rem 0.45rem; font-size: 0.74rem; }
-.label-edit-link { font-size: 0.75rem; }
-.label-error { width: 100%; margin: 0; color: var(--bb-danger); font-size: 0.78rem; }
+.label-filter-word { white-space: nowrap; }
+.label-filter-dots { display: inline-flex; gap: 2px; }
+.label-filter-dot { width: 6px; height: 6px; border-radius: 50%; }
+.label-filter-foot { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
+.label-clear-btn {
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: none;
+  color: var(--bb-accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.label-clear-btn:disabled { color: var(--bb-muted); cursor: default; }
 
-/* manage screen rows */
+/* filter-chip row (ReceiptsPage): the word plus sm LabelChips */
+.label-filter-chips { gap: 0.3rem; }
+
+/* manage screen rows (TASK-26 2-5): a plain list of chips; pressing a row
+   turns it alone into the editor */
 .label-rows { margin-top: 0.5rem; }
 .label-row { align-items: center; }
-.label-row .row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+.label-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: none;
+  border-radius: var(--bb-radius);
+  cursor: pointer;
+  text-align: left;
+}
+.label-row-btn:hover:not(:disabled) { background: var(--bb-hover); }
+.label-row-btn:disabled { cursor: default; }
+.label-row-pencil { margin-left: auto; color: var(--bb-muted); }
 .label-row input {
   flex: 1;
   min-width: 8rem;
@@ -1037,6 +1170,11 @@ a.sub-row:hover { background: var(--bb-hover); }
 .feed-nav-buttons .icon-btn { width: 44px; height: 44px; }
 
 .receipt-panel { margin-bottom: 1rem; min-width: 0; }
+/* while the detail fetch is in flight the panel body is empty (v-if
+   anchor comments are ignored by :empty): hold the 18rem placeholder
+   height so mounting a panel does not collapse it to 0 and the scroll
+   compensation only sees one growth (TASK-19 2-7) */
+.receipt-panel-body:empty { min-height: 18rem; }
 .receipt-panel-placeholder {
   display: flex;
   align-items: center;
@@ -1046,57 +1184,52 @@ a.sub-row:hover { background: var(--bb-hover); }
   border-radius: var(--bb-radius-lg);
 }
 
-.page-back { margin: 0 0 0.75rem; font-size: 0.9rem; }
-.page-back a { display: inline-flex; align-items: center; gap: 0.2rem; text-decoration: none; }
-.page-back a:hover { text-decoration: underline; }
-
 .danger-zone { margin-top: 1.25rem; padding: 0.75rem 1rem; border: 1px solid color-mix(in srgb, var(--bb-danger) 45%, var(--bb-border)); border-radius: var(--bb-radius); }
 .danger-zone > summary { cursor: pointer; color: var(--bb-danger); font-weight: 600; }
 .danger-zone[open] > summary { margin-bottom: 0.5rem; }
 .card.danger-zone { padding: 1rem 1.25rem; }
 
-/* settings: per-ledger color choice */
+/* --- settings: four horizontal tabs (TASK-36, reworked after the
+   real-device review: general / auth / data / others, full width) --- */
+.settings-layout { min-width: 0; }
+/* the strip reuses the segmented .tabs/.tab look, stretched to full width */
+.settings-tabs { display: flex; }
+.settings-tabs .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex: 1 1 auto;
+  text-decoration: none;
+  white-space: nowrap;
+}
+/* data / others tabs: rows of links into the manage screens and the usage
+   pages */
+.settings-manage-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.settings-manage-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  color: var(--bb-fg);
+  text-decoration: none;
+  font-weight: 600;
+  transition: background-color 0.15s;
+}
+.settings-manage-link:hover { background: var(--bb-hover); }
+.settings-manage-link-text { display: flex; flex-direction: column; min-width: 0; }
+
+/* settings account panel: ledger rows, display only (TASK-34) */
 .ledger-color-list { padding-left: 0; list-style: none; }
 .ledger-color-row + .ledger-color-row { margin-top: 0.9rem; }
 .ledger-color-head { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-.ledger-colors {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1rem;
-  margin: 0.4rem 0 0;
-  padding: 0.35rem 0.5rem;
-  border: 0;
-  border-top: 1px dashed var(--bb-border);
-}
-.ledger-colors label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 34px;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.link-list { list-style: none; margin: 0; padding: 0; }
-.link-item {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 0.5rem;
-  margin: 0 -0.5rem;
-  border-radius: 10px;
-  color: inherit;
-  text-decoration: none;
-  transition: background-color 0.15s;
-}
-.link-item:hover { background: var(--bb-hover); }
-.link-item > .icon:first-child { color: var(--bb-accent); }
 
 /* receipt detail */
 .receipt-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
 .receipt-head p { margin: 0.1rem 0; }
-.tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem !important; }
+.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.4rem !important; }
 .tag { padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--bb-surface-2); color: var(--bb-muted); font-size: 0.78rem; font-weight: 600; }
 .receipt-total { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
 .receipt-total strong { font-size: 1.9rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -1167,6 +1300,109 @@ a.sub-row:hover { background: var(--bb-hover); }
 .actions-fill .btn { flex: 1; min-height: 48px; }
 .auth-note { margin-top: 1.5rem; font-size: 0.85rem; color: var(--bb-muted); }
 
+/* ------------------------------------------------------- usage (使い方) */
+
+/* numbered walkthrough steps of /usage/connect: the number as a round chip,
+   thin separators between the steps */
+.usage-steps { list-style: none; margin: 1.25rem 0 0; padding: 0; counter-reset: usage-step; }
+.usage-steps > li { position: relative; padding: 1.1rem 0 1.4rem 2.6rem; border-top: 1px solid var(--bb-border); counter-increment: usage-step; }
+.usage-steps > li:first-child { border-top: 0; }
+.usage-steps > li::before {
+  position: absolute;
+  left: 0;
+  top: 1.2rem;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--bb-accent-soft);
+  color: var(--bb-accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+  content: counter(usage-step);
+}
+.usage-steps h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.usage-steps h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+
+/* the runtime-generated connection URL: selectable code line + copy button */
+.usage-url { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; padding: 0.65rem 0.75rem; border: 1px solid var(--bb-border); border-radius: var(--bb-radius); background: var(--bb-surface-2); }
+.usage-url .msg, .usage-url .usage-copy-done { flex-basis: 100%; margin: 0; }
+.usage-url code { flex: 1 1 12rem; min-width: 0; font-size: 0.95rem; }
+.usage-copy-done { margin: 0.25rem 0 0; color: var(--bb-accent); }
+
+/* figures of the walkthrough: screenshots at a readable phone width, dashed
+   placeholders until an asset is captured */
+.usage-fig { margin: 1rem 0 0; text-align: center; }
+.usage-fig img { width: min(100%, 22rem); border: 1px solid var(--bb-border); border-radius: var(--bb-radius); }
+.usage-fig figcaption { margin-top: 0.4rem; font-size: 0.85rem; color: var(--bb-muted); }
+.usage-fig-ph { display: grid; justify-items: center; gap: 0.5rem; width: min(100%, 22rem); margin: 0 auto; padding: 2rem 1rem; border: 2px dashed var(--bb-border); border-radius: var(--bb-radius); color: var(--bb-muted); }
+.usage-fig-ph p { margin: 0; max-width: 18rem; }
+
+/* F1 flow diagram: colors ride the CSS variables so dark mode follows */
+.usage-flow { display: block; width: 100%; max-width: 44rem; height: auto; margin: 0 auto; }
+.usage-flow-panel { fill: var(--bb-surface); stroke: var(--bb-border); }
+.usage-flow-glyph { fill: none; stroke: var(--bb-muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.usage-flow-accent { fill: none; stroke: var(--bb-accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.usage-flow-bar { fill: var(--bb-accent-soft); }
+.usage-flow-dot { fill: var(--bb-muted); }
+.usage-flow-arrow { fill: none; stroke: var(--bb-muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.usage-flow-title { fill: var(--bb-fg); font-size: 28px; text-anchor: middle; }
+
+/* ------------------------------------------- motion & loading (TASK-39) */
+
+/* screen-reader-only text (the skeleton blocks are aria-hidden decoration) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* page transition (RouterView in App.vue both branches + the settings tab
+   panels): a short fade with a slight upward drift, out-in so the old page
+   leaves first and the layout never shows both stacked */
+.page-enter-active,
+.page-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* messages (errors / notices / copy confirmations) fade in when inserted */
+@keyframes bb-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.msg { animation: bb-fade-in 0.16s ease; }
+.usage-copy-done { animation: bb-fade-in 0.16s ease; }
+
+/* loading skeleton: the dash-grid silhouette in flat surface blocks, no
+   shimmer — the shape holds the layout, one soft fade on insert only */
+.skeleton .sk {
+  display: block;
+  background: var(--bb-surface-2);
+  border-radius: 6px;
+  animation: bb-fade-in 0.2s ease;
+}
+.skeleton .sk-label { width: 34%; height: 0.8rem; margin-bottom: 0.65rem; }
+.skeleton .sk-value { width: 45%; height: 2rem; margin-bottom: 0.9rem; }
+.skeleton .sk-line { width: 82%; height: 0.8rem; margin-top: 0.55rem; }
+.skeleton .sk-line.short { width: 55%; }
+.skeleton .sk-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 150px;
+  margin-top: 0.75rem;
+}
+.skeleton .sk-bar { flex: 1; max-width: 34px; height: 100%; }
+.skeleton .card { display: flex; flex-direction: column; justify-content: flex-start; }
+
 @media (max-width: 720px) {
   .dash-grid { grid-template-columns: minmax(0, 1fr); }
   .receipt-body { grid-template-columns: 1fr; }
@@ -1191,4 +1427,12 @@ a.sub-row:hover { background: var(--bb-hover); }
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar { transition: none; }
+  /* page / message / skeleton motion is off entirely (TASK-39) */
+  .page-enter-active,
+  .page-leave-active { transition-duration: 0s; }
+  .page-enter-from,
+  .page-leave-to { transform: none; }
+  .msg, .usage-copy-done, .skeleton .sk { animation: none; }
+  .topbar.ledger-scoped { transition: none; }
+  .ledger-chip { transition: none; }
 }

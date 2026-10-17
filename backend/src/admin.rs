@@ -14,9 +14,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use sqlx::{Connection, SqlitePool};
 
-use crate::auth::invitation::{self, InvitationKind, RevokeOutcome};
+use crate::auth::invitation::{self, InvitationKind};
 use crate::auth::tokens::{normalize_account_number, to_hex};
-use crate::auth::{audit, session};
+use crate::auth::{audit, register_invitation, session};
 use crate::config::{Config, ResolvedAuth};
 
 // ---------------------------------------------------------------------------
@@ -169,14 +169,18 @@ pub enum TokenKind {
     Setup,
     Invite,
     Recovery,
+    Register,
 }
 
 impl TokenKind {
-    fn to_invitation_kind(self) -> InvitationKind {
+    fn to_invitation_kind(self) -> Option<InvitationKind> {
         match self {
-            Self::Setup => InvitationKind::Setup,
-            Self::Invite => InvitationKind::Invite,
-            Self::Recovery => InvitationKind::Recovery,
+            Self::Setup => Some(InvitationKind::Setup),
+            Self::Invite => Some(InvitationKind::Invite),
+            Self::Recovery => Some(InvitationKind::Recovery),
+            // register tokens live in their own table; there is no
+            // InvitationKind mapping (issuance is web-only anyway).
+            Self::Register => None,
         }
     }
 }
@@ -202,15 +206,30 @@ pub fn parse_ttl(s: &str) -> Option<i64> {
 
 /// Argument-level validation before touching the DB.
 pub fn validate_args(cli: &Cli) -> anyhow::Result<()> {
-    let Command::Token(TokenCmd::Issue {
-        kind,
-        note,
-        user,
-        ttl,
-        ..
-    }) = &cli.command
-    else {
+    let Command::Token(cmd) = &cli.command else {
         return Ok(());
+    };
+    let (kind, note, user, ttl) = match cmd {
+        TokenCmd::Issue {
+            kind,
+            note,
+            user,
+            ttl,
+            ..
+        } => (kind, note, user, ttl),
+        // register tokens carry no target user: --user narrows recovery
+        // targets (an invitations-only concept), so pairing it with
+        // --kind register would list user-unrelated rows under a user
+        // filter (TASK-32 review)
+        TokenCmd::List {
+            kind: Some(TokenKind::Register),
+            user: Some(_),
+        } => {
+            anyhow::bail!(
+                "--user is only valid for invitation tokens; register tokens are not user-scoped"
+            );
+        }
+        _ => return Ok(()),
     };
     match kind {
         TokenKind::Setup => {
@@ -222,6 +241,9 @@ pub fn validate_args(cli: &Cli) -> anyhow::Result<()> {
             }
         }
         TokenKind::Invite => anyhow::bail!("invite tokens are issued from the web UI, not the CLI"),
+        TokenKind::Register => {
+            anyhow::bail!("register tokens are issued from the web UI, not the CLI")
+        }
         TokenKind::Recovery => {
             if user.is_none() {
                 anyhow::bail!("--user is required for --kind recovery");
@@ -337,7 +359,7 @@ pub async fn run_with(
                 Some(u) => Some(resolve_user(pool, u).await?.id),
                 None => None,
             };
-            token_list(pool, kind.map(|k| k.to_invitation_kind()), target, out).await
+            token_list(pool, *kind, target, out).await
         }
         Command::Token(TokenCmd::Revoke { token_id }) => token_revoke(pool, token_id, out).await,
         Command::Passkey(PasskeyCmd::List { user }) => {
@@ -892,6 +914,8 @@ async fn token_issue(
             .and_then(parse_ttl)
             .unwrap_or(auth.invitation.setup_ttl_hours * 3_600_000),
         TokenKind::Invite => anyhow::bail!("invite tokens are issued from the web UI"),
+        // validate_args bails first; kept symmetric to the invite arm.
+        TokenKind::Register => anyhow::bail!("register tokens are issued from the web UI"),
         TokenKind::Recovery => {
             let max = auth.invitation.recovery_ttl_max_hours * 3_600_000;
             let ttl = ttl
@@ -929,7 +953,9 @@ async fn token_issue(
     let token = invitation::issue(
         pool,
         &invitation::NewInvitation {
-            kind: kind.to_invitation_kind(),
+            kind: kind
+                .to_invitation_kind()
+                .expect("register issuance is web-only (validated)"),
             operator_note,
             target_user_id: target.as_ref().map(|u| u.id),
             created_by: None,
@@ -955,7 +981,7 @@ async fn token_issue(
         target.as_ref().map(|u| u.id),
         &serde_json::json!({
             "os_user": invitation::os_user(),
-            "kind": kind.to_invitation_kind().as_str(),
+            "kind": kind.to_invitation_kind().expect("register issuance is web-only (validated)").as_str(),
             "ttl_ms": ttl_ms,
             "target_user_id": target.as_ref().map(|u| u.id),
             "token_hash_prefix": hash_prefix,
@@ -972,28 +998,62 @@ async fn token_issue(
 
 async fn token_list(
     pool: &SqlitePool,
-    kind: Option<InvitationKind>,
+    kind: Option<TokenKind>,
     user: Option<i64>,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let rows = invitation::list(pool, kind, user).await?;
+    // Register rows join only when unfiltered or explicitly requested;
+    // --user narrows recovery targets (an invitations-only concept).
+    let register_rows = match (kind, user) {
+        (Some(TokenKind::Register), _) | (None, None) => register_invitation::list(pool).await?,
+        _ => Vec::new(),
+    };
+    // --kind register shows the register_invitations table only
+    let rows = match kind {
+        Some(TokenKind::Register) => Vec::new(),
+        _ => invitation::list(pool, kind.and_then(|k| k.to_invitation_kind()), user).await?,
+    };
+    // merged view, newest first (both tables share the created_at clock)
+    let mut merged: Vec<(i64, String)> = Vec::with_capacity(rows.len() + register_rows.len());
     for r in &rows {
-        writeln!(
-            out,
-            "{prefix} {kind} target_user={target} created={created} expires={expires} used={used} note={note}",
-            prefix = &to_hex(&r.token_hash)[..8],
-            kind = r.kind.as_str(),
-            target = r
-                .target_user_id
-                .map(|i| i.to_string())
-                .unwrap_or_else(|| "-".into()),
-            created = ms_to_jst(r.created_at),
-            expires = ms_to_jst(r.expires_at),
-            used = r.used_at.map(ms_to_jst).unwrap_or_else(|| "unused".into()),
-            note = r.operator_note.as_deref().unwrap_or("-"),
-        )?;
+        merged.push((
+            r.created_at,
+            format!(
+                "{prefix} {kind} target_user={target} created={created} expires={expires} used={used} note={note}",
+                prefix = &to_hex(&r.token_hash)[..8],
+                kind = r.kind.as_str(),
+                target = r
+                    .target_user_id
+                    .map(|i| i.to_string())
+                    .unwrap_or_else(|| "-".into()),
+                created = ms_to_jst(r.created_at),
+                expires = ms_to_jst(r.expires_at),
+                used = r.used_at.map(ms_to_jst).unwrap_or_else(|| "unused".into()),
+                note = r.operator_note.as_deref().unwrap_or("-"),
+            ),
+        ));
     }
-    writeln!(out, "{} token(s)", rows.len())?;
+    for r in &register_rows {
+        // register rows show the web issuer and mark the note as the
+        // inviter's (not an operator note, spec_auth.md 7-2)
+        merged.push((
+            r.created_at,
+            format!(
+                "{prefix} register issued_by={issuer} created={created} expires={expires} used={used} note=inviter: {note}",
+                prefix = &to_hex(&r.token_hash)[..8],
+                issuer = r.created_by,
+                created = ms_to_jst(r.created_at),
+                expires = ms_to_jst(r.expires_at),
+                used = r.used_at.map(ms_to_jst).unwrap_or_else(|| "unused".into()),
+                note = r.inviter_note,
+            ),
+        ));
+    }
+    merged.sort_by_key(|(created_at, _)| std::cmp::Reverse(*created_at));
+    for (_, line) in &merged {
+        writeln!(out, "{line}")?;
+    }
+    writeln!(out, "{} token(s)", merged.len())?;
     Ok(())
 }
 
@@ -1003,15 +1063,32 @@ async fn token_revoke(
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
     let now = session::now_ms();
-    match invitation::revoke_by_prefix(pool, token_id, now).await? {
-        RevokeOutcome::Deleted(hash) => {
-            writeln!(out, "deleted token {}", &to_hex(&hash)[..8])?;
-        }
-        RevokeOutcome::NotFound => anyhow::bail!("no token matches prefix {token_id:?}"),
-        RevokeOutcome::Ambiguous(n) => {
-            anyhow::bail!("prefix {token_id:?} matches {n} tokens; use more characters")
-        }
+    // resolve the prefix across both tables (register_invitations joined in
+    // TASK-32); one hit in each table is ambiguous as well. The resolved
+    // hash is passed straight into the delete, so the row is identified by
+    // the hash alone (no second prefix SELECT between resolve and delete).
+    let upper = token_id.trim().to_ascii_uppercase();
+    if upper.len() < 8 || !upper.bytes().all(|b| b.is_ascii_hexdigit()) {
+        anyhow::bail!("token id must be a hex prefix of at least 8 characters");
     }
+    let inv = invitation::hashes_by_prefix(pool, &upper).await?;
+    let reg = register_invitation::hashes_by_prefix(pool, &upper).await?;
+    let hash = match (inv.as_slice(), reg.as_slice()) {
+        ([h], []) => {
+            invitation::revoke_by_hash(pool, h, now).await?;
+            h.clone()
+        }
+        ([], [h]) => {
+            register_invitation::revoke_by_hash(pool, h, now).await?;
+            h.clone()
+        }
+        ([], []) => anyhow::bail!("no token matches prefix {token_id:?}"),
+        (i, r) => anyhow::bail!(
+            "prefix {token_id:?} matches {} tokens; use more characters",
+            i.len() + r.len()
+        ),
+    };
+    writeln!(out, "deleted token {}", &to_hex(&hash)[..8])?;
     Ok(())
 }
 

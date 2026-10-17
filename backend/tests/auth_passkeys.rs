@@ -520,3 +520,231 @@ async fn web_invitation_issue_requires_owner_and_step_up() {
         .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 }
+
+// [covers:auth-invitation.web-issue-register]
+#[tokio::test]
+async fn web_register_invitation_issue_for_any_active_user() {
+    let (router, pool) = setup().await;
+
+    // a viewer of someone else's ledger (not a default-ledger owner) issues
+    let mut owner = Client::new();
+    let owner_id = register_setup_user(&mut owner, &router, &pool, "ri-owner").await;
+    let owner_ledger: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(owner_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut viewer = Client::new();
+    let viewer_user = register_setup_user(&mut viewer, &router, &pool, "ri-viewer").await;
+    sqlx::query(
+        "INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'viewer', 0)",
+    )
+    .bind(owner_ledger)
+    .bind(viewer_user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE users SET default_ledger_id = ? WHERE id = ?")
+        .bind(owner_ledger)
+        .bind(viewer_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // a user without any default ledger issues too (registration-only
+    // invitations need no ledger at all)
+    let mut ledgerless = Client::new();
+    let ledgerless_user = register_setup_user(&mut ledgerless, &router, &pool, "ri-noledger").await;
+    sqlx::query("UPDATE users SET default_ledger_id = NULL WHERE id = ?")
+        .bind(ledgerless_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // issue: 201 { url, expires_at } with the ~24h register TTL
+    let resp = viewer
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "妹" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "{}",
+        body_text(resp).await
+    );
+    let body = body_json(resp).await;
+    let url = body["url"].as_str().unwrap();
+    assert!(
+        url.starts_with("http://localhost:40281/register?token="),
+        "{url}"
+    );
+    let now = budget_book::auth::session::now_ms();
+    let expires_at = body["expires_at"].as_i64().unwrap();
+    assert!(
+        expires_at > now + 23 * 3_600_000 && expires_at <= now + 25 * 3_600_000,
+        "24h ttl: {expires_at}"
+    );
+
+    // issuance audited as register_invitation / create by the issuer
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events
+         WHERE actor_kind = 'web' AND entity_type = 'register_invitation'
+           AND action = 'create' AND user_id = ?",
+    )
+    .bind(viewer_user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1);
+
+    // the issued URL resolves on register/info as a register token
+    let token = url.rsplit("token=").next().unwrap();
+    let resp = Client::new()
+        .post(
+            &router,
+            "/api/webauthn/register/info",
+            serde_json::json!({ "token": token }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let info = body_json(resp).await;
+    assert_eq!(info["kind"], "register");
+    assert_eq!(info["needs_display_name"], true);
+
+    // the ledgerless user can issue as well
+    let resp = ledgerless
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "n" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // stale step-up -> reauth_required
+    stale_auth_at(&pool, viewer_user).await;
+    let resp = viewer
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "x" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(resp).await["error"], "reauth_required");
+
+    // note validation (fresh step-up on the owner client): required, and
+    // capped at 200 characters (chars, not bytes)
+    for (note, code) in [
+        ("", "inviter_note_required"),
+        ("   ", "inviter_note_required"),
+        (&"あ".repeat(201), "inviter_note_too_long"),
+    ] {
+        let resp = owner
+            .post(
+                &router,
+                "/api/register-invitations",
+                serde_json::json!({ "inviter_note": note }),
+            )
+            .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "note {code}");
+        assert_eq!(body_json(resp).await["error"], code);
+    }
+    // exactly 200 multibyte characters is fine
+    let resp = owner
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "あ".repeat(200) }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+}
+
+// [covers:auth-invitation.register-open-limit]
+#[tokio::test]
+async fn register_invitation_open_limit() {
+    let (router, pool) = setup().await;
+    let mut a = Client::new();
+    let a_user = register_setup_user(&mut a, &router, &pool, "limit-a").await;
+
+    // five open register tokens
+    for i in 0..5 {
+        let resp = a
+            .post(
+                &router,
+                "/api/register-invitations",
+                serde_json::json!({ "inviter_note": format!("note {i}") }),
+            )
+            .await;
+        assert_eq!(resp.status(), StatusCode::CREATED, "open token {i}");
+    }
+    // the sixth open token is rejected
+    let resp = a
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "sixth" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "register_open_limit");
+
+    // another user's budget is independent
+    let mut b = Client::new();
+    register_setup_user(&mut b, &router, &pool, "limit-b").await;
+    let resp = b
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "other user" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // using one token frees a slot
+    let hash: Vec<u8> = sqlx::query_scalar(
+        "SELECT token_hash FROM register_invitations WHERE created_by = ? AND used_at IS NULL LIMIT 1",
+    )
+    .bind(a_user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE register_invitations SET used_at = 1 WHERE token_hash = ?")
+        .bind(&hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let resp = a
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "refill" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // expired-but-unswept rows do not count against the limit
+    sqlx::query(
+        "UPDATE register_invitations SET expires_at = 1 WHERE created_by = ? AND used_at IS NULL",
+    )
+    .bind(a_user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let resp = a
+        .post(
+            &router,
+            "/api/register-invitations",
+            serde_json::json!({ "inviter_note": "after expiry" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "expired rows are outside the open count"
+    );
+}

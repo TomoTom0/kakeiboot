@@ -33,6 +33,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // without an explicit css target the Lightning CSS minifier rewrites
+    // "max-width: 899px" queries into the Level 4 range syntax
+    // "(width<=899px)", which Safari < 16.4 / Chrome < 104 treat as an
+    // unknown media feature: the whole block is dropped there and the
+    // mobile shell (menu button, tabbar, drawer sidebar) disappears.
+    // Safari 15 keeps the classic (max-width: ...) form.
+    cssTarget: 'safari15',
     rollupOptions: {
       input: {
         web: fileURLToPath(new URL('./web.html', import.meta.url)),

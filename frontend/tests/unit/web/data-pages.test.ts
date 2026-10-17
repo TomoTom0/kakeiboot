@@ -305,12 +305,19 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     })
   }
 
-  it('[covers:web-receipts.label-filter] 選択は URL labels に同期し listReceipts・getStats に label_colors、チップと解除、行に LabelDots compact', async () => {
+  it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] 1ボタン+popover の選択は URL labels に同期し label_colors で流れ、チップはラベル+LabelChip、行に LabelDots compact', async () => {
     const list = withRowLabels()
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/receipts')
 
-    // select red + blue on the LabelFilter (color toggles, OR)
+    // the toolbar carries one button (word when unselected); the toggles
+    // live in its popover
+    const btn = wrapper.find('[data-test="label-filter-button"]')
+    expect(btn.text()).toContain('ラベル')
+    await btn.trigger('click')
+    await settle()
+
+    // select red + blue (OR) inside the popover
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
     await settle()
@@ -318,20 +325,25 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
     // the same-page stats (summary / payments / daily) get the filter too
     expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
-    // both toggles show the pressed state
+    // both toggles show the pressed state; the closed button carries dots
     expect(wrapper.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.find('[data-test="label-filter-blue"]').attributes('aria-pressed')).toBe('true')
 
-    // the chip names the colors in Japanese and clears the selection
+    // the chip row shows the word + sm LabelChips (no color-name text) and
+    // the x clears the selection
     const chips = wrapper.findAll('.filter-chip')
     const labelChip = chips.find((c) => c.text().includes('ラベル'))
     expect(labelChip).toBeTruthy()
-    expect(labelChip!.text()).toContain('赤・青')
+    const chipChips = labelChip!.findAll('.label-chip')
+    expect(chipChips).toHaveLength(2)
+    expect(chipChips[0]!.classes()).toContain('label-red')
+    expect(labelChip!.text()).not.toMatch(/赤|黄|緑|青|紫/)
     await labelChip!.find('.chip-x').trigger('click')
     await settle()
     expect(router.currentRoute.value.query['labels']).toBeUndefined()
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: [] }))
-    expect(wrapper.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('false')
+    // the button is back to the unselected word state
+    expect(wrapper.find('[data-test="label-filter-button"]').text()).toContain('ラベル')
 
     // the reserved row-labels element of a labeled row holds the dots
     expect(

@@ -1,5 +1,5 @@
-//! Schema constraint tests over migrations 0001-0010 (TASK-8, TASK-16,
-//! TASK-17, TASK-18). Each test targets one condition in
+//! Schema constraint tests over migrations 0001-0011 (TASK-8, TASK-16,
+//! TASK-17, TASK-18, TASK-32). Each test targets one condition in
 //! tests/design/conditions.toml via a [covers:<id>] comment on the test it
 //! belongs to.
 
@@ -26,13 +26,14 @@ async fn migrations_apply_cleanly() {
              'oauth_refresh_tokens','oauth_client_assertion_jtis','user_subject_hashes',
              'recovery_requests','recovery_request_candidates','recovery_overflow_daily',
              'item_categories','store_categories','stores','store_aliases','images',
-             'image_access_tokens','receipts','receipt_items','drafts','audit_events')
+             'image_access_tokens','receipts','receipt_items','drafts','audit_events',
+             'register_invitations')
          ORDER BY name",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(tables.len(), 29, "all spec tables exist");
+    assert_eq!(tables.len(), 30, "all spec tables exist");
     let views: Vec<(String,)> = sqlx::query_as(
         "SELECT name FROM sqlite_master WHERE type = 'view' AND name = 'v_item_facts'",
     )
@@ -69,7 +70,7 @@ async fn migrations_apply_cleanly() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(latest >= 10, "0009 + 0010 applied (latest {latest})");
+    assert!(latest >= 11, "0009 + 0010 + 0011 applied (latest {latest})");
     // 0010 (TASK-18): drafts.batch_id (NULL = single-tool / reopen)
     let batch_cols: Vec<(String,)> =
         sqlx::query_as("SELECT name FROM pragma_table_info('drafts') WHERE name = 'batch_id'")
@@ -77,6 +78,19 @@ async fn migrations_apply_cleanly() {
             .await
             .unwrap();
     assert_eq!(batch_cols.len(), 1, "drafts.batch_id added by 0010");
+    // 0011 (TASK-32): the register_invitations table (CREATE TABLE only; no
+    // existing table is touched — the shape itself is covered separately)
+    let register_tables: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'register_invitations'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        register_tables.len(),
+        1,
+        "register_invitations added by 0011"
+    );
 }
 
 // [covers:db-schema.drafts-batch-column]
@@ -107,7 +121,9 @@ async fn drafts_batch_column_and_partial_index() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(latest, 10, "0010 recorded");
+    // 0011 (register_invitations) may already be applied by migrate_rest;
+    // this test only needs 0010 recorded (its own condition's scope)
+    assert!(latest >= 10, "0010 recorded (latest {latest})");
     // column: nullable TEXT
     let col: (String, i64) = sqlx::query_as(
         "SELECT type, \"notnull\" FROM pragma_table_info('drafts') WHERE name = 'batch_id'",
@@ -595,6 +611,121 @@ async fn invitations_recovery_open_unique() {
     .execute(&pool)
     .await
     .unwrap();
+}
+
+// [covers:db-schema.register-invitations-table]
+#[tokio::test]
+async fn register_invitations_table() {
+    // TASK-32: 0011 is CREATE TABLE only. Apply 0001-0010 first, snapshot the
+    // existing schema, then run the rest and check the new table.
+    let pool = bare_mem_pool().await;
+    migrate_until(&pool, 11).await;
+    let absent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'register_invitations'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(absent, 0, "the table arrives with 0011");
+    let invitations_sql: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'invitations'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let invitations_indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'invitations'
+         ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    migrate_rest(&pool).await;
+
+    // STRICT + WITHOUT ROWID + token_hash PK (same shape as invitations 0002)
+    let sql: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'register_invitations'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(sql.contains("STRICT"), "{sql}");
+    assert!(sql.contains("WITHOUT ROWID"), "{sql}");
+    let pk: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('register_invitations') WHERE name = 'token_hash' AND pk = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pk, 1, "token_hash is the PRIMARY KEY");
+    // the two indexes: TTL sweep lookups + the per-issuer open count
+    let mut indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'register_invitations'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            "register_invitations_expires".to_string(),
+            "register_invitations_issuer_open".to_string()
+        ]
+    );
+    let issuer_open_sql: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE name = 'register_invitations_issuer_open'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        issuer_open_sql.contains("WHERE used_at IS NULL"),
+        "partial index for the open-token count: {issuer_open_sql}"
+    );
+
+    // NOT NULL: the issuer and the (mandatory) inviter note
+    insert_user(&pool, 1).await;
+    expect_db_err(
+        "NOT NULL",
+        sqlx::query(
+            "INSERT INTO register_invitations (token_hash, inviter_note, created_at, expires_at)
+             VALUES (x'01', 'n', 0, 0)",
+        )
+        .execute(&pool),
+    )
+    .await;
+    expect_db_err(
+        "NOT NULL",
+        sqlx::query(
+            "INSERT INTO register_invitations (token_hash, created_by, created_at, expires_at)
+             VALUES (x'02', 1, 0, 0)",
+        )
+        .execute(&pool),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at)
+         VALUES (x'03', 1, 'n', 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // existing tables and indexes are untouched by 0011
+    let invitations_sql_after: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'invitations'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(invitations_sql_after, invitations_sql);
+    let invitations_indexes_after: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'invitations'
+         ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invitations_indexes_after, invitations_indexes);
 }
 
 // [covers:db-schema.refresh-token-used-child-consistency]

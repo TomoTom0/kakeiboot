@@ -3,7 +3,14 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::middleware::Next;
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    http::StatusCode,
+    response::Response,
+    routing::get,
+};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
@@ -53,10 +60,35 @@ pub struct Health {
     pub db: String,
 }
 
+/// HTTP request log (TASK-15, spec_auth.md section 10-5): one line per
+/// request with `method`, `path`, `status` and `latency_ms` — INFO normally,
+/// ERROR when the response is a 5xx so server-side failures surface in the
+/// journal on their own. The query string is never recorded (OAuth
+/// token/code/req secrets travel there) and media URLs are redacted by
+/// [`crate::web::media::redact_path`]. The level follows `[log] filter`
+/// (RUST_LOG override), which ships INFO by default in every environment.
+/// `latency_ms` measures time-to-response (streaming bodies finish after
+/// the line is written).
+pub(crate) async fn request_log(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = crate::web::media::redact_path(req.uri().path()).to_string();
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status().as_u16();
+    let latency_ms = start.elapsed().as_millis() as u64;
+    if status >= 500 {
+        tracing::error!(method = %method, path = %path, status, latency_ms, "request");
+    } else {
+        tracing::info!(method = %method, path = %path, status, latency_ms, "request");
+    }
+    resp
+}
+
 /// Build the application router. `/mcp` is wrapped by the Bearer
 /// authentication middleware (spec_auth.md section 5-1) before the rmcp
 /// Streamable HTTP service; the web data API and the static frontend are
-/// mounted alongside (TASK-11 integration 6-7).
+/// mounted alongside (TASK-11 integration 6-7). The request log layer added
+/// last wraps every route and the SPA fallback (TASK-15).
 pub fn router(cfg: &Config, state: AppState, ct: CancellationToken) -> Router {
     let mcp = build_service(cfg, state.db.clone(), ct);
     let mcp_router = Router::new()
@@ -79,6 +111,7 @@ pub fn router(cfg: &Config, state: AppState, ct: CancellationToken) -> Router {
             let root = static_root.clone();
             async move { crate::web::static_files::spa_fallback(root, req).await }
         })
+        .layer(axum::middleware::from_fn(request_log))
 }
 
 async fn healthz(State(state): State<AppState>) -> (StatusCode, Json<Health>) {

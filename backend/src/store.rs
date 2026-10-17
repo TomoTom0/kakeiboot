@@ -44,11 +44,6 @@ pub const DEFAULT_LEDGER_NAME: &str = "default book";
 /// assignment order. The first key is the column DEFAULT.
 pub const LEDGER_COLORS: [&str; 6] = ["teal", "orange", "pink", "brown", "slate", "graphite"];
 
-/// Whether `color` is a palette key.
-pub fn is_ledger_color(color: &str) -> bool {
-    LEDGER_COLORS.contains(&color)
-}
-
 /// Color for a new membership of `user_id`: the first palette key the user
 /// does not use yet; with every key used, (membership count mod 6).
 pub async fn assign_member_color(
@@ -961,6 +956,7 @@ pub struct CleanupReport {
     pub deleted_sessions: u64,
     pub deleted_grants: u64,
     pub deleted_invitations: u64,
+    pub deleted_register_invitations: u64,
     pub deleted_authz_requests: u64,
     pub deleted_subject_hashes: u64,
     pub nulled_recovery_ip_hashes: u64,
@@ -1125,6 +1121,14 @@ where
         );
         sweep!(
             tx,
+            deleted_register_invitations,
+            "DELETE FROM register_invitations WHERE (used_at IS NULL AND expires_at < ?)
+                OR (used_at IS NOT NULL AND used_at < ?)",
+            now - DAY_MS,
+            now - 30 * DAY_MS
+        );
+        sweep!(
+            tx,
             deleted_authz_requests,
             "DELETE FROM oauth_authorization_requests WHERE expires_at < ?",
             now
@@ -1159,5 +1163,31 @@ where
         );
         tx.commit().await?;
     }
+    // one INFO line with every target's count (spec_auth.md 10-5, TASK-15)
+    tracing::info!(
+        expired_drafts = r.expired_drafts,
+        deleted_drafts = r.deleted_drafts,
+        nulled_draft_payloads = r.nulled_draft_payloads,
+        purged_receipts = r.purged_receipts,
+        orphan_image_candidates = r.orphan_image_candidates,
+        deleted_orphan_images = r.deleted_orphan_images,
+        deleted_image_tokens = r.deleted_image_tokens,
+        deleted_auth_codes = r.deleted_auth_codes,
+        deleted_jtis = r.deleted_jtis,
+        deleted_ceremonies = r.deleted_ceremonies,
+        deleted_access_tokens = r.deleted_access_tokens,
+        deleted_refresh_tokens = r.deleted_refresh_tokens,
+        deleted_sessions = r.deleted_sessions,
+        deleted_grants = r.deleted_grants,
+        deleted_invitations = r.deleted_invitations,
+        deleted_register_invitations = r.deleted_register_invitations,
+        deleted_authz_requests = r.deleted_authz_requests,
+        deleted_subject_hashes = r.deleted_subject_hashes,
+        nulled_recovery_ip_hashes = r.nulled_recovery_ip_hashes,
+        auto_rejected_recoveries = r.auto_rejected_recoveries,
+        deleted_recovery_requests = r.deleted_recovery_requests,
+        deleted_overflow_daily = r.deleted_overflow_daily,
+        "cleanup sweep finished"
+    );
     Ok(r)
 }

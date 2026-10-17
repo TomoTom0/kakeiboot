@@ -11,6 +11,7 @@
 | `mise run backend:test` | `cargo test --workspace` |
 | `mise run frontend:test` | `vitest run`（frontend/） |
 | `mise run lint` | rustfmt check、clippy（`-D warnings`）、ESLint、vue-tsc |
+| `mise run frontend:browser` | 実ブラウザ検証・撮影（chromium headless・playwright。API は tests/browser/stub.ts の stub。`mise run verify` には組み込まず手動実行） |
 | `uv run --no-project python scripts/design/verify-conditions.py` | 条件書の機械検査（covers タグ対応・網羅・schema・source_lines 同期） |
 
 ## テスト設計条件書（tests/design/）
@@ -45,6 +46,7 @@
 | `backend/src/mcp/tools/widget.rs`（`mod tests`） | 単体 | refresh_widget_images の ref キー |
 | `backend/tests/config_load.rs` | 結合 | リポジトリの実 `configs/`（app.toml + auth.toml）の読込、全環境の mcp.toml の一括 tool 用キーと起動時検証、`port = 40280` 固定割り当て（ユーザー承認済み 40280-40284 範囲）の検証、config dir の解決順、port 0 で OS 自動割当の bind |
 | `backend/tests/healthz.rs` | 結合 | `/healthz`（Router oneshot・実 TCP）、DB 停止時の 503、SQLite ファイル作成と migration 適用 |
+| `backend/tests/request_log.rs` | 結合 | TASK-15 運用ログ（spec_auth §10-5）: tracing capture（thread-local subscriber + shared buffer）でリクエスト INFO（query 不記録・media token の `<redacted>` 置換）、5xx ERROR、rate limit 429 WARN（class 付き）、login_mismatch WARN（audit 併記）、MCP tool 呼び出し INFO（実 TCP の initialize + tools/call ping）、TTL 掃除 INFO（対象別件数） |
 | `backend/tests/mcp_ping.rs` | 結合 | `/mcp`（Streamable HTTP、stateless、JSON 応答）の initialize・tools/list・tools/call `ping`（Bearer 必須化後は grant + access token を直接投入）、許可外 Host の拒否、Authorization なし/未知 token の 401 と WWW-Authenticate。port は OS 自動割当 |
 | `backend/tests/auth_register.rs` | 結合 | 登録フロー（setup / invite / recovery）: token 検証（未知・期限切れ・使用済み・無効化 user・display_name 規則）、受付画面用 info API、residentKey=required 上書き、kind 別完了 tx（user・個人 ledger・seed・招待参加と系譜・recovery は session 全失効）、招待と ceremony の 1 回限り、ceremony 期限、UA 既定ラベル、excludeCredentials |
 | `backend/tests/auth_login_session.rs` | 結合 | discoverable ログイン（成功・不一致 401 と audit・無効化 user・counter 逆行と audit・passkey_json/last_used 更新・持込み session cookie の失効・req の authz_request_hash 保存）、web session（cookie 属性・idle/absolute/revoked/disabled の拒否・last_seen の 5 分 throttling・me・logout / logout-all）、CSRF（Origin 強制・JSON Content-Type 強制） |
@@ -74,31 +76,37 @@
 | `frontend/tests/unit/widget/approve.test.ts` | 単体 | 承認ボタンの状態遷移（draft_id + revision 送信と登録中、成功・冪等成功のメッセージと widgetState 保存、stale_revision の描き直しと自動再承認なし、conflict のボタン非表示、その他エラーの再有効化、widgetState による承認済み復元） |
 | `frontend/tests/unit/widget/draft.test.ts` | 単体 | draft / receipt 画面（重複帯、unknown カテゴリの警告色、画像なし表示、画像の折りたたみと行タップの bbox オーバーレイ、画像 URL の refresh_widget_images による再発行、XSS 文字列のテキスト描画、明細 8 行 + さらに表示、ledger バッジ、削除済みレシート） |
 | `frontend/tests/unit/widget/draftBatch.test.ts` | 単体 | draft_batch 画面（件数と行状態、callTool なしの詳細と初期画像 URL、すべて登録の送信と行別反映・stale 行の描き直し・再承認なし、承認済み map の復元、送信中の行タップ無効） |
-| `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示（receipt / receipt_list の色ドット・操作なし、stats のラベル絞り込みチップと再 callTool での引継ぎ） |
+| `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示（receipt ヘッダの LabelChip 列・receipt_list の色ドット・操作なし、stats のラベル絞り込みチップ〔語+LabelChip〕と再 callTool での引継ぎ [TASK-26]） |
 | `frontend/tests/unit/widget/navigation.test.ts` | 単体 | view ルーティング、初期表示と不正 structuredContent、一覧→詳細（get_receipt_drafts / get_receipt の callTool・戻る・widgetState の stack）、下書き一覧の行表示 |
 | `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（自作 SVG グラフの値反映: bar_h / bar_v / stacked_bar / line / table / scatter_line、合計カードの前期比、期間・report 切替の summarize_spending 呼び出しと ledger_id・filters 引継ぎ、全画面切替） |
 | `frontend/tests/unit/widget/host.test.ts` | 単体 | host adapter（window.openai / 開発時モック / null host の選択、callTool 戻り値の正規化）、dark mode（theme と prefers-color-scheme、style.css の配色変数） |
 | `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記（ja-JP・負数の符号と色）、画像 URL の /media/img/ prefix 検証と不正 URL の非描画 |
 | `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget / shared ソースに直接通信・不使用ホスト API（sendFollowUpMessage・getFileDownloadUrl・toolInput）・HTML 挿入 API・絵文字が無いこと |
-| `frontend/tests/unit/web/helpers.ts` | 補助 | web テスト用: "METHOD /path" で応答を返す fetch スタブ（呼び出し記録・順次応答）、memory history での App mount（遅延ページの事前読込・HTTP hook 設定）、me・WebAuthn の fixture、フィード用スクロール test double（IntersectionObserver 手動発火・scrollIntoView 記録・scrollBy spy・matchMedia stub） |
+| `frontend/tests/unit/web/helpers.ts` | 補助 | web テスト用: "METHOD /path" で応答を返す fetch スタブ（呼び出し記録・順次応答）、memory history での App mount（HTTP hook 設定）、me・WebAuthn の fixture、フィード用スクロール test double（IntersectionObserver 手動発火・scrollIntoView 記録・scrollBy spy・matchMedia stub） |
 | `frontend/tests/unit/web/http.test.ts` | 単体 | fetch ラッパ（同一 origin・credentials・JSON、401 の onUnauthorized と authOptional、reauth_required の step-up 後1回再送とキャンセル時の非再送、403 のコード、204） |
 | `frontend/tests/unit/web/webauthn.test.ts` | 単体 | webauthn-rs JSON と navigator.credentials の変換（creation / request options の base64url → ArrayBuffer、attestation / assertion の base64url 化） |
 | `frontend/tests/unit/web/data-api.test.ts` | 単体 | 補助データ API が常に HTTP 実装（モック切替は削除済み）、HTTP クライアントの backend 接続契約（パス・メソッド・body） |
 | `frontend/tests/unit/web/vite-proxy.test.ts` | 単体 | Vite dev proxy の構成（/api,/oauth,/.well-known,/mcp を configs/dev/app.toml の backend port へ。port 直書きなし） |
-| `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター（未ログインのログイン誘導・公開画面）、ログイン（案内・conditional UI と req・next による遷移・401 文言）、登録受付（token の URL 除去・表示名検証・recovery・invite の既定家計簿選択・完了遷移・無効 token）、同意（表示内容・許可/拒否の redirect_to 遷移・401 のログイン誘導・期限切れ） |
+| `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター（未ログインのログイン誘導・公開画面）、ログイン（案内・conditional UI と req・next による遷移・401 文言・完了時の me 確定と shell 即時 [TASK-39]）、登録受付（token の URL 除去・表示名検証・recovery・invite の既定家計簿選択・完了遷移〔me 確定後・me 取得1回〕・無効 token）、同意（表示内容・許可/拒否の redirect_to 遷移・401 のログイン誘導・期限切れ） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内でのログイン・同意画面の操作部品の非描画（isFramed）、favicon.svg の実色・var() 不使用 |
-| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム（月次サマリ・期間切替）とアプリ骨格（ナビ・topbar 下ドロワーの menu ボタン開閉トグル〔aria・フォーカス移動・inert・Escape/scrim/遷移/900px リサイズで閉じる〕・右上メニュー・PopoverMenu・topbar logo の出し分け〔full は wordmark Kakei・compact は kb〕、query 変化・receipt ルート内 id 変化でメニューが閉じない） |
-| `frontend/tests/unit/web/account-pages.test.ts` | 単体 | ホーム（アカウント番号・パスキー一覧と同期状態、最後の1本の 409、step-up ダイアログと再送・キャンセル、追加・改名・ログアウト・招待発行）、接続中のアプリ（一覧と未選択表示・JST 日時、画面内確認後の解除、家計簿切替と 409） |
-| `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ（2階層表示・作成と親なしエラー・改名/移動/アーカイブ・アーカイブ済みの表示切替）、店（更新と過去分反映の注記・確認後の統合と件数移動・同一店の拒否）、レシート（一覧と詳細・revision 付き保存・revision 不一致の読み直し・preview → confirm 削除・復元・詳細の画像表示（/media/img/ prefix 以外の URL は非採用・期限切れの再取得・画像なしは省略））、XSS 文字列のテキスト描画 |
-| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（レシート一覧ダッシュボード・他画面からの絞り込みリンク・最近のレシートの文脈引き継ぎ・詳細の既定閲覧表示、カテゴリ・店のダッシュボード、長い店名の省略、設定のデータ管理リンク、label 絞り込み [TASK-17]） |
+| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム（月次サマリ・期間切替・初回 loading の skeleton と再取得の dim [TASK-39]）とアプリ骨格（ナビ・topbar 下ドロワーの menu ボタン開閉トグル〔aria・フォーカス移動・inert・Escape/scrim/遷移/900px リサイズで閉じる〕・右上メニュー・PopoverMenu・topbar logo の出し分け〔full は wordmark Kakei・compact は kb〕、query 変化・receipt ルート内 id 変化でメニューが閉じない、ログアウトで shell も同時に消える） |
+| `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の表示名・家計簿一覧〔アカウント番号は web UI 非表示〕・パスキー一覧と同期状態、最後の1本の 409、step-up ダイアログと再送・キャンセル、追加・改名・招待発行、4tab レイアウトと redirect）、接続中のアプリ（一覧と未選択表示・JST 日時、画面内確認後の解除、家計簿切替と 409）、ラベル管理画面 [TASK-26]（5行 LabelChip 一覧・行押下でその行だけ編集・未保存ガード・Escape・viewer 非操作） |
+| `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37]（/usage トピック一覧の行リンク、/usage/connect の3ステップ構成と許可内容が backend scope_description と同一文言・毎回許可・90日・/apps 導線、接続URLの runtime 生成表示とコピー〔copy-done の role=status・失敗時 msg-error〕、figure+figcaption と未配置図の placeholder、アカウントメニューの導線と NAV 4項目不変、/apps 未接続表示からのリンク） |
+| `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ（2階層表示・作成と親なしエラー・改名/移動/アーカイブ・アーカイブ済みの表示切替）、店（更新と過去分反映の注記・確認後の統合と件数移動・同一店の拒否）、レシート（一覧と詳細・revision 付き保存・revision 不一致の読み直し・preview → confirm 削除・復元・詳細の画像表示（/media/img/ prefix 以外の URL は非採用・期限切れの再取得・画像なしは省略）・ラベル絞り込み 1 ボタン+popover と LabelChip チップ [TASK-26]）、XSS 文字列のテキスト描画 |
+| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（レシート一覧ダッシュボード・他画面からの絞り込みリンク・最近のレシートの文脈引き継ぎ・詳細の既定閲覧表示、カテゴリ・店のダッシュボード、長い店名の省略、設定のデータ管理リンク、label 絞り込み [TASK-17]、レシート一覧の初回 skeleton [TASK-39]） |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈 query からの並び・直リンクの購入月フォールバック・戻るリンク・URL 同期（replace）・外部ナビ・家計簿切替で一覧へ・ページングと前後2件の描画窓・上方向展開のスクロール補正・snap なし〔snapFeed.ts 不在〕・前後ボタンと矢印キー〔ドロワー開放中は無効〕・修正中の停止） |
-| `frontend/tests/unit/web/receipt-panel.test.ts` | 単体 | ReceiptPanel の labels slot 契約（receipt・ledgerId・canEdit・editing・applyReceipt・changed、TASK-17 差し込み口） |
+| `frontend/tests/unit/web/receipt-panel.test.ts` | 単体 | ReceiptPanel の labels slot 契約（receipt・ledgerId・canEdit・editing・applyReceipt・changed、TASK-17 差し込み口・TASK-26 で .tags 内末尾へ） |
 | `frontend/tests/unit/web/receipt-context.test.ts` | 単体 | 文脈 query ↔ ReceiptListQuery の対称変換（CONTEXT_FIELDS の網羅、labels ↔ label_colors [TASK-17]） |
 | `frontend/tests/unit/web/ledger-switcher.test.ts` | 単体 | 家計簿の色と切替（me.default_ledger_id からの初期選択・LedgerSwitcher のチップと一覧・topbar 色帯・設定画面の色 radiogroup） |
 | `frontend/tests/unit/web/brand-logo.test.ts` | 単体 | BrandLogo の2形態（full/compact のマーク SVG + HTML テキスト wordmark・既定テキスト kakeiboot/kb と word prop による上書き・role=img・アクセシブルネーム kakeiboot・SVG 属性に var() 無し） |
-| `frontend/tests/unit/web/styles.test.ts` | 単体 | styles.css の静的検査（ダッシュボード grid・kpi-sub・sub-row の可変トラックの minmax(0)、家計簿6色パレット変数、topbar 色帯・表題 1 行 ellipsis・ドロワーの topbar 下配置と z-index・menu ボタンの desktop 非表示〔記述順〕と狭幅 44px、520px ロゴ切替、snap 系の不在と .receipt-panel の scroll-margin-top） |
-| `frontend/tests/unit/web/label-dots.test.ts` | 単体 | LabelDots とラベル文字列ヘルパ（TASK-17: 色点の aria・compact 表示・色名テキスト変換） |
-| `frontend/tests/unit/web/label-picker.test.ts` | 単体 | LabelPicker（TASK-17: labels slot への実装・トグルの即時反映と直列化・差分合成・色別 rollback・applyReceipt 書き戻し） |
+| `frontend/tests/unit/web/styles.test.ts` | 単体 | styles.css の静的検査（ダッシュボード grid・kpi-sub・sub-row の可変トラックの minmax(0)、家計簿6色パレット変数、topbar 色帯〔切替時の box-shadow・チップ色 transition 含む〕・表題 1 行 ellipsis・ドロワーの topbar 下配置と z-index・menu ボタンの desktop 非表示〔記述順〕と狭幅 44px、520px ロゴ切替、snap 系の不在と .receipt-panel の scroll-margin-top、page transition と .msg fade の reduced-motion 無効化・skeleton の単色 block と .sr-only [TASK-39]） |
+| `frontend/tests/unit/web/transition.test.ts` | 単体 | 遷移のアトミック化とアニメーションの source 検査 [TASK-39]（main.ts の isReady 待ち mount・login/register の me 確定後に遷移・logout/401 の遷移確定後に clear・router の同期 import と preloadPages 削除・RouterView の page Transition が shell/public/設定tab の3箇所・route key と単一root〔AuthPanel は1つの div〕）と設定tab 切替の mount 挙動検証（page-leave class・out-in の入れ替え・cannot be animated 警告なし） |
+| `frontend/tests/unit/web/label-dots.test.ts` | 単体 | LabelDots と読み上げ名ヘルパ（TASK-17/26: compact 8px 色点の aria=labelAriaName・title は名前ありのみ・非 compact は LabelChip 列・可視テキストに色名なし） |
+| `frontend/tests/unit/web/label-chip.test.ts` | 単体 | 管理ラベル UI 部品（TASK-26: LabelChip の名前チップ/色チップ・selected リング+チェック・sm、LabelToggleGroup の5トグル・aria-pressed・矢印キー移動、LabelFilter ボタンの未選択語/選択点/compact・popover の解除、色名テキスト不在の検査） |
+| `frontend/tests/unit/web/label-picker.test.ts` | 単体 | LabelPicker（TASK-17/26: tags 行末の小ボタン + PopoverPanel 内 LabelToggleGroup・トグルの即時反映と直列化・差分合成・色別 rollback・applyReceipt 書き戻し・エラーの popover 内/バッジ切替・editing 中不活性） |
 | `frontend/tests/unit/web/popover-panel.test.ts` | 単体 | PopoverPanel（TASK-27: role=dialog・aria-label・trigger slot の aria-expanded/controls 契約・data-autofocus フォーカス・Escape/外側押下で閉じトリガへフォーカス・sheet-narrow の狭幅クラス） |
 | `frontend/tests/unit/stores.test.ts` | 単体 | web / widget の Pinia store が独立していること |
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
+| `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面の png・metrics.json を幅別に出力（390/360/768/1280。TASK-19 で 768 追加） |
+| `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（390px。`mise run frontend:usage-shots` が asset へ配置） |
+| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウトの実測（前後ボタン着地 + 44px タップ領域・上方向展開のスクロール補正〔overflow-anchor:none 注入〕・狭幅ページ幅・daily-bars 最小幅・ロゴ 520/521・topbar 899/900。chromium + stub） |

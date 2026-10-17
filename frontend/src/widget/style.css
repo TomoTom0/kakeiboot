@@ -20,12 +20,24 @@
   --bb-series-4: #8a5cd1;
   --bb-series-5: #c94f7c;
   --bb-series-6: #6b7d8f;
-  /* receipt label palette (TASK-17), same hues as the web app */
+  /* receipt label palette (TASK-17 / TASK-26), same hues as the web app.
+     -bg / -fg pair for the name chips (4.5:1+); the solid color is the bare
+     chip of an untitled label */
   --label-red: #c0392b;
   --label-yellow: #a8820c;
   --label-green: #2f8f4a;
   --label-blue: #2f62c4;
   --label-purple: #7d4fae;
+  --label-red-bg: #f8e3e0;
+  --label-red-fg: #8c2317;
+  --label-yellow-bg: #f5ecd2;
+  --label-yellow-fg: #66500a;
+  --label-green-bg: #e1f1e6;
+  --label-green-fg: #1e5c32;
+  --label-blue-bg: #e1eaf8;
+  --label-blue-fg: #1f4390;
+  --label-purple-bg: #ede5f6;
+  --label-purple-fg: #53317e;
   color-scheme: light;
 }
 :root[data-theme='dark'] {
@@ -52,6 +64,16 @@
   --label-green: #64b97e;
   --label-blue: #7ea2e8;
   --label-purple: #ab8ad6;
+  --label-red-bg: #48231e;
+  --label-red-fg: #f4b6ae;
+  --label-yellow-bg: #433714;
+  --label-yellow-fg: #eed48c;
+  --label-green-bg: #1c3a27;
+  --label-green-fg: #a8debb;
+  --label-blue-bg: #1d2b4a;
+  --label-blue-fg: #b5c9f3;
+  --label-purple-bg: #322349;
+  --label-purple-fg: #d5bff1;
   color-scheme: dark;
 }
 * {
@@ -357,8 +379,9 @@ body {
   color: var(--bb-muted);
 }
 
-/* labels (TASK-17): display-only dots; the color name always rides along as
-   aria-label / title. compact = dot only. */
+/* labels (TASK-17 / TASK-26): display-only. compact = 8px dots (the spoken
+   name rides as aria-label only); the default renders LabelChip list (a
+   colored name chip when titled, a bare color chip when not). */
 .label-dots {
   display: inline-flex;
   align-items: center;
@@ -366,29 +389,43 @@ body {
   gap: 5px;
 }
 .label-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  display: inline-block;
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--bb-muted);
-  overflow: hidden;
 }
-.label-dots:not(.compact) .label-dot {
-  width: auto;
-  height: auto;
-  border-radius: 999px;
-  padding: 1px 7px;
-  color: #fff;
+.label-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: none;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
   font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
 }
+.label-chip.titled { padding: 0 8px; }
+.label-chip.titled.label-red { background: var(--label-red-bg); border-color: var(--label-red); color: var(--label-red-fg); }
+.label-chip.titled.label-yellow { background: var(--label-yellow-bg); border-color: var(--label-yellow); color: var(--label-yellow-fg); }
+.label-chip.titled.label-green { background: var(--label-green-bg); border-color: var(--label-green); color: var(--label-green-fg); }
+.label-chip.titled.label-blue { background: var(--label-blue-bg); border-color: var(--label-blue); color: var(--label-blue-fg); }
+.label-chip.titled.label-purple { background: var(--label-purple-bg); border-color: var(--label-purple); color: var(--label-purple-fg); }
+.label-chip.sm { height: 20px; min-width: 20px; border-radius: 7px; font-size: 0.66rem; }
+.label-chip.titled.sm { padding: 0 7px; }
+.label-chip.bare .label-check { color: #fff; }
+.label-chip-name { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .label-red { background: var(--label-red); }
 .label-yellow { background: var(--label-yellow); }
 .label-green { background: var(--label-green); }
 .label-blue { background: var(--label-blue); }
 .label-purple { background: var(--label-purple); }
-.label-dots:not(.compact) .label-yellow { color: #241d05; }
 .bb-labels { margin: 2px 0; }
 .bb-list__labels { margin-left: 4px; vertical-align: middle; }
-.bb-chip .label-dots { margin-left: 4px; }
+.bb-chip .label-chip { margin-left: 4px; }

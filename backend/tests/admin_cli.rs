@@ -4,7 +4,7 @@
 
 mod common;
 
-use budget_book::admin::{Cli, ScriptedPrompter, run_with};
+use budget_book::admin::{Cli, ScriptedPrompter, run_with, validate_args};
 use budget_book::auth::invitation::{self, InvitationKind};
 use clap::Parser;
 use common::auth::*;
@@ -12,6 +12,14 @@ use sqlx::SqlitePool;
 
 fn cli(args: &[&str]) -> Cli {
     Cli::parse_from(
+        std::iter::once("budget-book-admin".to_string()).chain(args.iter().map(|s| s.to_string())),
+    )
+}
+
+/// Non-exiting parse for argv that is only valid once the register token
+/// kind lands (`--kind register` makes `cli` exit the process before that).
+fn try_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(
         std::iter::once("budget-book-admin".to_string()).chain(args.iter().map(|s| s.to_string())),
     )
 }
@@ -375,6 +383,184 @@ async fn token_revoke_by_prefix() {
     )
     .await;
     assert!(res.is_err(), "ambiguous prefix rejected");
+}
+
+// [covers:auth-invitation.cli-register-issue-rejected]
+#[test]
+fn token_issue_register_kind_rejected() {
+    // register tokens are web-only, symmetric to the invite bail
+    let cli = try_cli(&["token", "issue", "--kind", "register"])
+        .expect("--kind register parses once TokenKind::Register lands");
+    let err = validate_args(&cli).expect_err("register issuance is web-only");
+    assert!(
+        err.to_string().contains("web UI"),
+        "error should say register is issued from the web UI: {err}"
+    );
+}
+
+// [covers:auth-invitation.cli-token-list-register]
+#[test]
+fn token_list_register_with_user_rejected() {
+    // --user narrows recovery targets (an invitations-only concept);
+    // pairing it with --kind register would list user-unrelated rows
+    let cli = try_cli(&["token", "list", "--kind", "register", "--user", "5"])
+        .expect("--kind register parses for list");
+    let err = validate_args(&cli).expect_err("--kind register cannot pair with --user");
+    assert!(
+        err.to_string().contains("not user-scoped"),
+        "error should say register tokens are not user-scoped: {err}"
+    );
+}
+
+// [covers:auth-invitation.cli-token-list-register]
+#[tokio::test]
+async fn token_list_and_revoke_cover_register_invitations() {
+    let pool = setup().await;
+    common::insert_user(&pool, 1).await; // created_by of the register row
+    common::insert_ledger(&pool, 1).await;
+    common::insert_member(&pool, 1, 1, "owner").await;
+
+    // an invite token (created_at = 0) in `invitations` ...
+    invitation::issue(
+        &pool,
+        &invitation::NewInvitation {
+            kind: InvitationKind::Invite,
+            operator_note: None,
+            target_user_id: None,
+            created_by: Some(1),
+            ledger_id: Some(1),
+            role: Some("editor".into()),
+            inviter_note: Some("family".into()),
+            ttl_ms: 3_600_000,
+        },
+        0,
+    )
+    .await
+    .unwrap();
+    // ... and a register row (created_at = 1, so it sorts first)
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at)
+         VALUES (x'1100000000000000', 1, '妹に渡す分', 1, 9_000_000_000_000)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // list without --kind: both tables merged, created_at descending, the
+    // register row shown with issued_by= and the inviter: note prefix
+    let mut out = Vec::new();
+    run_with(
+        &pool,
+        &common::repo_config(),
+        &cli(&["token", "list"]),
+        &mut script(&[]),
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let register_pos = text
+        .find("register issued_by=1")
+        .unwrap_or_else(|| panic!("register row with issued_by in: {text}"));
+    let invite_pos = text
+        .find(" invite ")
+        .unwrap_or_else(|| panic!("invite row in: {text}"));
+    assert!(
+        register_pos < invite_pos,
+        "merged list is created_at descending: {text}"
+    );
+    assert!(
+        text.contains("inviter: 妹に渡す分"),
+        "inviter note is marked as inviter: {text}"
+    );
+
+    // --kind register: only the register_invitations table
+    let register_only = try_cli(&["token", "list", "--kind", "register"])
+        .expect("--kind register parses once TokenKind::Register lands");
+    let mut out = Vec::new();
+    run_with(
+        &pool,
+        &common::repo_config(),
+        &register_only,
+        &mut script(&[]),
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("register issued_by=1"), "{text}");
+    assert!(
+        !text.contains(" invite "),
+        "invite rows are excluded: {text}"
+    );
+
+    // revoke resolves the prefix across both tables: a unique register hit
+    // deletes the row (freeing an open-limit slot) and audits
+    let mut out = Vec::new();
+    run_with(
+        &pool,
+        &common::repo_config(),
+        &cli(&["token", "revoke", "11000000"]),
+        &mut script(&[]),
+        &mut out,
+    )
+    .await
+    .unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("deleted token"));
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM register_invitations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events
+         WHERE entity_type = 'register_invitation' AND action = 'token_revoke'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1, "register revoke audited");
+
+    // zero hits across both tables
+    let mut out = Vec::new();
+    let res = run_with(
+        &pool,
+        &common::repo_config(),
+        &cli(&["token", "revoke", "ffffffff"]),
+        &mut script(&[]),
+        &mut out,
+    )
+    .await;
+    assert!(res.is_err(), "unknown prefix rejected");
+
+    // one hit in each table sharing a prefix: ambiguous
+    sqlx::query(
+        "INSERT INTO invitations (token_hash, kind, operator_note, created_at, expires_at)
+         VALUES (x'aabbccdd00000000', 'setup', 'a', 0, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO register_invitations (token_hash, created_by, inviter_note, created_at, expires_at)
+         VALUES (x'aabbccddffffffff', 1, 'b', 0, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut out = Vec::new();
+    let res = run_with(
+        &pool,
+        &common::repo_config(),
+        &cli(&["token", "revoke", "aabbccdd"]),
+        &mut script(&[]),
+        &mut out,
+    )
+    .await;
+    assert!(
+        res.is_err(),
+        "one row per table sharing a prefix is ambiguous"
+    );
 }
 
 // [covers:auth-cli.passkey-revoke-last-requires-account-number]

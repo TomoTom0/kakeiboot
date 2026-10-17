@@ -16,6 +16,13 @@ export const useSessionStore = defineStore('web-session', () => {
     () => me.value?.ledgers.find((l) => l.id === selectedLedgerId.value) ?? null,
   )
   const selectedLedgerColor = computed(() => selectedLedger.value?.color ?? null)
+  // Whether the default ledger is the user's own (owner): the invite nav
+  // item and the invite form show on this condition (the same check the
+  // backend applies to invite issuing).
+  const isDefaultLedgerOwner = computed(
+    () =>
+      !!me.value?.ledgers.find((l) => l.id === me.value?.default_ledger_id && l.role === 'owner'),
+  )
 
   function setMe(value: Me): void {
     me.value = value
@@ -67,6 +74,7 @@ export const useSessionStore = defineStore('web-session', () => {
     selectedLedgerId,
     selectedLedger,
     selectedLedgerColor,
+    isDefaultLedgerOwner,
     stepUpOpen,
     setMe,
     loadMe,

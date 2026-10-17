@@ -7,7 +7,7 @@
 import { computed, ref, watch } from 'vue'
 import type { PeriodPreset, ReportKind, StatsEnvelope, StatsFilters, StatsRow, StatsSection } from '@/shared/types'
 import type { LabelColor } from '@/shared/labels'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import LabelChip from '@/shared/components/LabelChip.vue'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import BarHChart from '@/shared/components/charts/BarHChart.vue'
 import BarVChart from '@/shared/components/charts/BarVChart.vue'
@@ -15,7 +15,7 @@ import LineChart from '@/shared/components/charts/LineChart.vue'
 import ShareBar from '@/shared/components/charts/ShareBar.vue'
 import type { ChartDatum } from '@/shared/components/charts/types'
 import { formatPct } from '@/shared/format'
-import { labelColorsText } from '@/shared/labels'
+import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import { useWidgetStore } from '../stores/widget'
 
@@ -161,9 +161,12 @@ async function onPeriod(e: Event) {
         class="bb-chip"
         data-test="label-filter-chip"
       >
-        ラベル: {{ labelColorsText(labelFilter) }}<LabelDots
-          :labels="labelFilter.map((color) => ({ color, title: null }))"
-          compact
+        ラベル<LabelChip
+          v-for="color in labelFilter"
+          :key="color"
+          size="sm"
+          :label="{ color, title: null }"
+          :index="labelIndexOf(color)"
         />
       </p>
       <p class="bb-muted">

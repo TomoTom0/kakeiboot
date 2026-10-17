@@ -14,7 +14,7 @@ budget-book の永続データ構造の正本。テーブル構成・制約・dr
 | 区分 | テーブル | 目的 |
 |---|---|---|
 | ユーザー・家計簿 | users / ledgers / ledger_members | 認証主体と、データのスコープ単位である家計簿（ledger）、そのメンバーシップ（ユーザーごとの表示色を含む） |
-| 認証 | webauthn_credentials / webauthn_ceremonies / web_sessions / invitations | パスキー、web 画面セッション、登録・回復用の1回限り token（setup / invite / recovery） |
+| 認証 | webauthn_credentials / webauthn_ceremonies / web_sessions / invitations / register_invitations | パスキー、web 画面セッション、登録・回復用の1回限り token（setup / invite / recovery）と登録招待（register） |
 | 認可（OAuth） | oauth_clients / oauth_jwks_cache / oauth_authorization_requests / oauth_grants / oauth_auth_codes / oauth_access_tokens / oauth_refresh_tokens / oauth_client_assertion_jtis | MCP クライアント向け OAuth 2.1 認可サーバー |
 | アカウント特定・回復依頼 | user_subject_hashes / recovery_requests / recovery_request_candidates / recovery_overflow_daily | 運用者がアカウントを特定するための手がかりと、MCP からの回復依頼 |
 | カタログ | item_categories / store_categories / stores / store_aliases | 品目カテゴリ・店カテゴリ（各2階層）、店マスタと名寄せ用別名 |
@@ -24,13 +24,14 @@ budget-book の永続データ構造の正本。テーブル構成・制約・dr
 | 検索・集計 | receipt_items_fts / v_item_facts | 品目の全文検索索引、集計用ファクトビュー |
 | 監査 | audit_events | 変更前後の記録 |
 
-migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql`。
+migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql` / `0011_register_invitations.sql`。
 
 - 0001 はユーザー・家計簿（users のアカウント特定用の列を含む）。
 - 0002 は認証・認可・招待（WebAuthn、web セッション、invitations、OAuth、アカウント特定・回復依頼のテーブル、`oauth_grants.active_ledger_id` の越境防止トリガと ledger_members の所属変更トリガ）。0001 の users / ledgers / ledger_members を参照するため 0001 の後に置く。
 - 0008 は家計簿 UI（`ledger_members.color` の追加と backfill、自動作成済み個人 ledger の `default book` 改名）。
 - 0009 はラベル（`ledger_labels` / `receipt_labels`、seed トリガ、既存 ledger への backfill）。
 - 0010 は一括作成（`drafts.batch_id` の追加と部分索引 `drafts_batch`。TASK-18）。
+- 0011 は登録招待（`register_invitations`。CREATE TABLE のみ。TASK-32）。
 
 ## 3. SQLite 共通規則
 
@@ -355,6 +356,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 | image_access_tokens | 期限（`expires_at`）で削除。画像の行削除時は CASCADE |
 | 認証系（auth code / access・refresh token / session / jti / ceremony） | 期限 + 1日で削除（jti・ceremony は期限で削除）。grant は失効・期限切れから30日で削除（CASCADE でトークンも削除） |
 | invitations | 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
+| register_invitations | invitations と同じ規則: 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
 | oauth_authorization_requests | 期限（10分）で削除 |
 | user_subject_hashes | `last_seen_at` から400日で削除 |
 | recovery_requests | `ip_hash` は作成24時間後に NULL 化。open は作成から90日で自動 `rejected`。close から180日で削除（候補は CASCADE） |
@@ -379,6 +381,8 @@ DELETE FROM webauthn_ceremonies WHERE expires_at < :now;
 -- access/refresh/session も期限 + 1日で削除。grant は revoked/expired の後 30日で削除（CASCADE でトークンも消える）
 DELETE FROM invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
                            OR (used_at IS NOT NULL AND used_at < :now - 30*86400000);
+DELETE FROM register_invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
+                                   OR (used_at IS NOT NULL AND used_at < :now - 30*86400000);
 DELETE FROM oauth_authorization_requests WHERE expires_at < :now;
 DELETE FROM user_subject_hashes WHERE last_seen_at < :now - 400*86400000;
 UPDATE recovery_requests SET ip_hash = NULL WHERE ip_hash IS NOT NULL AND created_at < :now - 86400000;
@@ -462,11 +466,12 @@ LIMIT 1;
 
 | テーブル | 役割と保存規則 |
 |---|---|
-| users | `webauthn_user_handle`（UUID 16byte）、`default_ledger_id`（web 画面の対象 ledger）。`disabled_at` 非NULLなら全認証経路で拒否。アカウント特定用に `account_number`、`admin_note`（運用者メモ）、`invite_note`（招待者メモ）、`invited_by` / `invited_via_kind`（招待の系譜）を持つ。メモは運用者 CLI のみで表示し、web・MCP に出さない |
+| users | `webauthn_user_handle`（UUID 16byte）、`default_ledger_id`（web 画面の対象 ledger）。`disabled_at` 非NULLなら全認証経路で拒否。アカウント特定用に `account_number`、`admin_note`（運用者メモ）、`invite_note`（招待者メモ）、`invited_by` / `invited_via_kind`（招待の系譜。setup / invite / register）を持つ。メモは運用者 CLI のみで表示し、web・MCP に出さない |
 | webauthn_credentials | `credential_id` 一意、webauthn-rs の `Passkey` を JSON で保存（認証成功時に更新） |
 | webauthn_ceremonies | 登録/認証の途中状態を JSON 保存。TTL 5分、1回使用で削除。ログイン中の ceremony（step-up・パスキー追加）は `user_id` を持つ。OAuth 途中のログインは `authz_request_hash` で authorization request を参照する（平文の request ID は DB に置かない） |
 | web_sessions | cookie はランダム32byte、DB は SHA-256 hash。idle 期限・絶対期限・`revoked_at`。`auth_at` は最後のパスキー認証時刻（ログイン時 = `created_at`、step-up で更新） |
 | invitations | setup / invite / recovery の1回限り token（hash 保存）。kind ごとに必須列を CHECK で固定。setup は `operator_note` 必須、`inviter_note` は invite のみ。未使用の recovery token は user ごとに1本（部分 UNIQUE。失効は行削除）。使用は `used_at` の条件付き UPDATE で二重使用を防ぐ |
+| register_invitations | web から発行される登録専用の1回限り token（hash 保存）。`created_by`（発行者・CASCADE）・`inviter_note` 必須。未使用は発行者ごとに5本（アプリ側検証）。失効は行削除。使用は `used_at` の条件付き UPDATE |
 | oauth_clients | CIMD 文書キャッシュ（PK = client_id URL）。`expires_at` は Cache-Control 由来（上限あり） |
 | oauth_jwks_cache | client の JWKS キャッシュ。`kid` 不一致時は最短間隔で抑制しつつ即時再取得 |
 | oauth_authorization_requests | 検証済み authorize パラメータ（PK = request ID の hash）。TTL 10分。同意画面表示時に `user_id` を設定し、決定 POST のセッション user と一致を必須とする。同意 POST で削除 |
@@ -508,7 +513,7 @@ refresh rotation（`BEGIN IMMEDIATE` 内。client 認証と jti 登録は tx 前
 
 ## 15. DDL
 
-全9 migration の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。
+全 migration（0001〜0011）の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。
 
 ### 0001 users / ledgers
 ```sql
@@ -522,7 +527,7 @@ CREATE TABLE users (
   admin_note            TEXT,                             -- 運用者メモ（setup 発行時の --note、admin user note）。web・MCP に出さない
   invite_note           TEXT,                             -- 招待者メモ（web の招待発行時に招待者が入力）。運用者 CLI のみ表示
   invited_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- 招待の系譜（setup は NULL）
-  invited_via_kind      TEXT,                             -- setup / invite（アプリ側 enum）
+  invited_via_kind      TEXT,                             -- setup / invite / register（アプリ側 enum）
   created_at            INTEGER NOT NULL,
   updated_at            INTEGER NOT NULL,
   disabled_at           INTEGER                           -- 非NULLなら全認証経路で拒否
@@ -1216,4 +1221,22 @@ CROSS JOIN (SELECT 'red' AS color UNION ALL SELECT 'yellow' UNION ALL SELECT 'gr
 -- siblings from the file_id duplicate match (spec_mcp-tools.md §6).
 ALTER TABLE drafts ADD COLUMN batch_id TEXT;
 CREATE INDEX drafts_batch ON drafts(batch_id) WHERE batch_id IS NOT NULL;
+```
+
+### 0011 register invitations
+
+```sql
+-- TASK-32: web-issued registration-only tokens. Separate from invitations
+-- (setup / invite / recovery): issuing an account joins no ledger.
+CREATE TABLE register_invitations (
+  token_hash   BLOB    PRIMARY KEY,
+  created_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  inviter_note TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  used_at      INTEGER,
+  used_by      INTEGER REFERENCES users(id) ON DELETE SET NULL
+) STRICT, WITHOUT ROWID;
+CREATE INDEX register_invitations_expires ON register_invitations(expires_at);
+CREATE INDEX register_invitations_issuer_open ON register_invitations(created_by) WHERE used_at IS NULL;
 ```

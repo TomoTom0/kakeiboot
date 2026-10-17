@@ -32,7 +32,7 @@ const router = useRouter()
 // the shell's drawer state (App.vue): while it is open the feed must not
 // move on arrow keys — the background is inert, but key events from the
 // focused sidebar still reach the window listener
-const drawerOpen = inject<Ref<boolean>>('drawer-open', ref(false))
+const drawerModal = inject<Ref<boolean>>('drawer-modal', ref(false))
 
 const MAX_PAGES = 4
 const WINDOW = 2
@@ -52,6 +52,13 @@ const loadError = ref(false)
 const effectiveCtx = ref<ReceiptListQuery>({})
 const loadingMore = ref(false)
 let loadSeq = 0
+/** generation of the latest move (the loadSeq recipe, TASK-19 2-7): a
+ * compensation whose loaded-wait resolves after its move was superseded
+ * must not scrollBy */
+let moveSeq = 0
+/** an upward-expansion compensation is between its wait and its scrollBy:
+ * IO deliveries are ignored (the layout above is transient — onIntersect) */
+let compPending = false
 
 const contextQuery = computed(() => listQueryToContext(effectiveCtx.value))
 const ctxKey = computed(() => contextKeyOf(route.query))
@@ -60,6 +67,10 @@ const currentIdx = computed(() => sequence.value.findIndex((s) => s.receipt_id =
 const winStart = computed(() => Math.max(0, currentIdx.value - WINDOW))
 const winEnd = computed(() =>
   currentIdx.value < 0 ? -1 : Math.min(sequence.value.length - 1, currentIdx.value + WINDOW),
+)
+/** receipt ids currently mounting a real panel (the render window) */
+const windowIds = computed(() =>
+  currentIdx.value < 0 ? [] : sequence.value.slice(winStart.value, winEnd.value + 1).map((s) => s.receipt_id),
 )
 const editingIds = ref(new Set<number>())
 const editing = computed(() => editingIds.value.size > 0)
@@ -101,6 +112,7 @@ function placeholder(id: number): ReceiptSummary {
 }
 
 function setSingle(id: number, withNote: boolean): void {
+  moveSeq++ // this reset supersedes any pending compensation
   sequence.value = [placeholder(id)]
   nextCursor.value = null
   currentId.value = id
@@ -111,6 +123,7 @@ function setSingle(id: number, withNote: boolean): void {
 /** Load the context sequence until the anchor receipt is on a page (max 4). */
 async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): Promise<void> {
   const n = ++loadSeq
+  moveSeq++ // this reload supersedes any pending compensation
   loadError.value = false
   const all: ReceiptSummary[] = []
   let cursor: string | undefined
@@ -238,9 +251,28 @@ function moreCurrent(a: IntersectionObserverEntry, b: IntersectionObserverEntry)
 }
 
 function onIntersect(entries: IntersectionObserverEntry[]): void {
+  // While an upward-expansion compensation is pending, the layout above the
+  // visible panel is transient (panels growing from the placeholder height).
+  // The growth itself flips panels' intersecting flags, so partial IO
+  // deliveries arrive whose only candidate is a barely-visible panel above;
+  // re-currenting on one would expand the window further and corrupt both
+  // compensations' baselines. Entries are ignored until the compensation
+  // lands (fresh deliveries arrive after its scrollBy).
+  if (compPending) return
   const visible = entries.filter((e) => e.isIntersecting)
   if (!visible.length) return
-  const best = visible.reduce(moreCurrent)
+  // A delivery can also be stale after the compensation landed: entries
+  // generated mid-transient may arrive once the position is restored,
+  // pointing at a panel that has since left the viewport. Validate the
+  // candidates against the live layout when it is measurable (jsdom rects
+  // are all zero there: trust the entries).
+  const vh = window.innerHeight
+  const live = visible.filter((e) => {
+    const r = e.target.getBoundingClientRect()
+    return r.height === 0 || (r.top < vh && r.bottom > 0)
+  })
+  if (!live.length) return
+  const best = live.reduce(moreCurrent)
   const m = /^receipt-panel-(\d+)$/.exec(best.target.getAttribute('data-test') ?? '')
   if (!m) return
   const id = Number(m[1])
@@ -252,18 +284,100 @@ function onIntersect(entries: IntersectionObserverEntry[]): void {
   void handleCurrent(id)
 }
 
+// Panel load tracking (TASK-19 2-7): ReceiptPanel emits loaded when its
+// detail fetch settles (success or error). The upward-expansion
+// compensation waits for the newly mounted panels' loaded so the growth
+// from the 18rem placeholder to the real height is measured in one piece
+// (`.receipt-panel-body:empty` holds the placeholder height until then).
+const loadedIds = new Set<number>()
+const loadedWaiters = new Map<number, Set<() => void>>()
+
+function onPanelLoaded(id: number): void {
+  // a late emit can land after the panel left the render window (the purge
+  // watch already dropped its mark): don't re-add it — a remount refetches
+  if (!windowIds.value.includes(id)) return
+  loadedIds.add(id)
+  const waiters = loadedWaiters.get(id)
+  if (!waiters) return
+  loadedWaiters.delete(id)
+  for (const w of waiters) w()
+}
+
+/** Resolve true when every `ids` panel has emitted loaded; false when the
+ * straggler cap hits first (a measurement then would be pre-growth: the
+ * caller must not compensate on it). */
+function waitForPanelLoaded(ids: number[], timeoutMs: number): Promise<boolean> {
+  const pending = ids.filter((id) => !loadedIds.has(id))
+  if (!pending.length) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let remaining = pending.length
+    const timer = setTimeout(() => {
+      unregister()
+      resolve(false)
+    }, timeoutMs)
+    function unregister(): void {
+      clearTimeout(timer)
+      for (const id of pending) {
+        const ws = loadedWaiters.get(id)
+        if (!ws) continue
+        ws.delete(tick)
+        if (!ws.size) loadedWaiters.delete(id)
+      }
+    }
+    // one tick per pending id: true only after all of them
+    function tick(): void {
+      remaining -= 1
+      if (remaining > 0) return
+      unregister()
+      resolve(true)
+    }
+    for (const id of pending) {
+      const ws = loadedWaiters.get(id) ?? new Set()
+      ws.add(tick)
+      loadedWaiters.set(id, ws)
+    }
+  })
+}
+
+// a panel leaving the window unmounts; when it comes back it refetches, so
+// its loaded mark must not survive (the wait would resolve early)
+watch(windowIds, (ids) => {
+  const inWin = new Set(ids)
+  for (const id of loadedIds) {
+    if (!inWin.has(id)) loadedIds.delete(id)
+  }
+})
+
 async function handleCurrent(id: number): Promise<void> {
+  const seq = ++moveSeq
   const beforeStart = winStart.value
+  const beforeIds = new Set(windowIds.value)
   const el = panelEl(id)
   const beforeTop = el?.getBoundingClientRect().top ?? null
   currentId.value = id
   if (beforeStart > winStart.value) {
     // panels are mounting above the visible one: keep it in place (iOS
-    // Safari has no scroll anchoring)
-    await settleTicks()
-    const afterTop = panelEl(id)?.getBoundingClientRect().top ?? null
-    if (beforeTop !== null && afterTop !== null && afterTop !== beforeTop) {
-      window.scrollBy({ top: afterTop - beforeTop, behavior: 'auto' })
+    // Safari has no scroll anchoring). Their detail fetch settles after
+    // mount: wait for the newly mounted ones before measuring, so the whole
+    // growth is compensated in one scrollBy (a straggler cap aborts: a
+    // pre-growth measurement would mis-scroll). IO deliveries are ignored
+    // while this is pending (onIntersect).
+    compPending = true
+    try {
+      const mounted = windowIds.value.filter((x) => !beforeIds.has(x))
+      const settled = await waitForPanelLoaded(mounted, 1_000)
+      if (seq !== moveSeq) return
+      // the straggler cap does not abort: the delta is measured as it
+      // stands (pre-growth it is ~0 and harmless; landed growth is
+      // restored — the rest falls back to the un-compensated behavior)
+      if (settled) await settleTicks()
+      if (seq !== moveSeq) return
+      const afterTop = panelEl(id)?.getBoundingClientRect().top ?? null
+      if (beforeTop !== null && afterTop !== null && afterTop !== beforeTop) {
+        window.scrollBy({ top: afterTop - beforeTop, behavior: 'auto' })
+      }
+    } finally {
+      compPending = false
     }
   }
   void maybeLoadMore()
@@ -282,6 +396,7 @@ watch([() => props.id, ctxKey], ([id, key], [prevId, prevKey]) => {
   }
   if (id !== prevId && id !== lastReplacedId) {
     if (sequence.value.some((s) => s.receipt_id === id)) {
+      moveSeq++ // this move supersedes any pending compensation
       currentId.value = id
       void scrollTo(id)
     } else {
@@ -301,6 +416,7 @@ async function scrollTo(id: number): Promise<void> {
 
 async function goTo(id: number): Promise<void> {
   if (editing.value || id === currentId.value) return
+  moveSeq++ // this move supersedes any pending compensation
   currentId.value = id
   // a button / key move rewrites the URL itself: onIntersect early-returns
   // for the new currentId, so the panels crossing the viewport mid-scroll
@@ -325,7 +441,7 @@ function move(delta: -1 | 1): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (drawerOpen.value) return
+  if (drawerModal.value) return
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
   if (editing.value) return
   const t = e.target
@@ -429,6 +545,7 @@ function goBack(): void {
           :ledger-id="activeLedger"
           :receipt-id="s.receipt_id"
           @editing-change="(v) => onEditingChange(s.receipt_id, v)"
+          @loaded="onPanelLoaded(s.receipt_id)"
         >
           <!-- TASK-17: immediate label toggles in the viewing panel. The slot
                props carry the panel's receipt, the ledger, editability and

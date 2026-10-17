@@ -36,6 +36,18 @@ dir = "{{config_root}}/frontend"
 depends = ["frontend:install"]
 run = ["pnpm exec playwright install chromium", "pnpm exec playwright test"]
 
+[tasks."frontend:usage-shots"]
+description = "Re-capture the usage-page figure assets (login/consent, 390px) into frontend/src/web/assets/usage/"
+dir = "{{config_root}}/frontend"
+depends = ["frontend:install"]
+run = [
+  "pnpm exec playwright install chromium",
+  "pnpm exec playwright test tests/browser/capture.usage.spec.ts",
+  "mkdir -p src/web/assets/usage",
+  "cp test-results/browser/capture/390/login.png src/web/assets/usage/login.png",
+  "cp test-results/browser/capture/390/consent.png src/web/assets/usage/consent.png",
+]
+
 [tasks.test]
 description = "Run all tests"
 depends = ["backend:test", "frontend:test"]
@@ -65,14 +77,6 @@ depends = ["lint", "test"]
 description = "Run the dev backend server (reads configs/dev/*.toml)"
 run = "cargo run -p budget-book -- --config-dir configs/dev"
 
-[tasks."stg:backend"]
-description = "Run the staging backend server (reads configs/stg/*.toml; cf-tunnel host)"
-run = "cargo run -p budget-book -- --config-dir configs/stg"
-
-[tasks."prod:backend"]
-description = "Run the production backend server (reads configs/prod/*.toml; cf-tunnel host)"
-run = "cargo run -p budget-book -- --config-dir configs/prod"
-
 [tasks."dev:frontend"]
 description = "Run the Vite dev server"
 dir = "{{config_root}}/frontend"
@@ -82,3 +86,50 @@ run = "pnpm dev"
 [tasks.dev]
 description = "Run backend and frontend dev servers in parallel"
 depends = ["dev:backend", "dev:frontend"]
+
+# stg/prod operations against the runtime dirs (/srv/opt/tomo/run/app/tool/kakeiboot).
+# The work repo only runs dev; see docs/deploy.md.
+
+[tasks."stg:deploy"]
+description = "stgへdeploy（build → rsync binary/configs/stg/frontend/dist → kakeiboot-stg再起動 → healthz確認）"
+depends = ["build"]
+run = [
+  "rsync -a target/debug/budget-book /srv/opt/tomo/run/app/tool/kakeiboot/stg/budget-book",
+  "rsync -a --delete configs/stg/ /srv/opt/tomo/run/app/tool/kakeiboot/stg/configs/stg/",
+  "rsync -a --delete frontend/dist/ /srv/opt/tomo/run/app/tool/kakeiboot/stg/frontend/dist/",
+  "systemctl --user restart kakeiboot-stg",
+  "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; sleep 1; done; exit 1'",
+]
+
+[tasks."prod:deploy"]
+description = "prodへdeploy（build → rsync binary/configs/prod/frontend/dist → kakeiboot-prod再起動 → healthz確認）"
+depends = ["build"]
+run = [
+  "rsync -a target/debug/budget-book /srv/opt/tomo/run/app/tool/kakeiboot/prod/budget-book",
+  "rsync -a --delete configs/prod/ /srv/opt/tomo/run/app/tool/kakeiboot/prod/configs/prod/",
+  "rsync -a --delete frontend/dist/ /srv/opt/tomo/run/app/tool/kakeiboot/prod/frontend/dist/",
+  "systemctl --user restart kakeiboot-prod",
+  "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40283/healthz && exit 0; sleep 1; done; exit 1'",
+]
+
+[tasks."exec-stg"]
+description = "stg運用dirでbudget-bookの任意subcommand（mise run exec-stg -- admin user list）"
+dir = "/srv/opt/tomo/run/app/tool/kakeiboot/stg"
+usage = "arg \"<args...>\""
+run = "./budget-book ${usage_args} --config-dir configs/stg"
+
+[tasks."exec-prod"]
+description = "prod運用dirでbudget-bookの任意subcommand（mise run exec-prod -- admin token issue --kind setup --note ...）"
+dir = "/srv/opt/tomo/run/app/tool/kakeiboot/prod"
+usage = "arg \"<args...>\""
+run = "./budget-book ${usage_args} --config-dir configs/prod"
+
+[tasks."stg:service"]
+description = "kakeiboot-stgのsystemd user service操作（mise run stg:service -- status）"
+usage = "arg \"<verb...>\""
+run = "systemctl --user ${usage_verb} kakeiboot-stg"
+
+[tasks."prod:service"]
+description = "kakeiboot-prodのsystemd user service操作（mise run prod:service -- is-active）"
+usage = "arg \"<verb...>\""
+run = "systemctl --user ${usage_verb} kakeiboot-prod"

@@ -9,8 +9,17 @@ export function installHttpHooks(router: Router, pinia: Pinia): void {
   const session = useSessionStore(pinia)
   configureHttp({
     onUnauthorized: () => {
-      session.clear()
-      if (!router.currentRoute.value.meta.public) void router.replace({ path: '/login' })
+      if (router.currentRoute.value.meta.public) {
+        session.clear()
+        return
+      }
+      // Navigate first, clear after (TASK-39 A-3): the route flip and the
+      // shell removal render in the same frame. A failed navigation (guard
+      // abort) still clears the now-invalid session.
+      void router
+        .replace({ path: '/login' })
+        .catch(() => {})
+        .finally(() => session.clear())
     },
     onReauthRequired: () => session.requestStepUp(),
   })

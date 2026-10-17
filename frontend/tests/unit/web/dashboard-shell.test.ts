@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setDataApi, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
-import { ME, cleanup, fireMediaChange, mockFetch, mountApp, settle } from './helpers'
+import { ME, cleanup, fireMediaChange, mockFetch, mountApp, setMediaMatches, settle } from './helpers'
 
 let api: DataApi
 
@@ -52,6 +52,41 @@ describe('HomePage (dashboard)', () => {
     expect(wrapper.find('[data-test="recent"]').text()).toContain('ChatGPT でレシートの写真を送ると')
     expect(wrapper.find('[data-test="month-next"]').attributes('disabled')).toBeUndefined()
   })
+
+  it('[covers:web-shell.loading-skeleton] 初回 loading は dash-grid 同形の skeleton（aria-hidden + sr-only 文言）、再取得は既存 grid の dim', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const orig = api.getStats.bind(api)
+    let release!: () => void
+    let gate = new Promise<void>((r) => (release = r))
+    vi.spyOn(api, 'getStats').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/')
+    // first load: the dash-grid silhouette, decorative blocks aria-hidden,
+    // the loading state itself stays readable (sr-only)
+    const sk = wrapper.find('[data-test="loading"]')
+    expect(sk.exists()).toBe(true)
+    expect(sk.classes()).toContain('skeleton')
+    expect(sk.attributes('aria-hidden')).toBe('true')
+    expect(sk.find('.sr-only').text()).toBe('読み込んでいます...')
+    expect(wrapper.find('[data-test="kpi"]').exists()).toBe(false)
+    release()
+    await settle()
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
+
+    // reload (month switch): the loaded grid stays and dims, no skeleton
+    gate = new Promise((r) => (release = r))
+    await wrapper.find('[data-test="month-prev"]').trigger('click')
+    await settle()
+    const grid = wrapper.find('.dash-grid')
+    expect(grid.classes()).toContain('loading')
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    release()
+    await settle()
+    expect(wrapper.find('.dash-grid').classes()).not.toContain('loading')
+  })
 })
 
 type W = Awaited<ReturnType<typeof mountApp>>['wrapper']
@@ -70,7 +105,7 @@ const isInert = (el: Element | undefined) =>
   !!el && ((el as HTMLElement).inert === true || el.hasAttribute('inert'))
 
 describe('App shell', () => {
-  it('[covers:web-shell.navigation] 主ナビはデータ4節（sidebar に brand 見出しなし）、表題は SECTION_TITLES、設定は右上メニューで示す', async () => {
+  it('[covers:web-shell.navigation] 主ナビはデータ4節（sidebar に brand 見出しなし）、表題は SECTION_TITLES からアイコン併記、設定は右上メニューで示す', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     const { wrapper, router } = await mountApp('/')
     const side = wrapper.find('[data-test="sidebar"]')
@@ -89,15 +124,25 @@ describe('App shell', () => {
     expect(tabs.map((t) => t.text())).toEqual(['ホーム', 'レシート', 'カテゴリ', '店'])
     for (const t of tabs) expect(t.find('svg').exists()).toBe(true)
     expect(tabbar.attributes('style')).toMatch(/--tab-count:\s*4/)
-    // home: no page title in the top bar
+    // home: no page title in the top bar (neither text nor icon)
     const homeTitle = wrapper.find('.topbar-title')
     expect(homeTitle.exists() ? homeTitle.text() : '').toBe('')
+    expect(wrapper.find('.topbar-title svg').exists()).toBe(false)
 
     await router.push('/settings')
     await settle()
-    expect(wrapper.find('[data-test="account-number"]').exists()).toBe(true)
+    // the settings screen shows; the account number is nowhere in the web UI
+    // (TASK-38 real-device follow-up removed the display itself)
+    expect(wrapper.find('[data-test="settings-nav"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-number"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="kpi"]').exists()).toBe(false)
     expect(wrapper.find('.topbar-title').text()).toBe('設定')
+    // the title carries the section icon (TASK-35), identified by its path d
+    // like the menu-button glyph check above
+    const settingsSvg = wrapper.find('.topbar-title svg')
+    expect(settingsSvg.exists()).toBe(true)
+    expect(settingsSvg.attributes('aria-hidden')).toBe('true')
+    expect(settingsSvg.html()).toContain('M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z') // the "settings" gear
     await wrapper.find('[data-test="account-button"]').trigger('click')
     const settingsItem = accountItems(wrapper).find((i) => i.text().includes('設定'))
     expect(settingsItem?.attributes('aria-current')).toBe('page')
@@ -106,6 +151,10 @@ describe('App shell', () => {
     await settle()
     expect(wrapper.find('[data-test="nav-receipts"]').classes()).toContain('active')
     expect(wrapper.find('.topbar-title').text()).toBe('レシート')
+    const receiptsSvg = wrapper.find('.topbar-title svg')
+    expect(receiptsSvg.exists()).toBe(true)
+    expect(receiptsSvg.attributes('aria-hidden')).toBe('true')
+    expect(receiptsSvg.html()).toContain('M5 3h14v18l-2.5-1.5') // the "receipt" glyph
   })
 
   it('[covers:web-shell.menus] 左上 menu ボタンで drawer を開閉（aria・アイコン・フォーカス・inert・scrim）、右上アカウントメニューからログアウト', async () => {
@@ -184,20 +233,25 @@ describe('App shell', () => {
     const accountBtn = wrapper.find('[data-test="account-button"]')
     expect(accountBtn.attributes('aria-haspopup')).toBe('menu')
     await accountBtn.trigger('click')
-    expect(wrapper.find('[data-test="account-menu"]').text()).toContain(ME.account_number)
+    expect(wrapper.find('[data-test="account-menu"]').text()).not.toContain(ME.account_number)
     expect(wrapper.find('[data-test="account-menu"]').text()).toContain(ME.display_name)
     const labels = accountItems(wrapper).map((i) => i.text().trim())
-    expect(labels).toHaveLength(3)
+    // TASK-37: 使い方 sits between the apps item and logout
+    expect(labels).toHaveLength(4)
     expect(labels[0]).toContain('設定')
     expect(labels[1]).toContain('接続中のアプリ')
-    expect(labels[2]).toContain('ログアウト')
+    expect(labels[2]).toContain('使い方')
+    expect(labels[3]).toContain('ログアウト')
     await wrapper.find('[data-test="menu-logout"]').trigger('click')
     await settle()
     expect(f.to('POST', '/api/auth/logout')).toHaveLength(1)
     expect(router.currentRoute.value.path).toBe('/login')
+    // the shell is gone with the route swap (atomic logout, TASK-39)
+    expect(wrapper.find('[data-test="sidebar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="login"]').exists()).toBe(true)
   })
 
-  it('[covers:web-shell.drawer-closes-on-desktop-resize] 開いたまま 900px 以上へリサイズすると drawer が閉じ inert が解ける', async () => {
+  it('[covers:web-shell.nav-open-state-on-resize] 900px 以上へリサイズしてもナビは開いたまま（modal 効果の inert・drawer-lock は解ける）、desktop のボタンで同じ overlay を閉じ・開ける', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
     await wrapper.find('[data-test="menu-button"]').trigger('click')
@@ -205,12 +259,68 @@ describe('App shell', () => {
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
     expect(isInert(wrapper.find('.main-col').element)).toBe(true)
     expect(isInert(wrapper.find('[data-test="tabbar"]').element)).toBe(true)
-    // crossing into desktop (>= 900px) closes the drawer and releases the inert
+    expect(document.documentElement.classList.contains('drawer-lock')).toBe(true)
+    // crossing into desktop (>= 900px) keeps the open state: the sidebar
+    // stays open as the desktop overlay and only the mobile-only modal
+    // effects (inert, drawer-lock, scrim) end — the open flag survives
     fireMediaChange('(min-width: 900px)', true)
     await settle()
-    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    expect(wrapper.find('[data-test="sidebar"]').exists()).toBe(true)
     expect(isInert(wrapper.find('.main-col').element)).toBe(false)
     expect(isInert(wrapper.find('[data-test="tabbar"]').element)).toBe(false)
+    expect(document.documentElement.classList.contains('drawer-lock')).toBe(false)
+    // on desktop the same button slides the overlay closed and back (the
+    // old grid-column fold / sidebar-collapsed class is gone)
+    const btn = wrapper.find('[data-test="menu-button"]')
+    expect(btn.attributes('aria-expanded')).toBe('true')
+    await btn.trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    expect(btn.attributes('aria-label')).toBe('メニューを開く')
+    await btn.trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    expect(btn.attributes('aria-expanded')).toBe('true')
+    expect(btn.attributes('aria-label')).toBe('メニューを閉じる')
+    // crossing back below 900px with the sidebar open restores the modal
+    // effects — the state itself never reset
+    fireMediaChange('(min-width: 900px)', false)
+    await settle()
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    expect(isInert(wrapper.find('.main-col').element)).toBe(true)
+    expect(document.documentElement.classList.contains('drawer-lock')).toBe(true)
+  })
+
+  it('[covers:web-shell.sidebar-overlay] desktop は初期 open・非モーダル（scrim 担当なし・inert・drawer-lock なし・遷移と Escape では閉じない）', async () => {
+    // mount inside the desktop viewport class: the shell starts open
+    setMediaMatches('(min-width: 900px)', true)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/', { attach: true })
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    // the desktop overlay is not modal: main stays interactive
+    expect(isInert(wrapper.find('.main-col').element)).toBe(false)
+    expect(isInert(wrapper.find('[data-test="tabbar"]').element)).toBe(false)
+    expect(document.documentElement.classList.contains('drawer-lock')).toBe(false)
+    // navigating from the sidebar leaves it open (it is persistent there)
+    await wrapper.find('[data-test="nav-stores"]').trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    // Escape (on the sidebar, where the handler lives) does not close it
+    keydown('Escape', wrapper.find('[data-test="sidebar"]').element)
+    await settle()
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    // the menu button is the one way to slide it closed and back
+    const btn = wrapper.find('[data-test="menu-button"]')
+    await btn.trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    expect(btn.attributes('aria-label')).toBe('メニューを開く')
+    await btn.trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
+    expect(btn.attributes('aria-label')).toBe('メニューを閉じる')
   })
 
   it('[covers:web-shell.menus-stay-on-query-change] receipt ルート内の id 変化・query だけの変化ではメニューを閉じない', async () => {
@@ -255,7 +365,8 @@ describe('App shell', () => {
   it('[covers:web-shell.popover-menu] PopoverMenu: 矢印キー移動・Escape・外側クリックで閉じフォーカスはトリガへ', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
-    // the top-right account menu is a PopoverMenu with three items
+    // the top-right account menu is a PopoverMenu with four items (TASK-37
+    // added 使い方)
     const trigger = () => wrapper.find('[data-test="account-button"]')
     ;(trigger().element as HTMLElement).focus()
     await trigger().trigger('click')
@@ -264,7 +375,7 @@ describe('App shell', () => {
     expect(menu.exists()).toBe(true)
     expect(trigger().attributes('aria-expanded')).toBe('true')
     const items = () => wrapper.findAll('[role="menu"] [role^="menuitem"]').map((i) => i.element)
-    expect(items()).toHaveLength(3)
+    expect(items()).toHaveLength(4)
     keydown('ArrowDown')
     await settle()
     expect(document.activeElement).toBe(items()[0])

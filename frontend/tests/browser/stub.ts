@@ -4,7 +4,7 @@
 // request reaches the Vite proxy / backend.
 
 import type { Page, Route } from '@playwright/test'
-import type { Me } from '@/web/api/auth'
+import type { ConsentInfo, Me } from '@/web/api/auth'
 import { ApiError } from '@/web/api/http'
 import { createMockDataApi } from '@/web/api/data/mock'
 import type { DataApi } from '@/web/api/data/types'
@@ -26,6 +26,21 @@ const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" hei
 <rect width="512" height="1024" fill="#f4f1ea"/>
 ${Array.from({ length: 20 }, (_, i) => `<rect x="48" y="${80 + i * 44}" width="${200 + ((i * 53) % 220)}" height="14" fill="#c9c3b6"/>`).join('')}
 </svg>`
+
+// Consent screen fixture (TASK-37 usage figures): the scope descriptions are
+// verbatim copies of the backend scope_description
+// (backend/src/auth/oauth/mod.rs) so a captured consent.png shows exactly the
+// wording the production consent screen shows.
+export const CONSENT: ConsentInfo = {
+  client_display: 'ChatGPT',
+  client_id: 'https://chatgpt.com/x',
+  scopes: [
+    { name: 'ledger.read', description: '家計簿の参照（レシートや下書きの検索・閲覧、集計、カテゴリや店の一覧の表示）' },
+    { name: 'ledger.write', description: '家計簿の変更（レシートの作成・修正・確定・削除、カテゴリや店の管理）' },
+  ],
+  ledger_name: 'default book',
+  user_display_name: ME.display_name,
+}
 
 function json(route: Route, status: number, body: unknown): Promise<void> {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
@@ -95,11 +110,12 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
 
 /**
  * Install the stub on a page. `loggedIn: false` makes /api/auth/me answer 401
- * (login screen).
+ * (login screen). `feed` seeds extra mock receipts (104..112, TASK-19 §2-6)
+ * for the feed tests; the default mock data is unchanged.
  */
-export async function installApiStub(page: Page, opts: { loggedIn?: boolean } = {}): Promise<void> {
+export async function installApiStub(page: Page, opts: { loggedIn?: boolean; feed?: number } = {}): Promise<void> {
   const loggedIn = opts.loggedIn ?? true
-  const api = createMockDataApi()
+  const api = createMockDataApi({ feed: opts.feed })
 
   // SPA history fallback: the Vite dev server has no index.html (the web entry
   // is web.html) and answers 404 for /receipts/101 etc., so document requests
@@ -127,6 +143,7 @@ export async function installApiStub(page: Page, opts: { loggedIn?: boolean } = 
     }
     if (path === '/api/auth/logout') return route.fulfill({ status: 204 })
     if (path === '/api/oauth/grants') return json(route, 200, [])
+    if (path.startsWith('/api/oauth/requests/')) return json(route, 200, CONSENT)
     if (path === '/api/passkeys') return json(route, 200, [])
     if (path.startsWith('/api/webauthn/')) return json(route, 400, { error: 'stubbed' })
     try {

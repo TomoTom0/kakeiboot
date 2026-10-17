@@ -19,6 +19,7 @@ const { toggle, close } = usePopover({ open, rootEl, triggerEl: triggerWrap, pan
 
 // data-test and friends go to the menu panel; class goes to the wrapper.
 const attrs = useAttrs()
+const hostClass = computed(() => (typeof attrs.class === 'string' && attrs.class !== '' ? attrs.class : null))
 const panelAttrs = computed(() => {
   const rest: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(attrs)) if (k !== 'class') rest[k] = v
@@ -54,6 +55,7 @@ defineOptions({ inheritAttrs: false })
   <div
     ref="rootEl"
     class="popover-menu"
+    :class="hostClass"
     @keydown="onKeydown"
   >
     <div

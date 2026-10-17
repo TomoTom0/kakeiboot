@@ -53,16 +53,20 @@ pub struct Fetched {
 pub struct FetchedMeta {
     pub filename: Option<String>,
     pub host: String,
+    /// Downloaded size in bytes (for the fetch log, spec_auth.md 10-5).
+    pub size_bytes: u64,
 }
 
 impl Fetched {
     /// Split into the bytes (to be moved into the decode) and the metadata.
+    /// `size_bytes` starts at 0 and is filled once the length is known.
     pub fn split(self) -> (Vec<u8>, FetchedMeta) {
         (
             self.bytes,
             FetchedMeta {
                 filename: self.filename,
                 host: self.host,
+                size_bytes: 0,
             },
         )
     }
@@ -349,6 +353,32 @@ pub async fn fetch_and_process(
     cfg: &McpImageSettings,
     gate: &DecodeGate,
 ) -> Result<(FetchedMeta, Processed), ImageFail> {
+    let start = Instant::now();
+    let outcome = fetch_and_process_inner(client, url, cfg, gate).await;
+    // fetch log (spec_auth.md 10-5, TASK-15): host, outcome, downloaded size
+    // and duration only — the URL itself is never logged.
+    match &outcome {
+        Ok((meta, _)) => tracing::info!(
+            host = %meta.host,
+            size_bytes = meta.size_bytes,
+            latency_ms = start.elapsed().as_millis() as u64,
+            "image fetched"
+        ),
+        Err(fail) => tracing::warn!(
+            reason = fail.reason(),
+            latency_ms = start.elapsed().as_millis() as u64,
+            "image fetch failed"
+        ),
+    }
+    outcome
+}
+
+async fn fetch_and_process_inner(
+    client: &reqwest::Client,
+    url: &str,
+    cfg: &McpImageSettings,
+    gate: &DecodeGate,
+) -> Result<(FetchedMeta, Processed), ImageFail> {
     let deadline = Instant::now() + std::time::Duration::from_secs(cfg.fetch_timeout_secs);
     let fetched = match tokio::time::timeout_at(deadline.into(), safe_fetch(client, url, cfg)).await
     {
@@ -357,6 +387,9 @@ pub async fn fetch_and_process(
     };
     // the bytes move into the decode (no copy) and are freed when it ends
     let (bytes, meta) = fetched.split();
+    let size_bytes = bytes.len() as u64;
+    let mut meta = meta;
+    meta.size_bytes = size_bytes;
     process_gated(gate, false, bytes, cfg, deadline)
         .await
         .map(|p| (meta, p))

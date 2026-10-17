@@ -1,21 +1,28 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
-import { LABEL_COLORS, LABEL_NAME, labelColorsOf, labelText, type Label, type LabelColor } from '@/shared/labels'
+import { LABEL_COLORS, labelColorsOf, type Label, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptView } from '../api/data'
+import AppIcon from './AppIcon.vue'
+import LabelToggleGroup from './LabelToggleGroup.vue'
+import PopoverPanel from './PopoverPanel.vue'
 import { useLabelsStore } from '../stores/labels'
 
-// Label picker in the ReceiptPanel labels slot (TASK-17): five immediate
-// toggles on the viewing panel. The display always shows `desired` (the
-// user's intent); sends are serialized per receipt (one request at a time,
-// consecutive taps compose into a single diff) and a macrotask debounce
-// keeps taps issued in quick succession on one request. A response updates
-// `confirmed` only (never `desired`) and is written back through
-// applyReceipt with the panel's latest receipt, so a content edit saved
-// while a label request is in flight keeps its revision (labels never bump
-// it). While editing the form the toggles are disabled; the request in
-// flight and the queued diff still run to completion.
+// Label picker in the ReceiptPanel labels slot (TASK-17, reshaped in
+// TASK-26 2-3): the assigned labels show as LabelChip list at the end of
+// the tags row; a small tag-plus button (canEdit only) opens a PopoverPanel
+// with the five-label toggle group. The display always shows `desired`
+// (the user's intent); sends are serialized per receipt (one request at a
+// time, consecutive taps compose into a single diff) and a macrotask
+// debounce keeps taps issued in quick succession on one request. A
+// response updates `confirmed` only (never `desired`) and is written back
+// through applyReceipt with the panel's latest receipt, so a content edit
+// saved while a label request is in flight keeps its revision (labels never
+// bump it). The popover stays open across consecutive toggles; a failure
+// shows as one line inside it, or — once closed — as a warning badge on the
+// button (with a visually-hidden note) that reappears in the popover. While
+// editing the form the button is disabled; the request in flight and the
+// queued diff still run to completion.
 const props = defineProps<{
   receipt: ReceiptView
   ledgerId: number
@@ -28,6 +35,7 @@ const api = useDataApi()
 const labelsStore = useLabelsStore()
 void labelsStore.load(props.ledgerId)
 
+const open = ref(false)
 const confirmed = ref<LabelColor[]>(labelColorsOf(props.receipt.labels))
 const desired = ref<LabelColor[]>(labelColorsOf(props.receipt.labels))
 const sending = ref(false)
@@ -45,6 +53,14 @@ const titleOf = (c: LabelColor): string | null => titles()[c] ?? null
 const currentLabels = computed<Label[]>(() =>
   desired.value.map((c) => ({ color: c, title: titleOf(c) })),
 )
+
+const definitions = computed(() => labelsStore.definitions(props.ledgerId))
+
+/** Opening is refused while the receipt form is being edited (the trigger
+ * button is disabled; this also guards synthetic clicks on it). */
+function onOpenChange(v: boolean): void {
+  open.value = v && props.editing ? false : v
+}
 
 function toggle(c: LabelColor): void {
   if (!props.canEdit || props.editing) return
@@ -121,39 +137,40 @@ onBeforeUnmount(() => {
     class="label-picker"
     data-test="label-picker"
   >
-    <template v-if="canEdit">
-      <span
-        class="label-picker-controls"
-        role="group"
-        aria-label="ラベル"
-      >
+    <LabelDots :labels="canEdit ? currentLabels : (receipt.labels ?? [])" />
+    <PopoverPanel
+      v-if="canEdit"
+      :open="open"
+      variant="anchored"
+      label="ラベルの選択"
+      class="label-picker-pop"
+      @update:open="onOpenChange"
+    >
+      <template #trigger="{ 'aria-expanded': expanded, 'aria-controls': controls }">
         <button
-          v-for="c in LABEL_COLORS"
-          :key="c"
           type="button"
-          class="label-toggle"
-          :class="[`label-${c}`, { on: desired.includes(c) }]"
-          :aria-pressed="desired.includes(c)"
-          :aria-label="labelText({ color: c, title: titleOf(c) })"
+          class="label-add-btn"
+          :aria-expanded="expanded"
+          :aria-controls="controls"
+          aria-label="ラベルを付ける・外す"
           :disabled="editing"
-          :data-test="`label-toggle-${c}`"
-          @click="toggle(c)"
-        >{{ LABEL_NAME[c] }}<span
-          v-if="titleOf(c)"
-          class="label-toggle-title"
-        >{{ titleOf(c) }}</span></button>
-      </span>
-      <LabelDots
-        :labels="currentLabels"
-        compact
-      />
-      <RouterLink
-        to="/settings/labels"
-        class="label-edit-link"
-        data-test="label-edit-link"
-      >
-        タイトルを編集
-      </RouterLink>
+          data-test="label-add"
+        >
+          <AppIcon
+            name="tag-plus"
+            :size="16"
+          />
+          <span
+            v-if="error && !open"
+            class="label-add-badge"
+            aria-hidden="true"
+          />
+          <span
+            v-if="error && !open"
+            class="sr-only"
+          >ラベルの変更に失敗しています</span>
+        </button>
+      </template>
       <p
         v-if="error"
         class="label-error"
@@ -162,10 +179,13 @@ onBeforeUnmount(() => {
       >
         {{ error }}
       </p>
-    </template>
-    <LabelDots
-      v-else
-      :labels="receipt.labels ?? []"
-    />
+      <LabelToggleGroup
+        group-label="ラベル"
+        :selected="desired"
+        :definitions="definitions"
+        :disabled="editing"
+        @toggle="toggle"
+      />
+    </PopoverPanel>
   </div>
 </template>
