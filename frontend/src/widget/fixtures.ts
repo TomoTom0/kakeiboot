@@ -315,7 +315,7 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
     chart: 'bar_v' as const,
     rows: ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'].map((m, i) => ({
       keys: [m],
-      labels: [`${Number(m.slice(5))}月`],
+      labels: [`${m.slice(0, 4)}年${Number(m.slice(5))}月`],
       value: [41000, 45000, 39000, 50000, 48000, 52000][i] ?? 0,
     })),
   }

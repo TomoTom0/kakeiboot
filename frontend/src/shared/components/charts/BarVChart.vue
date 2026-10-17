@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Vertical bars for monthly totals (spec §10 monthly_trend / overview 月次推移).
 import { computed } from 'vue'
-import { formatYen, truncateLabel } from '@/shared/format'
+import { formatYen } from '@/shared/format'
 import { type ChartDatum, compactYen, niceMax } from './types'
 
 const props = defineProps<{ data: ChartDatum[] }>()
@@ -24,8 +24,7 @@ const bars = computed(() =>
       w: slot.value * 0.7,
       y: TOP + plotH - h,
       h,
-      cx: LEFT + i * slot.value + slot.value / 2,
-      label: truncateLabel(d.label, 5),
+      label: d.label,
       value: d.value,
       title: `${d.label}: ${formatYen(d.value)}`,
     }
@@ -60,7 +59,7 @@ const ticks = computed(() => [0, 0.5, 1].map((t) => ({ y: TOP + plotH - t * plot
       >{{ t.text }}</text>
     </g>
     <g
-      v-for="b in bars"
+      v-for="(b, i) in bars"
       :key="b.key"
     >
       <title>{{ b.title }}</title>
@@ -75,10 +74,18 @@ const ticks = computed(() => [0, 0.5, 1].map((t) => ({ y: TOP + plotH - t * plot
         :data-value="b.value"
       />
       <text
+        v-if="i === 0"
         class="bb-chart__axis"
-        :x="b.cx"
+        :x="LEFT"
         :y="H - 6"
-        text-anchor="middle"
+        text-anchor="start"
+      >{{ b.label }}</text>
+      <text
+        v-else-if="i === bars.length - 1"
+        class="bb-chart__axis"
+        :x="W"
+        :y="H - 6"
+        text-anchor="end"
       >{{ b.label }}</text>
     </g>
   </svg>

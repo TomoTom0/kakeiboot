@@ -2942,7 +2942,7 @@ expect_return_shape = "bar_h の rect 幅比が値の比（30000:12000:10000）�
 id = "widget.stats-period-switch"
 target_function = "StatsScreen.vue / useWidgetStore.loadStats"
 source = "docs/spec_mcp-tools.md §11-2（stats: 期間・report の切替は summarize_spending を callTool して widget 内で再描画）・§10（report 6 種・Period preset）・§3-1（一時指定 ledger_id）"
-source_lines = "frontend/tests/unit/widget/stats.test.ts:46, frontend/tests/unit/widget/stats.test.ts:62"
+source_lines = "frontend/tests/unit/widget/stats.test.ts:70, frontend/tests/unit/widget/stats.test.ts:86"
 description = "期間 preset の選択で現在の report と filters のまま summarize_spending を callTool し結果で再描画する。report の切替では filters を引き継がない。一時指定（explicit）の ledger は ledger_id を付ける。item_price_history は filters.item_query が無ければ期間切替を無効化する"
 given = "monthly_overview 表示で期間に last_month を選択、report を by_store に切替。explicit ledger の stats。filters 無しの item_price_history"
 expect_return_shape = "callTool('summarize_spending', {report: 'monthly_overview', period: {preset: 'last_month'}})、次に {report: 'by_store'}。explicit では ledger_id 付き。item_price_history（filters 無し）は period-select が disabled"
@@ -2951,7 +2951,7 @@ expect_return_shape = "callTool('summarize_spending', {report: 'monthly_overview
 id = "widget.fullscreen-toggle"
 target_function = "useWidgetStore.toggleFullscreen / StatsScreen 全画面ボタン"
 source = "docs/spec_mcp-tools.md §11-3（displayMode / requestDisplayMode: 既定 inline、stats で「全画面」ボタン → fullscreen。pip は使わない）"
-source_lines = "frontend/tests/unit/widget/stats.test.ts:85"
+source_lines = "frontend/tests/unit/widget/stats.test.ts:109"
 description = "stats の全画面ボタンで requestDisplayMode('fullscreen')、もう一度で inline に戻す"
 given = "inline の stats 画面で全画面ボタンを 2 回押す"
 expect_return = "requestDisplayMode が fullscreen、inline の順に呼ばれ、文言が「戻す」→「全画面」"
@@ -4934,3 +4934,17 @@ source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:146, frontend/te
 description = "ホームは年・期間モードに追従する: KPI ラベルは {period.label}の支出（今月特例なし）・比較語彙は {compareLabel}比（前年/前期間）で比較値の dt 項も同語彙。「1日あたり」は進行中の期間（to が今日以降）は今日までの日数・確定期間は全日数で割る。推移（TrendBars）は年モードでその年の12か月（未来月は0円で current 強調なし。未来月の0円棒も押下でき setMonth でその月の月モードへ移る〔既存の Categories/Stores の year モード TrendBars と同一挙動〕）・期間モードで範囲内の全月。カテゴリ/店/レシートへのリンクは期間を month= / year= / from&to で渡し、レシート詳細行は from&to を渡す。mock の range compare は backend と同じ同日数直前期間"
 given = "今日=2026-10-15 で / を開き、時期 dialog でタブ「年」→ 2026年、タブ「期間」→ 2026-10-03..2026-10-15 を表示"
 expect_return_shape = "年: getStats monthly_overview year=2026 + monthly_trend year=2026・KPI 2026年の支出・前年比 +948円・dt 前年 0円・1日あたり 3円（948/288日）・推移12本で軸は「1月」「12月」・current 強調なし・凡例行が /categories?year=2026&category=食費 へ / 期間: KPI 2026/10/03 〜 2026/10/15の支出・前期間比 +948円・1日あたり 73円（948/13日）・1本の棒で軸は「10月」のみ / periodDays は当月途中15・過去月30・当年288・過去年365・進行中range13・確定range5・未来1"
+
+# ---------------------------------------------------------------------------
+# TASK-67 widget BarVChart の全棒ラベル削減（TASK-42 と同じ軸両端のみの方針へ）。
+# 正本は tmp/tasks/tm-67/design_barv-labels.md。
+# docs への反映先は docs/spec_mcp-tools.md §11-6（SVG グラフの段）。
+
+[[condition]]
+id = "widget.stats-chart-axis-ends"
+target_function = "shared/components/charts/BarVChart.vue（両端のみの軸ラベル）・widget/fixtures.ts（trend labels を backend と同じ「YYYY年M月」フル形式へ）"
+source = "TASK-42 設計 tmp/tasks/tm-42/design_trend-labels.md §1-7・確認事項1（widget の BarVChart は同一問題のため別起票候補）を受領した TASK-67 設計 tmp/tasks/tm-67/design_barv-labels.md §1-1（軸両端のみ・SVG 内 text-anchor）・§1-3（切り詰め廃止）・§1-4（年付きフル形式）"
+source_lines = "frontend/tests/unit/widget/stats.test.ts:46"
+description = "bar_v チャート（monthly_overview の直近6か月・monthly_trend の月別合計）は各棒にラベルを付けず、軸の両端（最初・最後の棒スロット外端）にだけ「YYYY年M月」フル形式のラベルを出す（切り詰めなし。単月は先頭のみ）。各棒の title（年月+金額）は不変"
+given = "monthly_overview の fixture（trend 6本 2026年5月..10月）と、その trend section の rows を末尾1行にした1本"
+expect_return_shape = "6本: bar_v のボトム帯（y=154）の text が2つだけで文言「2026年5月」（anchor=start・x=36）「2026年10月」（anchor=end・x=320）・中間4本の棒位置に text なし / 1本: 「2026年10月」の1 text のみ（anchor=start）・end の text なし / 各棒の title は「YYYY年M月: N円」"

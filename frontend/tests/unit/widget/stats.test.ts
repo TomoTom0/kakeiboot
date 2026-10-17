@@ -43,6 +43,32 @@ describe('stats dashboard', () => {
     expect(pts[0]!.attributes('r')).toBe('4')
   })
 
+  it('[covers:widget.stats-chart-axis-ends] bar_v labels: axis ends only, full form, single bar', async () => {
+    const { wrapper } = await mountWidget(fakeHost({ toolOutput: statsEnvelope('monthly_overview') }))
+    const texts = wrapper.findAll('[data-section="monthly_trend"] text.bb-chart__axis')
+    const bottom = texts.filter((t) => t.attributes('y') === '154')
+    expect(bottom).toHaveLength(2)
+    expect(bottom[0]!.text()).toBe('2026年5月')
+    expect(bottom[0]!.attributes('text-anchor')).toBe('start')
+    expect(bottom[0]!.attributes('x')).toBe('36')
+    expect(bottom[1]!.text()).toBe('2026年10月')
+    expect(bottom[1]!.attributes('text-anchor')).toBe('end')
+    expect(bottom[1]!.attributes('x')).toBe('320')
+    // each bar keeps its full title (label + amount)
+    const titles = wrapper.findAll('[data-section="monthly_trend"] g title')
+    expect(titles).toHaveLength(6)
+    expect(titles[0]!.text()).toBe('2026年5月: 41,000円')
+
+    const one = statsEnvelope('monthly_overview')
+    const trend = one.sections.find((s) => s.id === 'monthly_trend')!
+    trend.rows = [trend.rows[trend.rows.length - 1]!]
+    const single = await mountWidget(fakeHost({ toolOutput: one }))
+    const bottomOne = single.wrapper.findAll('[data-section="monthly_trend"] text.bb-chart__axis').filter((t) => t.attributes('y') === '154')
+    expect(bottomOne).toHaveLength(1)
+    expect(bottomOne[0]!.text()).toBe('2026年10月')
+    expect(bottomOne[0]!.attributes('text-anchor')).toBe('start')
+  })
+
   it('[covers:widget.stats-period-switch] period / report switch re-runs summarize_spending', async () => {
     const host = fakeHost({
       toolOutput: statsEnvelope('monthly_overview'),

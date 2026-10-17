@@ -883,7 +883,7 @@ pending 表示 → [登録] → ボタン disabled + 「登録中」 → callToo
 店名・品名・note・カテゴリ名は OCR・利用者由来の任意文字列として扱う。
 
 - Vue のテンプレート補間（`{{ }}`・属性バインド）のみで描画する。`v-html`・`innerHTML`・`insertAdjacentHTML`・`document.write` は禁止し、ESLint（`vue/no-v-html`、`no-restricted-properties`）で CI 検出する。
-- SVG グラフのラベル・tooltip は `<text>{{ label }}</text>` のテキストノードで出す（文字列連結で SVG / path を組み立てない）。長いラベルの省略は JS 側で文字数を切ってから渡す。
+- SVG グラフのラベル・tooltip は `<text>{{ label }}</text>` のテキストノードで出す（文字列連結で SVG / path を組み立てない）。長いラベルの省略は JS 側で文字数を切ってから渡す。縦棒チャート（bar_v・月次）は各棒にラベルを付けず、軸の両端（最初・最後の棒スロットの外端）にだけ「YYYY年M月」フル形式のラベルを出す（TASK-42 と同じ方針。単月は先頭のみで、切り詰めない）。
 - `<img :src>` に入れる URL は `_meta` 由来のみとし、`https://<host>/media/img/` で始まることを検証してから使う（それ以外は表示しない）。外部リンク（`href`）は持たない。
 - 動的な CSS（`:style`）には数値（座標・幅）だけを渡す。
 - 単体テストで、`<img onerror>` や `<script>` を含む店名・品名を描画してもテキストとして表示されることを確認する。
