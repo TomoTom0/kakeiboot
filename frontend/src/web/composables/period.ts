@@ -35,6 +35,15 @@ export function axisMonthLabels(keys: readonly string[]): { first: string; last:
   return { first: fmt(first), last: keys.length > 1 ? fmt(last) : null }
 }
 
+/** Days elapsed in a period for a per-day average: through today while the
+ *  period is still running (the current month rule generalized), the full
+ *  length once it has ended, never less than 1. Date-only strings parse as
+ *  UTC, so the day math has no TZ drift. */
+export function periodDays(from: string, to: string, today: string = jstToday()): number {
+  const end = to < today ? to : today
+  return Math.max(Math.round((Date.parse(end) - Date.parse(from)) / 86_400_000) + 1, 1)
+}
+
 /** Last day of the month ("YYYY-MM-DD"). */
 export function monthEnd(month: string): string {
   const [y, m] = month.split('-').map(Number) as [number, number]

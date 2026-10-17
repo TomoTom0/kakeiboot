@@ -2287,19 +2287,19 @@ expect_return_shape = "期限切れの案内が表示され、許可・拒否ボ
 
 [[condition]]
 id = "web-home.dashboard-month-overview"
-target_function = "web/pages/HomePage.vue・api/data getSummary"
-source = "TASK-14（ホーム＝ダッシュボード）・docs/spec_mcp-tools.md §10 monthly_overview・§12（web adapter が domain 関数を共有）・TASK-42 設計 tmp/tasks/tm-42/design_trend-labels.md §1（月ラベル廃止・軸両端化）"
+target_function = "web/pages/HomePage.vue（period.query/trendQuery(5)・TrendBars・periodDays）・api/data getStats"
+source = "TASK-14（ホーム＝ダッシュボード）・docs/spec_mcp-tools.md §10 monthly_overview・§12（web adapter が domain 関数を共有）・TASK-42 設計 tmp/tasks/tm-42/design_trend-labels.md §1（月ラベル廃止・軸両端化）・TASK-66 設計 tmp/tasks/tm-66/design_home-period.md §1-1（KPI語彙の一般化）・§1-3 案D（推移のTrendBars統合）・§1-4（getStats呼び出しのspread化）"
 source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:22"
-description = "ホームは今月（JST）の月次サマリを表示する: 支出合計・件数・前月比、カテゴリ内訳（ドーナツと凡例は同順・同色）、直近6か月の推移（月ラベルなし。軸ラベルは先頭・末尾の2つのみで当月を棒色で強調）、よく使う店、当月の最近のレシート（詳細へのリンク）"
+description = "ホームは選択期間（既定は今月・TASK-66）のサマリを表示する: 支出合計・件数・{compareLabel}比（前月/前年/前期間）、カテゴリ内訳（ドーナツと凡例は同順・同色）、支出の推移（TrendBars。月モードは選択月を含む6か月窓・年はその年の12か月・期間は範囲内全月。月ラベルなし・軸ラベルは先頭・末尾の2つのみ）、よく使う店、期間の最近のレシート（詳細へのリンク）。1日あたりは進行中の期間は今日までの日数で割る"
 given = "2026-10 に3件のレシートがある家計簿、今日=2026-10-15 JST で / を開く"
-expect_return_shape = "getSummary(1, '2026-10')・合計 948円・3 件・前月比 +948円・凡例先頭が食費 550円・推移6本（.bar-label なし・軸は「5月」「10月」）で当月棒を色で強調・店に Aマート・最近のレシート行が /receipts/101 へリンク"
+expect_return_shape = "getStats monthly_overview month=2026-10 + monthly_trend from=2026-05-01&to=2026-10-31 の2件・合計 948円・3 件・前月比 +948円・KPI ラベル 2026年10月の支出・凡例先頭が食費 550円・推移6本（.bar-label なし・軸は「5月」「10月」）で当月棒を色で強調・店に Aマート・最近のレシート行が /receipts/101 へリンク"
 
 [[condition]]
 id = "web-home.dashboard-month-switch"
 target_function = "web/pages/HomePage.vue（period store・watch(period.range)・TrendBars 棒押下 setMonth）・web/components/TopbarFilterBar.vue（topbar 中央の時期チップ・dialog）"
-source = "TASK-14（ダッシュボードの月切替）・TASK-28 設計 tmp/tasks/tm-28/design_browsing.md §1-3（Home の period store 化）・§11-3・§11-7（期間の操作は topbar 中央バーの時期チップ・dialog から行う。Home のページ内月送り UI は廃止。§1-4 の文言〔Home の月送りが store を動かす〕は中央バー経由とした本項が正）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:50"
-description = "Home の期間変更は topbar 中央バーの時期チップ・dialog から行い（Home にページ内の月送り UI〔前へ/次へボタン〕は置かない）、period store の month を動かして該当月を再取得する。Home は月固定（時期 dialog のタブは「月」のみ。年/期間モードで他画面から Home へ入ると period の mode を月へ正規化する。年/期間での絞り込みはレシート一覧・カテゴリ・店・Feed 等の他画面で行う）。変更は画面をまたいで共有され（カテゴリ等へ移っても同じ月）、記録が無ければ0円と ChatGPT での記録を促す空表示。今月より先へは進めない。TrendBars の棒押下（setMonth）も store を動かし時期チップに即時反映される"
+source = "TASK-14（ダッシュボードの月切替）・TASK-28 設計 tmp/tasks/tm-28/design_browsing.md §1-3（Home の period store 化）・§11-3・§11-7（期間の操作は topbar 中央バーの時期チップ・dialog から行う。Home のページ内月送り UI は廃止。§1-4 の文言〔Home の月送りが store を動かす〕は中央バー経由とした本項が正）・TASK-66 設計 tmp/tasks/tm-66/design_home-period.md §1-6（月固定の正規化を撤去し全モード追従へ。年/期間モードの期待は web-home.dashboard-period-modes）"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:57"
+description = "Home の期間変更は topbar 中央バーの時期チップ・dialog から行い（Home にページ内の月送り UI〔前へ/次へボタン〕は置かない）、period store の month を動かして該当月を再取得する。Home は共有 period の全モード（月/年/期間）に追従し、他画面で年/期間モードのまま Home へ入っても mode は保持される（TASK-66 で月固定の正規化を撤去。時期 dialog のタブは他画面と同じ 月/年/期間 の3つ）。変更は画面をまたいで共有され（カテゴリ等へ移っても同じ月）、記録が無ければ0円と ChatGPT での記録を促す空表示。今月より先へは進めない。TrendBars の棒押下（setMonth）も store を動かし時期チップに即時反映される"
 given = "今月表示で topbar の時期 dialog の次へ / 前へを押す / TrendBars の 2026年9月 の棒を押す"
 expect_return_shape = "当月は次へが disabled / 2026年9月・0円・空表示文言・次へが有効 / 棒押下で period store が 2026-09 になり時期チップの表示が「9月」へ変わる（他画面へ移動しても 2026-09 を保持）"
 
@@ -2307,7 +2307,7 @@ expect_return_shape = "当月は次へが disabled / 2026年9月・0円・空表
 id = "web-shell.navigation"
 target_function = "web/App.vue（サイドバー・下部タブ・SECTION_TITLES・topbar の page title）・router /settings"
 source = "TASK-14（ユーザー指摘: home と settings の混同、タブがアイコンでない、サイドバーが無い）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目6 実装設計（NAV はデータ4節、設定・接続中のアプリは右上メニュー、pageTitle は SECTION_TITLES）・項目4 topbar の表示規則（ホームでは title 省略）・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §3-3（sidebar 見出しの brand リンクを削除し sidebar はナビ + 利用者表示のみ）・TASK-35 設計 tmp/tasks/tm-35/design_title-icon.md §2-1〜2-2（SECTION_TITLES を {title, icon} に拡張し NAV と一本化、表題テキストの左に該当節の AppIcon を併記）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:151"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:226"
 description = "ログイン後の画面はアイコン付きサイドバーとアイコン付き下部タブを持ち、どちらもデータの4節（ホーム・レシート・カテゴリ・店）だけを並べ（設定・接続中のアプリは無い）、現在の節を active 表示する。sidebar に brand 見出し（ロゴのリンク）は置かずナビと利用者表示のみ。下部タブの列数は --tab-count=4。topbar の page title は NAV に依存せず SECTION_TITLES の {title, icon} から引き、表題テキスト（.topbar-title-text）の左に該当節の AppIcon（20px・aria-hidden・テキストと同色）を併記し、ホームでは表題自体を省略する。アカウント設定は /settings でホームとは別画面で、右上メニューの設定項目に aria-current=page が付く。レシート詳細はレシート節"
 given = "/ を開き、/settings、/receipts/101 へ遷移"
 expect_return_shape = "サイドバー・下部タブとも nav 項目はホーム・レシート・カテゴリ・店の4件で各 svg アイコン・nav-settings / nav-apps は存在しない・sidebar に brand リンク（sidebar-head）が存在しない・tabbar の style に --tab-count: 4・ホーム active・topbar に page title なし（svg も無い） / 設定画面（settings-nav）が表示されアカウント番号は無くダッシュボードも無い・トップバー表題「設定」・表題内に svg（aria-hidden=\"true\"） / 右上メニューの設定項目に aria-current=\"page\" / レシート active・表題「レシート」・表題内に svg（aria-hidden=\"true\"）"
@@ -2316,7 +2316,7 @@ expect_return_shape = "サイドバー・下部タブとも nav 項目はホー�
 id = "web-shell.menus"
 target_function = "web/App.vue（topbar の menu ボタンによる drawer 開閉・scrim・inert・右上アカウントメニュー（PopoverMenu）・LedgerSwitcher の配置）"
 source = "TASK-14（ユーザー指摘: メニューボタンが無い）・docs/spec_auth.md §3（ログアウト）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目2 実装設計（menu-btn を topbar の最初の子）・項目6 実装設計（右上メニューは aria-haspopup=menu、設定 → 接続中のアプリ → ログアウト）・項目3（ledger-select を LedgerSwitcher に置換）・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §3-3 実装設計（menu ボタンは常に見え同じ位置のクリックで開閉・aria-expanded・aria-label とアイコンの切替・開くと現在節のリンクへフォーカス・閉じる手段（再押下・Escape・scrim・遷移）で menu ボタンへフォーカス・scrim も closeDrawer に一本化・開いている間 main-col / tabbar が inert・sidebar 見出しの drawer-close を削除。実機指摘改訂〔TASK-33 追加指摘〕で menu ボタンは全幅で常時表示し desktop では sidebar 列の折りたたしに使う）・decisions_user.md（menuボタンは常に見え、同位置クリックで閉じる）・TASK-37 設計 tmp/tasks/tm-37/design_usage.md 導線1（アカウントメニューに「使い方」を追加。設定 → 接続中のアプリ → 使い方 → ログアウト）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:203"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:278"
 description = "左上の menu ボタン（topbar の最初の要素・押すたびに開閉・全幅で常時表示。desktop では同じ overlay の開閉で詳細は web-shell.sidebar-overlay / web-shell.menu-btn-always-visible / web-shell.nav-open-state-on-resize）でドロワーを開閉する。開くと aria-expanded=true・aria-label「メニューを閉じる」・アイコン close になり、現在節のリンク（.side-link.active、無ければ先頭）へフォーカスする。開いている間 .main-col と .tabbar が inert になり topbar は inert にならない。閉じるのはボタン再押下・Escape・scrim クリック・別ルートへの遷移で、閉じると aria-expanded=false・aria-label「メニューを開く」・アイコン menu に戻り menu ボタンへフォーカスが戻る。ボタンは aria-controls=app-sidebar を持ち、sidebar 内に drawer-close は存在しない。右上のアバターボタンは aria-haspopup=menu を持ち、アカウントメニューに表示名と、項目 設定・接続中のアプリ・使い方・ログアウト（この順）がある（アカウント番号は web UI 非表示〔TASK-38 実機再々指摘〕）。ログアウトで POST /api/auth/logout 後ログイン画面へ（ログアウトはこのメニューのみ。設定画面には置かない）。家計簿切替は select でなく LedgerSwitcher（ledger-switch）で、ledger-select は存在しない"
 given = "menu ボタン押下（現在節レシートで .side-link.active あり / active なし） → Escape → 再度押下 → scrim クリック → /stores へ遷移、アカウントボタン押下 → ログアウト"
 expect_return_shape = "menu-button が header.topbar の最初の子で aria-controls=\"app-sidebar\" / 押下で drawer-open・aria-expanded=true・aria-label「メニューを閉じる」・フォーカスが active な side-link（active が無ければ先頭の side-link）/ 開いている間 .main-col と .tabbar に inert・header.topbar に inert なし・drawer-close 要素は存在しない / Escape・scrim クリック・遷移・再押下のいずれでも閉じ、閉じたら aria-expanded=false・aria-label「メニューを開く」・menu-button へフォーカス / アカウントボタンに aria-haspopup=\"menu\"・メニュー項目が 設定・接続中のアプリ・使い方・ログアウト の順・表示名表示（アカウント番号は含まない）・logout 1回・/login へ / ledger-select なし・ledger-switch あり"
@@ -3416,7 +3416,7 @@ expect_return_shape = "editor・未削除で canEdit=true / viewer で false / �
 id = "web-shell.menus-stay-on-query-change"
 target_function = "web/App.vue（navKey 監視によるドロワー・メニューの閉じ）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計「App.vue のメニュー閉じ: … 監視対象を navKey = route.name === 'receipt' ? 'receipt' : route.path に変える」・項目2・項目6（閉じ条件は navKey 監視 + 項目クリック時の明示的な close）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:369"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:444"
 description = "右上メニュー・家計簿切替・ドロワーを開いたまま、receipt ルート内の id 変化や query だけの変化があっても閉じない。別ルート（path）への遷移では閉じる。メニュー項目のクリックでは明示的に閉じる"
 given = "/receipts/101 で右上メニューを開き router.replace('/receipts/102?from=..') / /receipts で家計簿切替を開き query のみ変更 / 開いた状態で /stores へ遷移 / メニューの設定項目をクリック"
 expect_return_shape = "id 変化・query 変化ではメニュー・ポップオーバーが開いたまま / /stores 遷移で閉じる / 項目クリックで閉じる"
@@ -3461,7 +3461,7 @@ expect_return_shape = ":root と dark（prefers-color-scheme: dark 側）の両�
 id = "web-shell.popover-menu"
 target_function = "web/components/PopoverMenu.vue・web/composables/popover.ts（usePopover）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目3 実装設計 frontend PopoverMenu.vue（トリガ slot + 項目 slot、role=menu、矢印キー移動、Escape・外側クリックで閉じ、閉じたらトリガへフォーカス復帰。LedgerSwitcher と右上メニューで共用）・レビュー指摘#11・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §4-2 実装設計（内部を usePopover に置換。props / slot / 挙動は不変）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:408"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:483"
 description = "PopoverMenu はトリガで開閉し、開くと role=menu の一覧が出る。ArrowDown / ArrowUp で項目間のフォーカスを移し、Escape または外側クリック（pointerdown）で閉じ、閉じるとトリガへフォーカスが戻る。開閉・外側検知・Escape・フォーカス戻しは usePopover（composables/popover.ts）への置換後も同じ期待が通る"
 given = "項目 4 件の PopoverMenu（アカウントメニュー。TASK-37 で使い方が追加）をマウントしトリガをクリック → ArrowDown 2 回・ArrowUp 1 回 → Escape / 再度開いて外側をクリック"
 expect_return_shape = "role=menu が表示・トリガに aria-expanded=true / フォーカスが 1→2→1 番目の項目へ移る / Escape で閉じトリガにフォーカス・aria-expanded=false / 外側クリックで閉じトリガにフォーカス"
@@ -3479,7 +3479,7 @@ expect_return_shape = "ルート span に role=\"img\"・aria-label=\"kakeiboot\
 id = "web-shell.topbar-logo-responsive"
 target_function = "web/App.vue（topbar のロゴ出し分け）・web/styles.css（520px メディアクエリによる出し分け）"
 source = "TASK-27 設計 tmp/tasks/tm-27/design_shell.md §1-2（topbar の出し分けは 520px 以下 compact・それより広い幅は full、CSS は現状を踏襲。2026-10-16 実機確認: topbar 521px 以上の wordmark は word=\"Kakei\" に短縮。ログイン系画面は header の外なので既定の kakeiboot のまま）・§3-3（sidebar 見出しの brand リンクを削除）（旧: TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目4）・テストへの影響（表示切替の実挙動は [[excluded]]）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:452, frontend/tests/unit/web/styles.test.ts:268"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:527, frontend/tests/unit/web/styles.test.ts:268"
 description = "topbar には full と compact のロゴが出し分け用クラス付きで両方存在し、520px 以下で compact・それより広い幅で full が表示される定義が styles.css にある。topbar の full の wordmark は「Kakei」に短縮する（header 内で kakeiboot 全文字は邪魔。word prop で上書き）。compact（520px 以下）は「kb」のまま。sidebar にロゴ（brand リンク）は置かれない"
 given = "ログイン後のホームを表示。styles.css を読む"
 expect_return_shape = "topbar 内に full（出し分けクラス付き。logo-word のテキストは「Kakei」）と compact（別の出し分けクラス付き。logo-word のテキストは「kb」）、sidebar に brand リンク・ロゴが存在しない。styles.css に 520px 境界のメディアクエリで full と compact の表示切替が定義される"
@@ -4337,7 +4337,7 @@ expect_return_shape = "top-level の .menu-btn 規則に display の定義が無
 id = "web-shell.sidebar-overlay"
 target_function = "web/App.vue（drawerOpen・isDesktop・drawerModal・toggleMenu・closeDrawer）・web/styles.css（.sidebar・.shell-body・.scrim）"
 source = "TASK-33 実機指摘（sidebar の開閉にアニメーションが無い・sidebar の出し入れで main の位置が変わるのはおかしい）・tmp/tasks/tm-27/design_shell.md §3（再改訂: desktop 折りたたみの grid 列切替を廃止し overlay に統一）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:339, frontend/tests/unit/web/styles.test.ts:215"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:414, frontend/tests/unit/web/styles.test.ts:215"
 description = "sidebar は全幅で常時 fixed overlay で、開閉は transform: translateX(-100%) ↔ none の slide（transition 0.2s・prefers-reduced-motion で無効）で行う。.shell-body は main 1列のみ（grid 列切替・display:none・sidebar-collapsed は廃止。main は常に全幅で位置不変）。desktop（900px 以上）は初期 open で menu ボタンでのみ開閉し、open 時も scrim 無し・.main-col/.tabbar は inert にしない・html に drawer-lock を付けない・ナビゲーション遷移でも Escape でも閉じない。899px 以下は従来の modal drawer（scrim・inert・Escape・フォーカス管理・drawer-lock）"
 given = "matchMedia('(min-width: 900px)') を true にして App を mount し menu ボタン・nav link・Escape を押す。frontend/src/web/styles.css を読む"
 expect_return_shape = "mount 直後 .shell に drawer-open があり .main-col・.tabbar は inert でなく html に drawer-lock が無い。nav link 押下・Escape でも drawer-open が外れず menu ボタン押下でのみ外れる / styles.css の .sidebar（top-level）に position: fixed・transform: translateX(-100%)・transition: transform 0.2s ease、.drawer-open .sidebar に transform: none、.shell-body に grid-template-columns: minmax(0, 1fr)、sidebar-collapsed が無く、.drawer-open .scrim の display: block が899px 以下の media query 内のみ、reduced-motion で .sidebar の transition: none"
@@ -4355,7 +4355,7 @@ expect_return_shape = "header.topbar が .main-col の外側（.shell 直下）�
 id = "web-shell.nav-open-state-on-resize"
 target_function = "web/App.vue（matchMedia('(min-width: 900px)') の change 監視・drawerOpen・isDesktop・drawerModal・toggleMenu）"
 source = "TASK-33 実機追加指摘（desktop でも sidebar を閉じたい）・tmp/tasks/tm-27/design_shell.md §3（実機指摘改訂: 開閉状態を維持。900px 越えで drawer を閉じる処理は削除）・TASK-33 実機指摘（overlay 統一により単一の drawerOpen 状態へ）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:297"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:372"
 description = "ナビの開閉状態（単一の drawerOpen）は viewport 変化（双方向）で維持される。mobile で drawer を開いたまま 900px 以上へリサイズすると開いたまま desktop の overlay になり、mobile 専用の modal 効果（.main-col/.tabbar の inert・html.drawer-lock・scrim）だけ解ける（逆方向も開閉状態は維持され、開いていれば modal drawer として開いたまま）。desktop では同じ menu ボタンで overlay を閉じ（slide-out）・再度開ける。desktop は初期 open"
 given = "drawer を開いた状態で matchMedia('(min-width: 900px)') の change リスナーを発火させ、その後 menu ボタンを2回押し、再度 change リスナーを逆方向に発火させる"
 expect_return_shape = "resize 後も .shell の drawer-open が維持され .main-col・.tabbar の inert と html.drawer-lock が解かれる / menu ボタン押下で drawer-open が外れ aria-expanded=false・aria-label「メニューを開く」、再押下で付き aria-expanded=true・aria-label「メニューを閉じる」 / 逆方向の resize で drawer-open が維持され inert と drawer-lock が戻る"
@@ -4662,7 +4662,7 @@ expect_return_shape = "router.ts に () => import( の記述が無い・helpers.
 id = "web-shell.page-transition"
 target_function = "web/App.vue（showShell の v-if/v-else branch 切替を包む外側・shell 内・public 内の両 RouterView）・web/pages/SettingsPage.vue（設定tab の内側 RouterView）・web/pages/settings/AuthPanel.vue（単一root）・web/styles.css（.page-*・.msg・reduced-motion）"
 source = "TASK-39 ユーザー追加指摘（アニメーションがなく突然の変化が多い）・設計 tmp/tasks/tm-39/design_atomic-transition.md P5・対策C（docs/spec_mcp-tools.md §12 へ反映）・TASK-39 実機再指摘（設定tab 切替にアニメーションが効いていない。AuthPanel が複数root のため Transition が skip）・TASK-39 実機follow-up（ログイン直後にアニメーションなしで画面が突然表示される: login→home は showShell の v-if/v-else branch 切替を伴い、branch 切替には Transition が無かった）"
-source_lines = "frontend/tests/unit/web/styles.test.ts:282, frontend/tests/unit/web/transition.test.ts:59, frontend/tests/unit/web/transition.test.ts:104, frontend/tests/unit/web/transition.test.ts:167, frontend/tests/unit/web/transition.test.ts:198"
+source_lines = "frontend/tests/unit/web/styles.test.ts:282, frontend/tests/unit/web/transition.test.ts:59, frontend/tests/unit/web/transition.test.ts:104, frontend/tests/unit/web/transition.test.ts:167, frontend/tests/unit/web/transition.test.ts:200"
 description = "App.vue の RouterView（shell 内・public 内の両方）と SettingsPage の内側 RouterView（設定の水平tab は子route 切替のため）は name=\"page\"・mode=\"out-in\" の Transition で component :is（route key 付き）を包む。login→home（logout・401 はその逆）は showShell による v-if/v-else の branch 切替（shell と public のlayout 入れ替え）を伴い内側 RouterView の Transition は発火しないため、branch 切替自体も同じ name=\"page\"・mode=\"out-in\" の Transition で v-if/v-else の外側を包む（両branch のroot は div.shell・main.public の単一root）。内側の切替が実挙動としてアニメーションするには切替成分が単一root element であることも必要: AuthPanel の3カードは1つの div（.settings-panel）にまとめ、component :is には route key を付ける（同名 component を使い回す切替でも remount させる）。複数root の panel は fragment のため Transition は class 付与を丸ごと skip する（Vue は \"renders non-element root node that cannot be animated\" を警告）— 実機再指摘の「設定tab 切替にアニメーションがない」はこれが原因だった。ページ遷移は opacity + 8px の translateY の 0.2s ease の fade/slide で、prefers-reduced-motion: reduce では無効化する（transition-duration 0s・transform none）。.msg（エラー・情報メッセージ）とコピー完了表示は v-if で挿入されたとき 0.16s の fade-in（@keyframes bb-fade-in。reduced-motion では none）で出現する。popover・drawer の開閉機構は既存のまま変えない"
 given = "ページ遷移・設定tab 切替・login→home / logout のbranch 切替・エラー/コピー完了の出現（reduced-motion あり/なし）。App.vue・SettingsPage.vue・AuthPanel.vue・styles.css の source と、設定tab・branch 切替を実際に切替えた mount"
 expect_return_shape = "App.vue に name=\"page\" + mode=\"out-in\" の Transition が3箇所（branch 切替を包む外側1 + shell/public 両 RouterView 2。外側が v-if=\"showShell より前）・SettingsPage.vue に1箇所（RouterView v-slot）で component :is に :key（route.name）付き・AuthPanel.vue は単一root（div.settings-panel）・設定tab 切替（general→auth・auth→general）と branch 切替（login→home・logout の replace→clear）で離れる側の root に page-leave-active・page-leave-from class が付き（jsdom は stylesheet 無しのため inline transition-duration で観測）out-in により次の panel・branch は leave 完了後に mount・旧 root は除去される・離れる branch の中身は切替前の画面のまま（login→home で home が旧branch 内に二重mount せず home の stats fetch は1回のみ）・全tab と manage 画面の切替で cannot be animated 警告なし / styles.css の .page-enter-active が opacity と transform の 0.2s ease・.page-enter-from が opacity 0 + translateY(8px)・.page-leave-to が opacity 0・prefers-reduced-motion 内で .page-* の transition-duration 0s と transform none・.msg が bb-fade-in 0.16s ease（reduced で animation none）"
@@ -4671,7 +4671,7 @@ expect_return_shape = "App.vue に name=\"page\" + mode=\"out-in\" の Transitio
 id = "web-shell.loading-skeleton"
 target_function = "web/components/DashSkeleton.vue・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue・AppsPage.vue（初回 loading と再取得）・web/styles.css（.skeleton・.sr-only）"
 source = "TASK-39 設計 tmp/tasks/tm-39/design_atomic-transition.md P2・対策D（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:97, frontend/tests/unit/web/styles.test.ts:306, frontend/tests/unit/web/view-pages.test.ts:140"
+source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:109, frontend/tests/unit/web/styles.test.ts:306, frontend/tests/unit/web/view-pages.test.ts:140"
 description = "主要データ画面（ホーム・カテゴリ・店・レシート一覧）の初回 loading は dash-grid と同形状の skeleton（DashSkeleton.vue。CSSのみ・.skeleton class・単色で shimmer なし・出現時に 0.2s の fade-in）で統一し、1行テキスト「読み込んでいます...」を出さない。小さい一覧（接続中のアプリ）も同一の .skeleton block（最小の card）で揃える（公開の認証画面〔同意・登録〕は dash-grid 系でなく対象外）。skeleton の装飾 block は aria-hidden=\"true\" とし、.sr-only の「読み込んでいます...」で読み上げは維持する。再取得（月切替・家計簿切替・絞り込み）は既存データを .dash-grid.loading（opacity 0.6）で薄めて残す二段描画のまま（skeleton に戻さない。レシート一覧は初回完了フラグ loaded で切替え、スクロール復帰の lookup はフラグ確定の後）"
 given = "データ未取得で /・/categories・/stores・/receipts・/apps を開く / 読込完了後に月を切替える。styles.css を読む"
 expect_return_shape = "初回は data-test=\"loading\" の .skeleton（aria-hidden=\"true\"・.sr-only に「読み込んでいます...」）で kpi・summary・grant 行等の実データを描かない / 完了後に skeleton が消え実データ / 再取得中は .dash-grid に loading class が付き skeleton に戻らない / styles.css に .skeleton .sk（var(--bb-surface-2) の単色）と .sr-only があり reduced-motion 側で animation none"
@@ -4822,9 +4822,9 @@ expect_return_shape = "閲覧系の topbar に .topbar-filters（表題より後
 [[condition]]
 id = "web-browse.filter-dialogs"
 target_function = "web/components/TopbarFilterBar.vue（時期・ラベル dialog）・web/components/PeriodPicker.vue（時期 dialog の中身。PeriodBar から置換）・web/components/LabelFilter.vue（topbar サイズのラベルチップ）・web/components/PopoverPanel.vue（既存部品の再利用）"
-source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-3（dialog 仕様: すべて PopoverPanel・role=dialog・外側押下と Escape で閉じ・チップへフォーカス戻し。時期は variant=sheet-narrow〔480px 以下でシート〕・ラベルは anchored）・§11-6（PeriodPicker 新設〔現行 PeriodBar のスクリプトを流用〕・PeriodBar 削除・各ページ watch(period.labelQuery)）・§11-7 条件書計画（時期・ラベルの dialog は 1a・検索の dialog は 1b で有効化）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-3（dialog 仕様: すべて PopoverPanel・role=dialog・外側押下と Escape で閉じ・チップへフォーカス戻し。時期は variant=sheet-narrow〔480px 以下でシート〕・ラベルは anchored）・§11-6（PeriodPicker 新設〔現行 PeriodBar のスクリプトを流用〕・PeriodBar 削除・各ページ watch(period.labelQuery)）・§11-7 条件書計画（時期・ラベルの dialog は 1a・検索の dialog は 1b で有効化）・TASK-66 設計 tmp/tasks/tm-66/design_home-period.md §1-6（Home の月固定タブ制限を撤去）"
 source_lines = "frontend/tests/unit/web/filter-bar.test.ts:139, frontend/tests/unit/web/filter-bar.test.ts:196, frontend/tests/unit/web/filter-bar.test.ts:232, frontend/tests/unit/web/filter-bar.test.ts:256, frontend/tests/unit/web/filter-bar.test.ts:335, frontend/tests/unit/web/filter-bar.test.ts:350"
-description = "各チップ押下で PopoverPanel（role=dialog）が開く（aria-expanded / aria-controls は trigger slot 経由。z-index は .popover-dialog 41 > topbar 40 の既存のまま）。時期 dialog の中身は PeriodPicker で、タブ「月｜年｜期間」の mode 切替と ‹ › の送りは即時反映（dialog は開いたままチップの表示が変わり、ページの再取得は既存の watch(period.range) 経由。Home は月固定のためタブは「月」のみ）、期間モードは date 2つ＋「表示」ボタンの押下でのみ確定する（入力中は未確定）。ラベル dialog の中身は LabelToggleGroup＋「解除」で、変更は即時に period.setLabelColors へ出て各ページの watch(period.labelQuery) で再取得され、Receipts は labels= URL も更新する（伝播の期待は web-dashboard.label-filter / web-receipts.label-filter）。外側押下・Escape で閉じてトリガのチップへフォーカスが戻る。dialog 開いたままの別ルートへの遷移でも dialog は閉じる（Feed 内の URL replace〔スクロール同期〕は遷移ではないため閉じない）"
+description = "各チップ押下で PopoverPanel（role=dialog）が開く（aria-expanded / aria-controls は trigger slot 経由。z-index は .popover-dialog 41 > topbar 40 の既存のまま）。時期 dialog の中身は PeriodPicker で、タブ「月｜年｜期間」の mode 切替と ‹ › の送りは即時反映（dialog は開いたままチップの表示が変わり、ページの再取得は既存の watch(period.range) 経由）、期間モードは date 2つ＋「表示」ボタンの押下でのみ確定する（入力中は未確定）。ラベル dialog の中身は LabelToggleGroup＋「解除」で、変更は即時に period.setLabelColors へ出て各ページの watch(period.labelQuery) で再取得され、Receipts は labels= URL も更新する（伝播の期待は web-dashboard.label-filter / web-receipts.label-filter）。外側押下・Escape で閉じてトリガのチップへフォーカスが戻る。dialog 開いたままの別ルートへの遷移でも dialog は閉じる（Feed 内の URL replace〔スクロール同期〕は遷移ではないため閉じない）"
 given = "時期チップを押してタブ「年」へ切替・‹ › を押す / 期間モードで date を入力し「表示」押下の前後 / ラベルチップを押して red をトグルし「解除」を押す / Escape・外側 pointerdown"
 expect_return_shape = "dialog が role=dialog で開きトリガチップに aria-expanded=true / タブ切替・step が即時に period store と時期チップの表示へ反映され dialog は閉じない（ページは watch(period.range) で再取得）/ 「表示」を押すまで from/to は store に反映されない / red のトグルで period.setLabelColors(['red']) が呼ばれ各ページが再取得され Receipts の URL が labels=red に / 解除で選択が空になり未選択表示へ / Escape・外側押下で dialog が閉じ aria-expanded=false になりトリガチップへフォーカス"
 
@@ -4901,10 +4901,10 @@ expect_return_shape = "閉状態で data-test=\"manage-link\" が DOM に存在�
 
 [[condition]]
 id = "web-browse.trend-axis-minimal"
-target_function = "web/components/TrendBars.vue・web/pages/HomePage.vue（棒ごとの .bar-label 削除・軸ラベル）・web/composables/period.ts（axisMonthLabels）・web/styles.css（.bar-label 削除・.axis-ends・.trend-wrap）"
-source = "TASK-42（2026-10-16 ユーザー実機指摘: グラフですべての月にラベルを付ける必要はない。また、ラベルで月を添える必要はない）設計 tmp/tasks/tm-42/design_trend-labels.md §1-1（先頭・末尾のみの軸ラベル。ReceiptsPage の日別バーと同じパターン）・§1-2（同年は「M月」・年跨ぎは「YYYY年M月」）・§1-3（当月は棒色強調のまま）"
+target_function = "web/components/TrendBars.vue（ホーム〔月モードは6か月窓〕・カテゴリ/店〔月モードは12か月窓〕で共用）・web/composables/period.ts（axisMonthLabels）・web/styles.css（.bar-label 削除・.axis-ends・.trend-wrap）"
+source = "TASK-42（2026-10-16 ユーザー実機指摘: グラフですべての月にラベルを付ける必要はない。また、ラベルで月を添える必要はない）設計 tmp/tasks/tm-42/design_trend-labels.md §1-1（先頭・末尾のみの軸ラベル。ReceiptsPage の日別バーと同じパターン）・§1-2（同年は「M月」・年跨ぎは「YYYY年M月」）・§1-3（当月は棒色強調のまま）・TASK-66 設計 tmp/tasks/tm-66/design_home-period.md §1-3 案D（Home の inline 棒を TrendBars へ統合）"
 source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:22, frontend/tests/unit/web/trend-axis.test.ts:9, frontend/tests/unit/web/view-pages.test.ts:57"
-description = "月次推移グラフ（ホームの直近6か月・カテゴリ/店の TrendBars〔月モードは12か月窓〕）は各棒に月ラベルを付けない。月の範囲はグラフ直下の軸ラベル（.axis-ends）が先頭・末尾の2つだけで示し（両端が同年なら「M月」、年を跨ぐなら「YYYY年M月」、単月なら先頭のみ）、当月・選択月は既存の棒色強調のまま。各棒 button の title/aria-label は年月+金額を載せ、押下での period store 月移動・値ラベル（.bar-val）は不変"
+description = "月次推移グラフ（ホーム〔選択月を含む6か月窓〕・カテゴリ/店〔月モードは12か月窓〕の TrendBars 共用部品）は各棒に月ラベルを付けない。月の範囲はグラフ直下の軸ラベル（.axis-ends）が先頭・末尾の2つだけで示し（両端が同年なら「M月」、年を跨ぐなら「YYYY年M月」、単月なら先頭のみ）、当月・選択月は既存の棒色強調のまま。各棒 button の title/aria-label は年月+金額を載せ、押下での period store 月移動・値ラベル（.bar-val）は不変"
 given = "今日=2026-10-15 で / と /categories を開く（Home は 2026-05..2026-10 の6本・Categories は 2025-11..2026-10 の12本の年跨ぎ）"
 expect_return_shape = ".bar-label が存在しない / Home の [data-test=trend-axis] が「5月」「10月」の2 span・当月棒（bar-2026-10）の aria-label が「2026年10月 948円」 / Categories の [data-test=trend-axis] が「2025年11月」「2026年10月」・current 強調と bar-val は従来通り / axisMonthLabels は同一年「5月」/「10月」・跨年「2025年11月」/「2026年10月」・単月 first のみ・空は null"
 
@@ -4916,3 +4916,21 @@ source_lines = "frontend/tests/browser/verify.spec.ts:222"
 description = "12か月窓の TrendBars が横スクロールに溢れる幅（360px）でも軸ラベルの先頭・末尾は最初・最後の棒と水平位置が一致する（軸は .trend-wrap 内で棒群と同幅になり、スクロール内容の外へ出ない）。棒ごとの月ラベル（.bar-label）は DOM に存在しない"
 given = "360x780 の viewport で /categories?month=2026-10 を表示（chromium）"
 expect_return_shape = ".bar-label の数 0 / 軸 first span の left と [data-test=bar-2025-11] の left の差 <= 2px / 軸 last span の right と [data-test=bar-2026-10] の right の差 <= 2px / [data-test=trend-axis] の right が .trend-wrap の right + 2px 以下"
+
+# ---------------------------------------------------------------------------
+# TASK-66 Home ダッシュボードの期間対応（月限定を撤去し、topbar 時期チップの年/期間モードへ追従。
+# KPI・推移・内訳・最近のレシートが選択期間に従い、推移は TrendBars 共用部品へ統合。
+# 1日あたりは進行中の期間は今日までの日数で割る〔periodDays〕。mock の range compare を
+# backend と同じ同日数直前期間へ揃える）。正本は tmp/tasks/tm-66/design_home-period.md。
+# docs への反映先は docs/spec_mcp-tools.md §12（web 画面・画面骨格の段）。
+# 既存更新（元の位置）: web-home.dashboard-month-overview・web-home.dashboard-month-switch・
+# web-browse.filter-dialogs・web-browse.trend-axis-minimal。
+
+[[condition]]
+id = "web-home.dashboard-period-modes"
+target_function = "web/pages/HomePage.vue（period.query・urlQuery・periodDays・compareLabel）・web/stores/period.ts（trendQuery(back)・urlQuery）・web/composables/period.ts（periodDays）"
+source = "TASK-66（2026-10-17 ユーザー指摘: homeだから月限定というのはおかしい）設計 tmp/tasks/tm-66/design_home-period.md §1-1（KPI語彙の一般化）・§1-2（1日あたりの期間化）・§1-3 案D（推移の期間追従・TrendBars 統合）・§1-5（リンクの期間query）"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:146, frontend/tests/unit/web/period-days.test.ts:10"
+description = "ホームは年・期間モードに追従する: KPI ラベルは {period.label}の支出（今月特例なし）・比較語彙は {compareLabel}比（前年/前期間）で比較値の dt 項も同語彙。「1日あたり」は進行中の期間（to が今日以降）は今日までの日数・確定期間は全日数で割る。推移（TrendBars）は年モードでその年の12か月（未来月は0円で current 強調なし。未来月の0円棒も押下でき setMonth でその月の月モードへ移る〔既存の Categories/Stores の year モード TrendBars と同一挙動〕）・期間モードで範囲内の全月。カテゴリ/店/レシートへのリンクは期間を month= / year= / from&to で渡し、レシート詳細行は from&to を渡す。mock の range compare は backend と同じ同日数直前期間"
+given = "今日=2026-10-15 で / を開き、時期 dialog でタブ「年」→ 2026年、タブ「期間」→ 2026-10-03..2026-10-15 を表示"
+expect_return_shape = "年: getStats monthly_overview year=2026 + monthly_trend year=2026・KPI 2026年の支出・前年比 +948円・dt 前年 0円・1日あたり 3円（948/288日）・推移12本で軸は「1月」「12月」・current 強調なし・凡例行が /categories?year=2026&category=食費 へ / 期間: KPI 2026/10/03 〜 2026/10/15の支出・前期間比 +948円・1日あたり 73円（948/13日）・1本の棒で軸は「10月」のみ / periodDays は当月途中15・過去月30・当年288・過去年365・進行中range13・確定range5・未来1"

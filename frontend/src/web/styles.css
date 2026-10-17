@@ -756,7 +756,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 
 .bars {
   display: grid;
-  grid-template-columns: repeat(6, minmax(2rem, 1fr));
   align-items: end;
   gap: 0.5rem;
   min-width: 0;

@@ -190,9 +190,11 @@ describe('branch transition (login/logout shell swap)', () => {
     await leaveDone()
     expect(publicRoot.isConnected).toBe(false)
     expect(document.querySelector('.shell')).not.toBe(null)
-    // home mounted exactly once — the leaving branch never fetched
+    // home mounted exactly once — the leaving branch never fetched. One
+    // Home load issues two stats calls since TASK-66 (monthly_trend rides
+    // before the monthly_overview primary), so exactly-once = 2 calls
     await settle()
-    expect(statsCalls()).toHaveLength(1)
+    expect(statsCalls()).toHaveLength(2)
   })
 
   it('[covers:web-shell.page-transition] logout（replace→clear）は shell の fade-out → login の fade-in', async () => {

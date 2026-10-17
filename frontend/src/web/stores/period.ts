@@ -7,8 +7,8 @@ import { useSessionStore } from './session'
 
 export type PeriodMode = 'month' | 'year' | 'range'
 
-// The period the dashboard-style screens (receipts / categories / stores)
-// look at. Shared so switching screens keeps the same period. TASK-17 adds
+// The period the dashboard-style screens (home / receipts / categories /
+// stores) look at. Shared so switching screens keeps the same period. TASK-17 adds
 // the label filter as a second shared dimension: Home / Categories / Stores
 // read it from here (they carry no filter URL of their own), while the
 // receipts list and the feed use the URL query "labels" as the source of
@@ -98,14 +98,25 @@ export const usePeriodStore = defineStore('web-period', () => {
     return { ...base, ...(labelQuery.value ? { label_colors: labelQuery.value } : {}) }
   }
 
-  /** Monthly trend window: 12 months up to the selected month, the year, or the range. */
-  function trendQuery(): StatsQuery {
+  /** Monthly trend window: N months back from the selected month (default 11
+   *  = a 12-month window; Home passes 5 for its 6-month window), or the year /
+   *  range itself in the other modes. */
+  function trendQuery(back = 11): StatsQuery {
     const base: StatsQuery =
       mode.value === 'month'
-        ? { from: `${shiftMonth(month.value, -11)}-01`, to: monthEnd(month.value) }
+        ? { from: `${shiftMonth(month.value, -back)}-01`, to: monthEnd(month.value) }
         : query()
     return { ...base, ...(labelQuery.value ? { label_colors: labelQuery.value } : {}) }
   }
+
+  /** URL query form of the period for links (month= / year= / from=&to=). */
+  const urlQuery = computed((): Record<string, string> =>
+    mode.value === 'month'
+      ? { month: month.value }
+      : mode.value === 'year'
+        ? { year: String(year.value) }
+        : { from: from.value, to: to.value },
+  )
 
   const canNext = computed(() =>
     mode.value === 'month' ? month.value < thisMonth : mode.value === 'year' ? year.value < thisYear : false,
@@ -160,6 +171,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     valid,
     query,
     trendQuery,
+    urlQuery,
     canNext,
     step,
     setMonth,

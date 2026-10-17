@@ -416,7 +416,13 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
           return [`${p}-01`, `${p}-31`]
         }
         if (kind === 'year') return [`${Number(from.slice(0, 4)) - 1}-01-01`, `${Number(from.slice(0, 4)) - 1}-12-31`]
-        return null
+        // a custom range compares against the same-length previous period
+        // (backend Range::previous "days"): [from - n days, from - 1 day].
+        // Date-only strings parse as UTC, so the day math has no TZ drift.
+        const n = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1
+        const end = new Date(Date.parse(from) - 86_400_000)
+        const start = new Date(end.getTime() - (n - 1) * 86_400_000)
+        return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)]
       }
       const pr = prevRange()
       const prev = pr ? facts(pr[0], pr[1]) : null
@@ -443,8 +449,18 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
         for (let m = f.slice(0, 7); m <= t.slice(0, 7); m = shiftMonth(m, 1)) out.push(m)
         return out
       }
-      const trendRows = (ms: string[]) =>
-        ms.map((m) => ({ keys: [m], labels: [m], value: sum(facts(`${m}-01`, `${m}-31`)) }))
+      // each bar is clipped to the range it is drawn over: backend grouped()
+      // filters purchased_on BETWEEN the section's range before grouping by
+      // month, and monthly_trend passes the query range (stats.rs) — so a
+      // mid-month range start/end counts only the in-range days. The
+      // overview's own trend passes no clip: its backend window is six whole
+      // months ending at range.to's month end.
+      const trendRows = (ms: string[], clipFrom?: string, clipTo?: string) =>
+        ms.map((m) => {
+          const lo = clipFrom && clipFrom > `${m}-01` ? clipFrom : `${m}-01`
+          const hi = clipTo && clipTo < `${m}-31` ? clipTo : `${m}-31`
+          return { keys: [m], labels: [m], value: sum(facts(lo, hi)) }
+        })
       const catKey = (x: (typeof cur)[number]) =>
         q.category && q.category !== '未分類' ? (x.it.category ?? q.category) : x.top
       let sections
@@ -461,7 +477,7 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
       } else if (report === 'by_payment_method') {
         sections = [ranked('payment_methods', '支払方法別', (x) => (x.r.payment_method === 'cash' ? '現金' : x.r.payment_method ?? '支払方法不明'))]
       } else if (report === 'monthly_trend') {
-        sections = [{ id: 'trend', title: '月別合計', dims: ['month'], chart: 'bar_v', rows: trendRows(months(from, to)) }]
+        sections = [{ id: 'trend', title: '月別合計', dims: ['month'], chart: 'bar_v', rows: trendRows(months(from, to), from, to) }]
       } else if (report === 'item_price_history') {
         sections = [{
           id: 'prices',

@@ -55,9 +55,7 @@ const periodAria = computed(() => `期間で絞り込み: ${period.label}`)
           <span class="chip-label chip-label-full">{{ period.label }}</span>
         </button>
       </template>
-      <!-- Home reads a single calendar month only: its dialog keeps the 月
-           tab (the page normalizes year/range back to month on entry) -->
-      <PeriodPicker :month-only="route.name === 'home'" />
+      <PeriodPicker />
     </PopoverPanel>
     <LabelFilter
       v-model:open="labelsOpen"

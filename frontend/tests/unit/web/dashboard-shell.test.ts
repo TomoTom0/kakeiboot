@@ -24,9 +24,12 @@ describe('HomePage (dashboard)', () => {
     const spy = vi.spyOn(api, 'getStats')
     const { wrapper } = await mountApp('/')
     expect(spy).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10' })
-    // the month rides the KPI card (the in-page month switch is TASK-44's
-    // topbar period chip now); its identity is the getStats month above
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('今月の支出')
+    // TASK-66: the trend is its own monthly_trend call now — a 6-month
+    // window through the selected month (trendQuery(5)); the overview stays
+    // the load's last stats call
+    expect(spy).toHaveBeenCalledWith(1, { report: 'monthly_trend', from: '2026-05-01', to: '2026-10-31' })
+    // the KPI drops the "今月" special case (TASK-66 §1-1): {period.label}の支出
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月の支出')
     expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
     expect(wrapper.find('[data-test="receipt-count"]').text()).toContain('3 件')
     expect(wrapper.find('[data-test="diff"]').text()).toContain('+948円')
@@ -35,12 +38,16 @@ describe('HomePage (dashboard)', () => {
     expect(legend[0]!.text()).toContain('食費')
     expect(legend[0]!.text()).toContain('550円')
     expect(legend[1]!.text()).toContain('日用品')
-    expect(wrapper.findAll('[data-test="trend"] .bar-col')).toHaveLength(6)
+    // TASK-66 §1-3 案D: the inline bars are the shared TrendBars now, so the
+    // section is trend-card (the .bars inside keeps data-test="trend")
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(6)
     // TASK-42: no per-bar month labels; the axis carries the window ends
-    expect(wrapper.find('[data-test="trend"] .bar-label').exists()).toBe(false)
+    expect(wrapper.find('[data-test="trend-card"] .bar-label').exists()).toBe(false)
     expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['5月', '10月'])
     expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
     expect(wrapper.find('[data-test="bar-2026-10"]').attributes('aria-label')).toBe('2026年10月 948円')
+    // the TrendBars integration brings the shared note along as well
+    expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('月平均 948円')
     expect(wrapper.find('[data-test="stores"]').text()).toContain('Aマート')
     // the link carries the period context (web-receipts.recent-links-carry-context)
     const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
@@ -61,6 +68,11 @@ describe('HomePage (dashboard)', () => {
     expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
     await chip().trigger('click')
     await settle()
+    // Home offers all three modes like every other screen (TASK-66: the
+    // month-only tab restriction is gone)
+    for (const m of ['mode-month', 'mode-year', 'mode-range']) {
+      expect(wrapper.find(`[data-test="${m}"]`).exists(), m).toBe(true)
+    }
     // the current month cannot move forward
     expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
     await wrapper.find('[data-test="period-prev"]').trigger('click')
@@ -129,6 +141,69 @@ describe('HomePage (dashboard)', () => {
     release()
     await settle()
     expect(wrapper.find('.dash-grid').classes()).not.toContain('loading')
+  })
+
+  it('[covers:web-home.dashboard-period-modes] 年・期間モードに追従（正規化なし・KPI語彙・1日あたり・推移・リンクのquery）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stats = vi.spyOn(api, 'getStats')
+    // pick the year on another screen first: entering Home must keep it (the
+    // old month normalization is gone). One mount with an in-mount navigation
+    // — cleanup() would restore the spy, so no remount inside this test
+    // (the same pattern as the month-switch test's /categories round trip)
+    const { wrapper, router } = await mountApp('/categories')
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+    await chip().trigger('click')
+    await settle()
+    await wrapper.find('[data-test="mode-year"]').trigger('click')
+    await settle()
+    await router.push('/')
+    await settle()
+    // the overview (the load's last stats call; the trend rides first, the
+    // Categories ordering) and the trend both follow the year; the KPI drops
+    // the "今月" special case and the compare vocabulary is 前年
+    expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', year: 2026 })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_trend', year: 2026 })
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年')
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年の支出')
+    expect(wrapper.find('[data-test="diff"]').text()).toContain('前年比 +948円')
+    // the compare vocabulary rides the dl term as well (the diff chip alone
+    // could pass while the dt still reads 前月)
+    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '1日あたり', '前年'])
+    // the per-day cell exactly (not a substring of the whole KPI): the dt
+    // order assert above pins .kpi-sub dd[1] as the 1日あたり cell — 948 / 288日
+    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dd')[1]!.text()).toBe('3円')
+    // the year rides its own bars: 12 zero-filled months, no current highlight
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(12)
+    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['1月', '12月'])
+    expect(wrapper.find('.bar-col.current').exists()).toBe(false)
+    // links carry the period in its URL form (year=, not from&to)
+    const legend = new URL(wrapper.find('[data-test="categories"] li a').attributes('href')!, 'http://localhost')
+    expect(legend.pathname).toBe('/categories')
+    expect(legend.searchParams.get('year')).toBe('2026')
+    expect(legend.searchParams.get('category')).toBe('食費')
+    const more = new URL(wrapper.find('[data-test="recent"] a.more').attributes('href')!, 'http://localhost')
+    expect(more.searchParams.get('year')).toBe('2026')
+
+    // a custom range: the compare is the same-length previous period (mock
+    // parity), per-day divides by the days elapsed so far
+    await chip().trigger('click')
+    await settle()
+    await wrapper.find('[data-test="mode-range"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="range-from"]').setValue('2026-10-03')
+    await wrapper.find('[data-test="range-to"]').setValue('2026-10-15')
+    await wrapper.find('[data-test="range-apply"]').trigger('click')
+    await settle()
+    expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', from: '2026-10-03', to: '2026-10-15' })
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026/10/03 〜 2026/10/15の支出')
+    expect(wrapper.find('[data-test="diff"]').text()).toContain('前期間比 +948円')
+    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '1日あたり', '前期間'])
+    expect(wrapper.find('[data-test="kpi"]').text()).toContain('73円') // 948 / 13日
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(1)
+    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10月'])
+    const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
+    expect(recent.searchParams.get('from')).toBe('2026-10-03')
+    expect(recent.searchParams.get('to')).toBe('2026-10-15')
   })
 })
 

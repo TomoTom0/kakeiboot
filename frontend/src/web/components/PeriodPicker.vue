@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { usePeriodStore, type PeriodMode } from '../stores/period'
 import AppIcon from './AppIcon.vue'
 
@@ -8,16 +8,13 @@ import AppIcon from './AppIcon.vue'
 // the explicit "表示" range form — carried by the topbar period chip's
 // PopoverPanel. Tab switches and steps apply at once (the dialog stays open;
 // pages re-query through their existing watch(period.range)); a typed range
-// only commits on the 表示 button. monthOnly (Home) keeps the tab row to
-// "月": the Home dashboard always reads a single calendar month.
-const props = withDefaults(defineProps<{ monthOnly?: boolean }>(), { monthOnly: false })
+// only commits on the 表示 button.
 const period = usePeriodStore()
 const MODES: { id: PeriodMode; label: string }[] = [
   { id: 'month', label: '月' },
   { id: 'year', label: '年' },
   { id: 'range', label: '期間' },
 ]
-const modes = computed(() => (props.monthOnly ? MODES.filter((m) => m.id === 'month') : MODES))
 const from = ref(period.from)
 const to = ref(period.to)
 
@@ -41,7 +38,7 @@ function apply(): void {
       aria-label="期間の単位"
     >
       <button
-        v-for="m in modes"
+        v-for="m in MODES"
         :key="m.id"
         class="tab"
         :class="{ active: period.mode === m.id }"
