@@ -5,6 +5,8 @@
 //! regression after the draft_intake extraction (spec_mcp-tools.md 7 new
 //! section, 5-3; design tmp/tasks/tm-18/design_mcp-batch.md).
 //!
+//! TASK-25 failure injection: blocked image store (fetch_failed outcome) and the approve tx-internal NotFound / Forbidden kinds.
+//!
 //! Images are served by a local mock HTTP server on 127.0.0.1 with
 //! `allow_insecure_loopback` + an exact-host allowlist entry, so the real
 //! safe_fetch path (redirect refusal, size cap, decode) runs end to end.
@@ -22,6 +24,8 @@ use axum::response::{IntoResponse, Response};
 use budget_book::app::{self, AppState};
 use budget_book::config::Config;
 use budget_book::db;
+use budget_book::domain::draft_intake::{self, ApproveKind, ApproveLedger};
+use budget_book::domain::drafts as dd;
 use common::oauth;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
@@ -216,6 +220,23 @@ struct Setup {
 /// host "127.0.0.1", a short per-image fetch timeout (2s) and a tiny download
 /// cap (4KB) so the too_large / late-answer cases run fast.
 async fn setup() -> Setup {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    setup_with_image_root(root, dir).await
+}
+
+/// `setup()` with the image root occupied by a regular file: every
+/// `store_image` call fails at `create_dir_all` (images.rs) — a
+/// deterministic store-failure injection where the fetch itself still
+/// succeeds, so the drafts record U(fetch_failed).
+async fn setup_blocked_image_store() -> Setup {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let blocked = dir.path().join("blocked");
+    std::fs::write(&blocked, b"not a directory").expect("block file");
+    setup_with_image_root(blocked, dir).await
+}
+
+async fn setup_with_image_root(image_root: std::path::PathBuf, _dir: tempfile::TempDir) -> Setup {
     let mock = oauth::spawn_mock().await;
     let img = spawn_img_mock().await;
     let mut cfg: Config = oauth::oauth_config(&mock, None);
@@ -223,8 +244,7 @@ async fn setup() -> Setup {
     cfg.tools.image.fetch_allowed_hosts = vec!["127.0.0.1".into()];
     cfg.tools.image.fetch_timeout_secs = 2;
     cfg.tools.image.max_download_bytes = 4096;
-    let dir = tempfile::tempdir().expect("tempdir");
-    cfg.app.maintenance.image_root = dir.path().to_path_buf();
+    cfg.app.maintenance.image_root = image_root;
     let pool = db::connect_memory().await.expect("memory db");
     let state = AppState::new(&cfg, pool.clone()).expect("app state");
     let router = app::router(&cfg, state, CancellationToken::new());
@@ -250,7 +270,7 @@ async fn setup() -> Setup {
         viewer_ledger,
         user,
         img,
-        _dir: dir,
+        _dir,
     }
 }
 
@@ -1056,6 +1076,67 @@ async fn create_batch_failures_are_per_element() {
     assert_eq!(s.img.hits("redir"), 1);
     assert_eq!(s.img.hits("huge"), 1);
     assert_eq!(s.img.hits("text"), 1);
+}
+
+// [covers:mcp-draft-batch.store-failure-outcome]
+#[tokio::test]
+async fn create_batch_store_failure_is_fetch_failed() {
+    let s = setup_blocked_image_store().await;
+    let token = s.token(Some(s.owner), "ledger.read ledger.write").await;
+    // the fetch itself succeeds (ok1 is a valid PNG); only the file store is
+    // blocked, so the failure lands on every referencing draft (spec 7-22)
+    let r = call(
+        &s.router,
+        &token,
+        1,
+        "create_receipt_drafts",
+        json!({
+            "receipt_images": [s.img.file("ok1")],
+            "drafts": [
+                image_entry(0, payload("A", "2026-10-01", 100)),
+                image_entry(0, payload("B", "2026-10-01", 200)),
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        r["isError"],
+        json!(false),
+        "P2: store failure is not an error"
+    );
+    assert_eq!(s.img.hits("ok1"), 1, "the image was fetched and decoded");
+    let sc = &r["structuredContent"];
+    let drafts = sc["drafts"].as_array().unwrap();
+    let ids: Vec<i64> = drafts
+        .iter()
+        .map(|d| d["draft_id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    for d in drafts {
+        assert_eq!(d["status"], json!("pending"), "drafts stay saved");
+        assert_eq!(d["image"]["status"], json!("unavailable"));
+        assert_eq!(d["image"]["reason"], json!("fetch_failed"));
+    }
+    let images = sc["images"].as_array().unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0]["outcome"], json!("unavailable"));
+    assert_eq!(images[0]["reason"], json!("fetch_failed"));
+    assert_eq!(images[0]["draft_ids"], json!(ids));
+    // the store failed before the images INSERT: no row, no orphan
+    let n_images: i64 = sqlx::query_scalar("SELECT count(*) FROM images")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(n_images, 0);
+    for (_, status, reason) in draft_image_states(&s.pool).await {
+        assert_eq!(status, "unavailable");
+        assert_eq!(reason.as_deref(), Some("fetch_failed"));
+    }
+    let text = text_of(&r);
+    assert!(text.contains("画像なし 2"), "{text}");
+    assert!(text.contains("画像なしで保存しました"), "{text}");
+    assert!(warn_codes(sc).is_empty(), "no warnings");
+    assert!(r["_meta"]["images"].is_null(), "no image URLs");
 }
 
 // [covers:mcp-draft-batch.shared-image]
@@ -2132,6 +2213,77 @@ async fn approve_batch_hides_and_separates_ledgers() {
         .await
         .unwrap();
     assert_eq!(l2_status, "pending", "the other ledger stays pending");
+}
+
+// [covers:mcp-approve-batch.tx-internal-not-found-forbidden]
+#[tokio::test]
+async fn approve_one_reports_tx_internal_not_found_and_forbidden() {
+    let s = setup().await;
+    let ctx = ApproveLedger {
+        id: s.owner,
+        name: "主家計簿".into(),
+        active_id: Some(s.owner),
+    };
+
+    // control: with no injection the same call approves
+    let ok = insert_pending_draft(&s.pool, s.owner, s.user, OK_PAYLOAD, 1).await;
+    let row = dd::load_draft(&s.pool, ok, s.user)
+        .await
+        .unwrap()
+        .expect("draft row");
+    let out = draft_intake::approve_one(&s.pool, s.user, &row, &ctx, 1, 0)
+        .await
+        .unwrap();
+    assert_eq!(out.kind, ApproveKind::Approved);
+
+    // draft removed after the MCP-layer resolution: the tx-internal
+    // WHERE finds no row -> NotFound for that item only
+    let gone = insert_pending_draft(&s.pool, s.owner, s.user, OK_PAYLOAD, 1).await;
+    let row = dd::load_draft(&s.pool, gone, s.user)
+        .await
+        .unwrap()
+        .expect("draft row");
+    sqlx::query("DELETE FROM drafts WHERE id = ?")
+        .bind(gone)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let out = draft_intake::approve_one(&s.pool, s.user, &row, &ctx, 1, 0)
+        .await
+        .unwrap();
+    assert_eq!(out.kind, ApproveKind::NotFound);
+    assert!(out.receipt_id.is_none());
+
+    // role downgraded to viewer after the resolution: Forbidden
+    let demoted = insert_pending_draft(&s.pool, s.owner, s.user, OK_PAYLOAD, 1).await;
+    let row = dd::load_draft(&s.pool, demoted, s.user)
+        .await
+        .unwrap()
+        .expect("draft row");
+    sqlx::query("UPDATE ledger_members SET role = 'viewer' WHERE ledger_id = ? AND user_id = ?")
+        .bind(s.owner)
+        .bind(s.user)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let out = draft_intake::approve_one(&s.pool, s.user, &row, &ctx, 1, 0)
+        .await
+        .unwrap();
+    assert_eq!(out.kind, ApproveKind::Forbidden);
+    assert!(out.receipt_id.is_none());
+
+    // only the control draft became a receipt; the demoted draft is untouched
+    let receipts: i64 = sqlx::query_scalar("SELECT count(*) FROM receipts")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(receipts, 1);
+    let status: String = sqlx::query_scalar("SELECT status FROM drafts WHERE id = ?")
+        .bind(demoted)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
 }
 
 // [covers:mcp-approve-batch.no-active-ledger]
