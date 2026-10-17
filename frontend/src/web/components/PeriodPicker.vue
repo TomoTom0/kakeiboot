@@ -1,16 +1,23 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { usePeriodStore, type PeriodMode } from '../stores/period'
 import AppIcon from './AppIcon.vue'
 
-// Period selector shared by the dashboard-style screens: month / year with
-// prev-next, or a custom date range (applied explicitly).
+// The period dialog's content (TASK-44 §11-3/11-6): the former in-page
+// PeriodBar's pieces — the month / year / range tabs, the prev-next step and
+// the explicit "表示" range form — carried by the topbar period chip's
+// PopoverPanel. Tab switches and steps apply at once (the dialog stays open;
+// pages re-query through their existing watch(period.range)); a typed range
+// only commits on the 表示 button. monthOnly (Home) keeps the tab row to
+// "月": the Home dashboard always reads a single calendar month.
+const props = withDefaults(defineProps<{ monthOnly?: boolean }>(), { monthOnly: false })
 const period = usePeriodStore()
 const MODES: { id: PeriodMode; label: string }[] = [
   { id: 'month', label: '月' },
   { id: 'year', label: '年' },
   { id: 'range', label: '期間' },
 ]
+const modes = computed(() => (props.monthOnly ? MODES.filter((m) => m.id === 'month') : MODES))
 const from = ref(period.from)
 const to = ref(period.to)
 
@@ -19,17 +26,22 @@ function apply(): void {
   period.from = from.value
   period.to = to.value
 }
+// The button rides both paths: its own click (jsdom never synthesizes the
+// form submission from a button click) and the form's submit event (the
+// Enter key in a date input). The double run in a real browser is
+// idempotent — the second apply writes the same strings.
+
 </script>
 
 <template>
-  <div class="period-bar">
+  <div class="period-picker">
     <div
       class="tabs"
       role="tablist"
       aria-label="期間の単位"
     >
       <button
-        v-for="m in MODES"
+        v-for="m in modes"
         :key="m.id"
         class="tab"
         :class="{ active: period.mode === m.id }"
@@ -86,6 +98,7 @@ function apply(): void {
         class="btn btn-small"
         type="submit"
         data-test="range-apply"
+        @click="apply"
       >
         表示
       </button>

@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { formatLabelQuery, type LabelColor } from '@/shared/labels'
+import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import DonutChart from '../components/DonutChart.vue'
-import LabelFilter from '../components/LabelFilter.vue'
-import PeriodBar from '../components/PeriodBar.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
@@ -18,8 +16,9 @@ import { usePeriodStore } from '../stores/period'
 // Category dashboard (read-only): spending by top-level category for the
 // period, its trend, and for a selected category its sub-category breakdown,
 // monthly trend and latest receipts. Editing lives in /settings/categories.
-// The label filter (TASK-17) rides on the period store (period.query /
-// trendQuery already carry label_colors).
+// The period and label filters moved to the topbar center bar (TASK-44
+// §11): they ride on the period store (period.query / trendQuery already
+// carry label_colors) and this page re-queries through the watches below.
 const api = useDataApi()
 const route = useRoute()
 const period = usePeriodStore()
@@ -44,9 +43,11 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   try {
     const [f, t] = period.range
-    const [o, tr, d, r] = await Promise.all([
-      api.getStats(l, { report: 'by_category', ...period.query() }),
+    // the trend query goes first so the primary by_category call (the one
+    // carrying the selected month/year key) is the load's last stats call
+    const [tr, o, d, r] = await Promise.all([
       api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...(sel ? { category: sel } : {}) }),
+      api.getStats(l, { report: 'by_category', ...period.query() }),
       sel && sel !== '未分類'
         ? api.getStats(l, { report: 'by_category', ...period.query(), category: sel })
         : Promise.resolve(null),
@@ -73,12 +74,7 @@ async function load(id?: number): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-watch([() => period.range, selected], () => void load())
-
-function onLabelFilter(colors: LabelColor[]): void {
-  period.setLabelColors(colors)
-  void load()
-}
+watch([() => period.range, () => period.labelQuery, selected], () => void load())
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)
@@ -113,12 +109,7 @@ function diffText(d: number | null | undefined): string {
 
 <template>
   <div class="view-page">
-    <div class="page-toolbar">
-      <PeriodBar />
-      <LabelFilter
-        :model-value="period.labelColors"
-        @update:model-value="onLabelFilter"
-      />
+    <div class="manage-row">
       <RouterLink
         to="/settings/categories"
         class="manage-link"

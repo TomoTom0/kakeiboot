@@ -211,7 +211,47 @@ html.drawer-lock { overflow: hidden; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.topbar-actions { display: flex; align-items: center; flex: none; gap: 0.75rem; margin-left: auto; }
+.topbar-actions { display: flex; align-items: center; flex: none; gap: 0.75rem; }
+
+/* topbar center filter bar (TASK-44 §11-3/11-6): the always-on compact
+   chips between the title and the actions. The wrapper owns the
+   margin-left:auto push (moved over from topbar-actions; on titled screens
+   the flexing title takes the free space, on home the chips + actions push
+   right together). The search chip joins in stage 1b (TASK-41 /search) */
+.topbar-filters { display: flex; align-items: center; flex: none; gap: 8px; margin-left: auto; }
+.filter-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  height: 36px;
+  /* 44px minimum tap area around the 36px pill (§11-3) */
+  min-width: 44px;
+  padding: 4px 0.7rem;
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+  background: var(--bb-surface-2);
+  color: var(--bb-fg);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.filter-chip-btn:hover { background: var(--bb-hover); }
+.filter-chip-btn.active { border-color: var(--bb-accent); color: var(--bb-accent); }
+/* the period chip carries BOTH width labels; a media query picks the
+   visible one (§11-4): the short label ("10月" / "26年" / "10/3〜") through
+   899px within the 56px budget, the full label from 900px */
+.filter-chip-period .chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-chip-period .chip-label-short { display: none; }
+/* the topbar label chip (LabelFilter size="topbar"): 44px square, icon only
+   while unselected; the 5px dots of a selection replace the icon at 520px
+   and below (from 521px both ride along) */
+.topbar-label-chip .label-filter-dot { width: 5px; height: 5px; }
+
 .app-main { min-width: 0; }
 
 /* below the topbar: the main column alone — the sidebar is a fixed overlay
@@ -678,16 +718,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 
 /* -------------------------------------------------------------- dashboard */
 
-.month-switch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-  font-size: 1.05rem;
-}
-.month-switch strong { min-width: 8rem; text-align: center; }
-
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -739,6 +769,14 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   justify-content: flex-end;
   height: 100%;
   gap: 4px;
+  /* the column is a button (a press jumps to that month, TASK-44 §11-5):
+     strip the control look so it renders as the plain bar column */
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
 }
 .bar {
   width: 100%;
@@ -830,11 +868,17 @@ a.legend-row:hover { background: var(--bb-hover); }
   gap: 0.75rem;
   margin-bottom: 1rem;
 }
-.period-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
-.period-bar .tabs { margin-bottom: 0; }
+/* the period dialog's content (PeriodPicker, TASK-44 §11-6): tabs over the
+   step / range form, replacing the old in-page period bar row */
+.period-picker { display: flex; flex-direction: column; gap: 0.5rem; }
+.period-picker .tabs { margin-bottom: 0; justify-content: center; }
 .period-step { display: flex; align-items: center; gap: 0.25rem; }
 .period-step strong { min-width: 7.5rem; text-align: center; }
 .period-range { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+/* transitional home of the manage links on the category / store dashboards:
+   the page toolbar is gone (TASK-44 §11-5 moved its period and label rows
+   to the topbar); TASK-45 folds these into the "..." menu row */
+.manage-row { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
 .manage-link {
   display: inline-flex;
   align-items: center;
@@ -1407,8 +1451,6 @@ a.sub-row:hover { background: var(--bb-hover); }
   .dash-grid { grid-template-columns: minmax(0, 1fr); }
   .receipt-body { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr; }
-  .page-toolbar { flex-direction: column; align-items: stretch; }
-  .period-bar { justify-content: space-between; }
   .donut-wrap { flex-direction: column; align-items: stretch; }
   .donut { align-self: center; }
   .kpi-value { font-size: 1.8rem; }
@@ -1421,8 +1463,31 @@ a.sub-row:hover { background: var(--bb-hover); }
   .topbar-actions { gap: 4px; }
   .topbar-logo-full { display: none; }
   .topbar-logo-compact { display: inline-flex; }
+  .topbar-filters { gap: 4px; }
+  /* a selected label chip drops to the dots alone (§11-3): the icon gives
+     way at the same 520px boundary as the logo */
+  .topbar-label-chip.active .label-chip-icon { display: none; }
   .item-edit { grid-template-columns: 1fr 1fr; }
   .auth { padding-top: 2rem; }
+}
+
+/* topbar bands (TASK-44 §11-4): the title folds to free the center for the
+   filter chips — icon-only through 390px, gone entirely through 360px (the
+   same media-query pattern as the 520px logo switch; the tabbar and the
+   page content carry the location instead) */
+@media (max-width: 390px) {
+  .topbar-title-text { display: none; }
+}
+@media (max-width: 360px) {
+  .topbar-title { display: none; }
+}
+
+/* the period chip swaps to the short label within the 56px budget through
+   899px; the full label ("2026年10月") rides from 900px (§11-4) */
+@media (max-width: 899px) {
+  .filter-chip-period { max-width: 56px; }
+  .filter-chip-period .chip-label-short { display: block; }
+  .filter-chip-period .chip-label-full { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

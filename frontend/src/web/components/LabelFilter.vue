@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { labelAriaList, type Label, type LabelColor } from '@/shared/labels'
 import { useLabelsStore } from '../stores/labels'
 import { useSessionStore } from '../stores/session'
@@ -7,20 +7,29 @@ import AppIcon from './AppIcon.vue'
 import LabelToggleGroup from './LabelToggleGroup.vue'
 import PopoverPanel from './PopoverPanel.vue'
 
-// Label filter (TASK-17, reshaped in TASK-26 2-4): one toolbar button that
-// never takes a row of its own. Unselected it reads "ラベル" (the compact
-// prop drops the word for icon-only toolbars); with a selection it shows
-// the chosen labels as 6px color dots and an accent border, no words. The
-// popover carries the same five-label toggle group as the picker plus a
-// clear button; every change emits v-model (LabelColor[]) immediately.
-const props = withDefaults(defineProps<{ modelValue: LabelColor[]; compact?: boolean }>(), {
-  compact: false,
-})
+// Label filter (TASK-17, reshaped in TASK-26 2-4, topbar size in TASK-44
+// §11-3/11-6): one button that never takes a row of its own. In the default
+// toolbar size it reads "ラベル" when unselected (the compact prop drops the
+// word); with a selection it shows the chosen labels as 6px color dots and an
+// accent border, no words. size="topbar" (the topbar center filter bar) is
+// the 44px-square chip: icon only when unselected, the dots alone at 520px
+// and below while selected (the icon rides along at 521px+; a media query
+// swaps them). The popover carries the same five-label toggle group as the
+// picker plus a clear button; every change emits v-model (LabelColor[])
+// immediately.
+const props = withDefaults(
+  defineProps<{ modelValue: LabelColor[]; compact?: boolean; size?: 'default' | 'topbar' }>(),
+  { compact: false, size: 'default' },
+)
 const emit = defineEmits<{ 'update:modelValue': [colors: LabelColor[]] }>()
 
 const session = useSessionStore()
 const labelsStore = useLabelsStore()
-const open = ref(false)
+// optional open model: the topbar embedding binds it so a route navigation
+// can close the dialog (the bar itself survives the page swap); unbound it
+// stays a local state
+const open = defineModel<boolean>('open')
+const topbar = computed(() => props.size === 'topbar')
 
 const definitions = computed<Label[]>(() => labelsStore.definitions(session.selectedLedgerId ?? -1))
 
@@ -56,19 +65,26 @@ function clear(): void {
     <template #trigger="{ 'aria-expanded': expanded, 'aria-controls': controls }">
       <button
         type="button"
-        class="label-filter-btn"
-        :class="{ active: modelValue.length > 0, compact }"
+        :class="[topbar ? 'filter-chip-btn topbar-label-chip' : 'label-filter-btn', { active: modelValue.length > 0, compact: compact && !topbar }]"
         :aria-expanded="expanded"
         :aria-controls="controls"
         :aria-label="ariaLabel"
-        data-test="label-filter-button"
+        :data-test="topbar ? 'filter-labels' : 'label-filter-button'"
       >
+        <span
+          v-if="topbar"
+          class="label-chip-icon"
+        ><AppIcon
+          name="tag"
+          :size="16"
+        /></span>
         <AppIcon
+          v-else
           name="tag"
           :size="16"
         />
         <span
-          v-if="modelValue.length === 0 && !compact"
+          v-if="modelValue.length === 0 && !compact && !topbar"
           class="label-filter-word"
         >ラベル</span>
         <span

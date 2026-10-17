@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { formatLabelQuery, type LabelColor } from '@/shared/labels'
+import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult, type StoreRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import LabelFilter from '../components/LabelFilter.vue'
-import PeriodBar from '../components/PeriodBar.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
@@ -16,9 +14,10 @@ import { usePeriodStore } from '../stores/period'
 
 // Store dashboard (read-only): spending by store for the period and, for a
 // selected store, its monthly trend, what was bought there (categories) and
-// its latest receipts. Renames / merges live in /settings/stores. The label
-// filter (TASK-17) rides on the period store (period.query / trendQuery
-// already carry label_colors).
+// its latest receipts. Renames / merges live in /settings/stores. The period
+// and label filters moved to the topbar center bar (TASK-44 §11): they ride
+// on the period store (period.query / trendQuery already carry label_colors)
+// and this page re-queries through the watches below.
 const api = useDataApi()
 const route = useRoute()
 const period = usePeriodStore()
@@ -74,12 +73,7 @@ async function load(id?: number): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-watch([() => period.range, selected], () => void load())
-
-function onLabelFilter(colors: LabelColor[]): void {
-  period.setLabelColors(colors)
-  void load()
-}
+watch([() => period.range, () => period.labelQuery, selected], () => void load())
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)
@@ -114,12 +108,7 @@ function diffText(d: number | null | undefined): string {
 
 <template>
   <div class="view-page">
-    <div class="page-toolbar">
-      <PeriodBar />
-      <LabelFilter
-        :model-value="period.labelColors"
-        @update:model-value="onLabelFilter"
-      />
+    <div class="manage-row">
       <RouterLink
         to="/settings/stores"
         class="manage-link"

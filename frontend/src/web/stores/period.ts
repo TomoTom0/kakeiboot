@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { LabelColor } from '@/shared/labels'
 import type { StatsQuery } from '../api/data'
-import { jstMonth, monthEnd, monthLabel, shiftMonth } from '../composables/period'
+import { jstMonth, monthEnd, monthLabel, shiftMonth, shortDate } from '../composables/period'
 import { useSessionStore } from './session'
 
 export type PeriodMode = 'month' | 'year' | 'range'
@@ -69,6 +69,17 @@ export const usePeriodStore = defineStore('web-period', () => {
     if (mode.value === 'month') return monthLabel(month.value)
     if (mode.value === 'year') return `${year.value}年`
     return `${from.value.replaceAll('-', '/')} 〜 ${to.value.replaceAll('-', '/')}`
+  })
+
+  /**
+   * Narrow-band label for the topbar period chip (TASK-44 §11-4): "10月" /
+   * "26年" / "10/3〜" (the from date only). A plain string — which width band
+   * shows it is a CSS media-query concern, not a store one.
+   */
+  const labelShort = computed(() => {
+    if (mode.value === 'month') return `${Number(month.value.slice(5))}月`
+    if (mode.value === 'year') return `${String(year.value).slice(2)}年`
+    return `${shortDate(from.value)}〜`
   })
 
   /** "前月" / "前年" / null (custom ranges have no comparison label). */
@@ -144,6 +155,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     setLabelColors,
     range,
     label,
+    labelShort,
     compareLabel,
     valid,
     query,

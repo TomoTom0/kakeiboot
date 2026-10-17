@@ -1,25 +1,26 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { formatLabelQuery, type LabelColor } from '@/shared/labels'
+import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import LabelFilter from '../components/LabelFilter.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { jstMonth, jstToday, monthEnd as lastDay, monthLabel, shiftMonth, shortDate } from '../composables/period'
+import { jstMonth, jstToday, monthEnd as lastDay, monthLabel, shortDate } from '../composables/period'
 import { usePeriodStore } from '../stores/period'
 
 // Dashboard: the month's spending at a glance (GET /api/ledgers/{l}/summary,
 // the same monthly_overview aggregation as summarize_spending) plus the
-// month's latest receipts. Months are JST calendar months. The label filter
-// (TASK-17) is shared with the other dashboards through the period store.
+// month's latest receipts. Months are JST calendar months. The month itself
+// lives in the period store (TASK-44 §1-3/§11): it moves through the topbar
+// period chip's dialog and the trend bars below, is shared with the other
+// screens, and this page re-queries through watch(period.range). The label
+// filter (TASK-17) is the same shared dimension (watch(period.labelQuery)).
 const api = useDataApi()
 const period = usePeriodStore()
 
 const thisMonth = jstMonth(new Date())
-const month = ref(thisMonth)
 const summary = ref<StatsResult | null>(null)
 const recent = ref<ReceiptSummary[]>([])
 const loading = ref(false)
@@ -29,13 +30,13 @@ async function load(ledgerId: number | null): Promise<void> {
   if (ledgerId === null) return
   loading.value = true
   error.value = ''
-  const m = month.value
+  const m = period.month
   try {
     const [s, r] = await Promise.all([
       api.getStats(ledgerId, { report: 'monthly_overview', month: m, ...(period.labelQuery ? { label_colors: period.labelQuery } : {}) }),
       api.listReceipts(ledgerId, { from: `${m}-01`, to: lastDay(m), limit: 5, ...(period.labelQuery ? { label_colors: period.labelQuery } : {}) }),
     ])
-    if (m !== month.value) return
+    if (m !== period.month) return
     summary.value = s
     recent.value = r.receipts
   } catch (e) {
@@ -46,18 +47,18 @@ async function load(ledgerId: number | null): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-
-function go(delta: number): void {
-  const next = shiftMonth(month.value, delta)
-  if (next > thisMonth) return
-  month.value = next
-  void load(ledgerId.value)
-}
-
-function onLabelFilter(colors: LabelColor[]): void {
-  period.setLabelColors(colors)
-  void load(ledgerId.value)
-}
+// Home is month-fixed (TASK-44 review): the KPI, the trend window and the
+// recent list all read one calendar month, so arriving with the shared
+// period in year / range mode normalizes back to the month view (the
+// store's month keeps the last month shown; year / range filtering stays
+// on the other screens). This runs at setup — before the watch below — so
+// the entry loads once, in month mode.
+if (period.mode !== 'month') period.mode = 'month'
+// the period / label filters move from the topbar center bar (TASK-44 §11):
+// the same watch(period.range) path the other dashboards use, plus the
+// shared label dimension — one array watch so a change that moves both (a
+// ledger switch resetting the labels) fetches once
+watch([() => period.range, () => period.labelQuery], () => void load(ledgerId.value))
 
 const totals = computed(() => summary.value?.totals ?? null)
 const section = (id: string) => summary.value?.sections.find((s) => s.id === id)?.rows ?? []
@@ -77,9 +78,9 @@ const perDay = computed(() => {
   const t = totals.value
   if (!t) return null
   const days =
-    month.value === thisMonth
+    period.month === thisMonth
       ? Number(jstToday().slice(8, 10))
-      : Number(lastDay(month.value).slice(8))
+      : Number(lastDay(period.month).slice(8))
   return Math.round(t.value / Math.max(days, 1))
 })
 
@@ -116,7 +117,7 @@ const trend = computed(() => {
       label: `${Number(key.slice(5))}月`,
       value: r.value,
       height: Math.round((r.value / max) * 100),
-      current: key === month.value,
+      current: key === period.month,
     }
   })
 })
@@ -131,33 +132,6 @@ const stores = computed(() => {
 
 <template>
   <div class="dashboard">
-    <div class="page-toolbar">
-      <div class="month-switch">
-        <button
-          class="icon-btn"
-          aria-label="前の月"
-          data-test="month-prev"
-          @click="go(-1)"
-        >
-          <AppIcon name="chevron-left" />
-        </button>
-        <strong data-test="month">{{ monthLabel(month) }}</strong>
-        <button
-          class="icon-btn"
-          aria-label="次の月"
-          data-test="month-next"
-          :disabled="month >= thisMonth"
-          @click="go(1)"
-        >
-          <AppIcon name="chevron-right" />
-        </button>
-      </div>
-      <LabelFilter
-        :model-value="period.labelColors"
-        @update:model-value="onLabelFilter"
-      />
-    </div>
-
     <p
       v-if="error"
       class="msg msg-error"
@@ -176,7 +150,7 @@ const stores = computed(() => {
         class="card kpi"
         data-test="kpi"
       >
-        <span class="label">{{ month === thisMonth ? '今月の支出' : `${monthLabel(month)}の支出` }}</span>
+        <span class="label">{{ period.month === thisMonth ? '今月の支出' : `${monthLabel(period.month)}の支出` }}</span>
         <strong
           class="kpi-value"
           data-test="total"
@@ -211,12 +185,17 @@ const stores = computed(() => {
       >
         <h2>直近6か月の推移</h2>
         <div class="bars">
-          <div
+          <!-- a bar press moves the shared store (the topbar period chip
+               follows at once, TASK-44 §11-5) -->
+          <button
             v-for="t in trend"
             :key="t.key"
             class="bar-col"
             :class="{ current: t.current }"
             :title="`${t.label} ${formatYen(t.value)}`"
+            :data-test="`bar-${t.key}`"
+            type="button"
+            @click="period.setMonth(t.key)"
           >
             <span class="bar-val">{{ t.value ? Math.round(t.value / 1000) + 'k' : '' }}</span>
             <span
@@ -224,7 +203,7 @@ const stores = computed(() => {
               :style="{ height: `${Math.max(t.height, 2)}%` }"
             />
             <span class="bar-label">{{ t.label }}</span>
-          </div>
+          </button>
         </div>
       </section>
 
@@ -235,7 +214,7 @@ const stores = computed(() => {
         <div class="card-head">
           <h2>支出の内訳</h2>
           <RouterLink
-            :to="{ path: '/categories', query: { month } }"
+            :to="{ path: '/categories', query: { month: period.month } }"
             class="more"
           >
             カテゴリ別に見る
@@ -298,7 +277,7 @@ const stores = computed(() => {
               <component
                 :is="c.label === 'その他' ? 'span' : RouterLink"
                 class="legend-row"
-                v-bind="c.label === 'その他' ? {} : { to: { path: '/categories', query: { month, category: c.label } } }"
+                v-bind="c.label === 'その他' ? {} : { to: { path: '/categories', query: { month: period.month, category: c.label } } }"
               >
                 <span
                   class="dot"
@@ -320,7 +299,7 @@ const stores = computed(() => {
         <div class="card-head">
           <h2>よく使う店</h2>
           <RouterLink
-            :to="{ path: '/stores', query: { month } }"
+            :to="{ path: '/stores', query: { month: period.month } }"
             class="more"
           >
             店別に見る
@@ -341,7 +320,7 @@ const stores = computed(() => {
             :key="s.label"
           >
             <RouterLink
-              :to="{ path: '/stores', query: { month, store: s.label } }"
+              :to="{ path: '/stores', query: { month: period.month, store: s.label } }"
               class="rank-link"
             >
               <div class="rank-head">
@@ -361,7 +340,7 @@ const stores = computed(() => {
         <div class="card-head">
           <h2>最近のレシート</h2>
           <RouterLink
-            :to="{ path: '/receipts', query: { month } }"
+            :to="{ path: '/receipts', query: { month: period.month } }"
             class="more"
           >
             すべて見る
@@ -386,7 +365,7 @@ const stores = computed(() => {
             :key="r.receipt_id"
           >
             <RouterLink
-              :to="{ path: `/receipts/${r.receipt_id}`, query: { from: `${month}-01`, to: lastDay(month), ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) } }"
+              :to="{ path: `/receipts/${r.receipt_id}`, query: { from: `${period.month}-01`, to: lastDay(period.month), ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) } }"
               class="recent-row"
               :data-test="`recent-${r.receipt_id}`"
             >

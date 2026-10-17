@@ -7,8 +7,6 @@ import { labelIndexOf, parseLabelQuery, type Label, type LabelColor } from '@/sh
 import { useDataApi, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import LabelFilter from '../components/LabelFilter.vue'
-import PeriodBar from '../components/PeriodBar.vue'
 import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -42,14 +40,17 @@ const filters = reactive({
 })
 // Label filter truth (TASK-17 design 2-5 L3): the URL "labels" key. When it
 // is absent, adopt the period store's shared dashboard filter (Home /
-// Categories / Stores) into the URL; every change here (including clearing)
-// writes back to the store so the dashboards follow.
+// Categories / Stores) into the URL. A deep link's labels are also written
+// back into the store so the topbar chip shows the selection the list is
+// actually filtering with (TASK-44 §11-3). Later changes arrive from the
+// topbar label chip through watch(period.labelQuery) below.
 const urlLabels = route.query.labels
-if (!('labels' in route.query) && period.labelColors.length > 0) {
+if ('labels' in route.query) {
+  filters.labelColors = parseLabelQuery(Array.isArray(urlLabels) ? (urlLabels[0] as string) : urlLabels)
+  period.setLabelColors(filters.labelColors)
+} else if (period.labelColors.length > 0) {
   filters.labelColors = [...period.labelColors]
   void router.replace({ query: listQueryToContext(listQuery()) })
-} else {
-  filters.labelColors = parseLabelQuery(Array.isArray(urlLabels) ? (urlLabels[0] as string) : urlLabels)
 }
 const draft = reactive({ ...filters, labelColors: [...filters.labelColors] })
 const filtersOpen = ref(false)
@@ -149,6 +150,14 @@ async function more(): Promise<void> {
 
 const ledgerId = useLedger((id) => load(id))
 watch(() => period.range, () => void load())
+// the label filter moved to the topbar center bar (TASK-44 §11-3): its
+// dialog writes the shared store, this page follows and keeps the labels=
+// URL in sync (L3) while re-querying
+watch(() => period.labelQuery, (colors) => {
+  filters.labelColors = [...(colors ?? [])]
+  syncQuery()
+  void load()
+})
 
 const labelsStore = useLabelsStore()
 /** Definition of a selected filter color, for the filter-chip LabelChips. */
@@ -173,11 +182,10 @@ function clearFilter(key: 'store' | 'item' | 'category'): void {
   void load()
 }
 
-function onLabelFilter(colors: LabelColor[]): void {
-  filters.labelColors = colors
-  period.setLabelColors([...colors])
-  syncQuery()
-  void load()
+function clearLabels(): void {
+  // the watch(period.labelQuery) above adopts the emptied store, syncs the
+  // URL and re-queries
+  period.setLabelColors([])
 }
 
 function syncQuery(): void {
@@ -241,11 +249,6 @@ const groups = computed(() => {
     class="view-page"
   >
     <div class="page-toolbar">
-      <PeriodBar />
-      <LabelFilter
-        :model-value="filters.labelColors"
-        @update:model-value="onLabelFilter"
-      />
       <button
         class="btn btn-small"
         :aria-expanded="filtersOpen"
@@ -327,7 +330,7 @@ const groups = computed(() => {
         class="chip-x"
         aria-label="ラベルの条件を外す"
         data-test="clear-labels"
-        @click="onLabelFilter([])"
+        @click="clearLabels"
       ><AppIcon
         name="close"
         :size="14"

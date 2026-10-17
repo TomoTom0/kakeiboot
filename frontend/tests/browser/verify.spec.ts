@@ -280,3 +280,154 @@ for (const spec of [
     })
   })
 }
+
+// --- TASK-44 topbar: the title's 360/390px band switch (§11-4 U10) ---
+// 360px and below: no title at all (like home) / 361-390px: icon only /
+// 391px+: icon + text. The stage-1a two chips must ride along at every band
+// without either the title or the chips going missing.
+
+const TITLE_BANDS = [
+  { width: 360, title: 'none', text: 'none' },
+  { width: 361, title: 'visible', text: 'none' },
+  { width: 390, title: 'visible', text: 'none' },
+  { width: 391, title: 'visible', text: 'visible' },
+] as const
+
+for (const spec of TITLE_BANDS) {
+  test.describe(`topbar title ${spec.width}px`, () => {
+    test.use({ viewport: { width: spec.width, height: 780 } })
+
+    test('[covers:web-shell.topbar-title-breakpoints-real] 表題は 360/390px 境界で出し分け（時期・ラベルチップとともに欠けない）', async ({ page }) => {
+      logPageIssues(page, `title${spec.width}`)
+      await installApiStub(page)
+      await page.goto('/receipts')
+      await expect(page.locator('.topbar')).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      const m = await page.evaluate(() => {
+        const fact = (selector: string) => {
+          const el = document.querySelector(selector) as HTMLElement | null
+          if (!el) return { present: false, display: 'missing', width: 0 }
+          return { present: true, display: getComputedStyle(el).display, width: el.getBoundingClientRect().width }
+        }
+        return {
+          title: fact('.topbar-title'),
+          text: fact('.topbar-title-text'),
+          icon: fact('.topbar-title .icon'),
+          chips: {
+            period: !!document.querySelector('[data-test="filter-period"]'),
+            labels: !!document.querySelector('[data-test="filter-labels"]'),
+          },
+        }
+      })
+      const dump = `${spec.width}px ${JSON.stringify(m)}`
+      if (spec.title === 'none') {
+        expect(m.title.display, dump).toBe('none')
+      } else {
+        expect(m.title.display, dump).not.toBe('none')
+        expect(m.icon.width, dump).toBeGreaterThan(0)
+      }
+      if (spec.text === 'none') expect(m.text.display, dump).toBe('none')
+      else expect(m.text.display, dump).not.toBe('none')
+      // stage 1a: both chips are on the bar at every band
+      expect(m.chips.period, dump).toBe(true)
+      expect(m.chips.labels, dump).toBe(true)
+    })
+  })
+}
+
+// --- TASK-44 topbar: the period chip's short/full label (899px boundary) ---
+// 899px and below: the short label (labelShort, chip within the 56px budget)
+// / 900px+: the full label (the §11-4 estimate put it around 90-100px).
+
+for (const spec of [
+  { width: 899, visible: 'short' },
+  { width: 900, visible: 'full' },
+] as const) {
+  test.describe(`filter period label ${spec.width}px`, () => {
+    test.use({ viewport: { width: spec.width, height: 780 } })
+
+    test('[covers:web-browse.filter-period-label-widths-real] 時期チップは 899px 境界で短縮/フルを切替（899px 以下は幅 56px 以内）', async ({ page }) => {
+      logPageIssues(page, `period${spec.width}`)
+      await installApiStub(page)
+      await page.goto('/receipts?month=2026-10')
+      await expect(page.locator('.topbar')).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      const m = await page.evaluate(() => {
+        const chip = document.querySelector('[data-test="filter-period"]')
+        if (!chip) return { missing: true as const, short: null, full: null, chipW: 0 }
+        // the two width labels are separate leaf elements (a CSS media query
+        // picks the visible one); identify them by their exact text
+        const leaf = (t: string) =>
+          Array.from(chip.querySelectorAll('*')).find(
+            (e) => e.children.length === 0 && (e.textContent ?? '').trim() === t,
+          ) as HTMLElement | undefined
+        const fact = (el: HTMLElement | undefined) =>
+          el ? { display: getComputedStyle(el).display, width: el.getBoundingClientRect().width } : null
+        return {
+          missing: false as const,
+          short: fact(leaf('10月')),
+          full: fact(leaf('2026年10月')),
+          chipW: chip.getBoundingClientRect().width,
+        }
+      })
+      const dump = `${spec.width}px ${JSON.stringify(m)}`
+      expect(m.missing, 'the period chip renders').toBe(false)
+      if (spec.visible === 'short') {
+        expect(m.short, dump).toBeTruthy()
+        expect(m.short!.display, dump).not.toBe('none')
+        expect(m.full, dump).toBeTruthy()
+        expect(m.full!.display, dump).toBe('none')
+        // the 56px budget with 1px of tolerance
+        expect(m.chipW, dump).toBeLessThanOrEqual(57)
+      } else {
+        expect(m.full, dump).toBeTruthy()
+        expect(m.full!.display, dump).not.toBe('none')
+        expect(m.short, dump).toBeTruthy()
+        expect(m.short!.display, dump).toBe('none')
+        // the §11-4 estimate is 90-100px; keep a generous band for font
+        // rendering differences (§11-11)
+        expect(m.full!.width, dump).toBeGreaterThanOrEqual(70)
+        expect(m.full!.width, dump).toBeLessThanOrEqual(130)
+      }
+    })
+  })
+}
+
+// Range mode rides the same 899px budget with its own short label
+// ("10/3〜", the from date only — §11-4).
+
+test.describe('filter period label 899px (range mode)', () => {
+  test.use({ viewport: { width: 899, height: 780 } })
+
+  test('[covers:web-browse.filter-period-label-widths-real] 範囲モードの短縮ラベル（10/3〜）も 899px では 56px 以内', async ({ page }) => {
+    logPageIssues(page, 'period899range')
+    await installApiStub(page)
+    await page.goto('/receipts?from=2026-10-03&to=2026-10-15')
+    await expect(page.locator('.topbar')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const chip = document.querySelector('[data-test="filter-period"]')
+      if (!chip) return { missing: true as const, short: null, full: null, chipW: 0 }
+      const leaf = (t: string) =>
+        Array.from(chip.querySelectorAll('*')).find(
+          (e) => e.children.length === 0 && (e.textContent ?? '').trim() === t,
+        ) as HTMLElement | undefined
+      const fact = (el: HTMLElement | undefined) =>
+        el ? { display: getComputedStyle(el).display, width: el.getBoundingClientRect().width } : null
+      return {
+        missing: false as const,
+        short: fact(leaf('10/3〜')),
+        full: fact(leaf('2026/10/03 〜 2026/10/15')),
+        chipW: chip.getBoundingClientRect().width,
+      }
+    })
+    const dump = `899px range ${JSON.stringify(m)}`
+    expect(m.missing, 'the period chip renders').toBe(false)
+    expect(m.short, dump).toBeTruthy()
+    expect(m.short!.display, dump).not.toBe('none')
+    expect(m.full, dump).toBeTruthy()
+    expect(m.full!.display, dump).toBe('none')
+    // the 56px budget with 1px of tolerance
+    expect(m.chipW, dump).toBeLessThanOrEqual(57)
+  })
+})

@@ -31,7 +31,11 @@ export const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
   { path: '/register', name: 'register', component: RegisterPage, meta: { public: true } },
   { path: '/oauth/consent', name: 'consent', component: ConsentPage, meta: { public: true } },
-  { path: '/', name: 'home', component: HomePage },
+  // `filters` marks the browsing routes that carry the topbar center filter
+  // bar (TASK-44 §11-3): set explicitly on the enumerated view routes — not
+  // shared with the ledgerScoped notion — so manage-* / apps / usage and the
+  // public screens never get it.
+  { path: '/', name: 'home', component: HomePage, meta: { filters: true } },
   // /settings is a nested parent: the horizontal tab strip renders once and
   // the child panel is the route content. Four tabs after the real-device
   // feedback (general / auth / data / others); /settings itself redirects to
@@ -57,13 +61,14 @@ export const routes: RouteRecordRaw[] = [
   // guard like the rest of the app screens.
   { path: '/usage', name: 'usage', component: UsagePage },
   { path: '/usage/connect', name: 'usage-connect', component: UsageConnectPage },
-  { path: '/categories', name: 'categories', component: CategoriesPage },
-  { path: '/stores', name: 'stores', component: StoresPage },
-  { path: '/receipts', name: 'receipts', component: ReceiptsPage },
+  { path: '/categories', name: 'categories', component: CategoriesPage, meta: { filters: true } },
+  { path: '/stores', name: 'stores', component: StoresPage, meta: { filters: true } },
+  { path: '/receipts', name: 'receipts', component: ReceiptsPage, meta: { filters: true } },
   {
     path: '/receipts/:id(\\d+)',
     name: 'receipt',
     component: ReceiptDetailPage,
+    meta: { filters: true },
     props: (r) => ({ id: Number(r.params.id) }),
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },

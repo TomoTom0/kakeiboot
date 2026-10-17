@@ -2296,18 +2296,18 @@ expect_return_shape = "getSummary(1, '2026-10')・合計 948円・3 件・前月
 
 [[condition]]
 id = "web-home.dashboard-month-switch"
-target_function = "web/pages/HomePage.vue"
-source = "TASK-14（ダッシュボードの月切替）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:44"
-description = "前の月へ切り替えると該当月を再取得し、記録が無ければ0円と ChatGPT での記録を促す空表示。今月より先へは進めない"
-given = "今月表示で次へ / 前へ を押す"
-expect_return_shape = "当月は次へが disabled / 2026年9月・0円・空表示文言・次へが有効"
+target_function = "web/pages/HomePage.vue（period store・watch(period.range)・TrendBars 棒押下 setMonth）・web/components/TopbarFilterBar.vue（topbar 中央の時期チップ・dialog）"
+source = "TASK-14（ダッシュボードの月切替）・TASK-28 設計 tmp/tasks/tm-28/design_browsing.md §1-3（Home の period store 化）・§11-3・§11-7（期間の操作は topbar 中央バーの時期チップ・dialog から行う。Home のページ内月送り UI は廃止。§1-4 の文言〔Home の月送りが store を動かす〕は中央バー経由とした本項が正）"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:46"
+description = "Home の期間変更は topbar 中央バーの時期チップ・dialog から行い（Home にページ内の月送り UI〔前へ/次へボタン〕は置かない）、period store の month を動かして該当月を再取得する。Home は月固定（時期 dialog のタブは「月」のみ。年/期間モードで他画面から Home へ入ると period の mode を月へ正規化する。年/期間での絞り込みはレシート一覧・カテゴリ・店・Feed 等の他画面で行う）。変更は画面をまたいで共有され（カテゴリ等へ移っても同じ月）、記録が無ければ0円と ChatGPT での記録を促す空表示。今月より先へは進めない。TrendBars の棒押下（setMonth）も store を動かし時期チップに即時反映される"
+given = "今月表示で topbar の時期 dialog の次へ / 前へを押す / TrendBars の 2026年9月 の棒を押す"
+expect_return_shape = "当月は次へが disabled / 2026年9月・0円・空表示文言・次へが有効 / 棒押下で period store が 2026-09 になり時期チップの表示が「9月」へ変わる（他画面へ移動しても 2026-09 を保持）"
 
 [[condition]]
 id = "web-shell.navigation"
 target_function = "web/App.vue（サイドバー・下部タブ・SECTION_TITLES・topbar の page title）・router /settings"
 source = "TASK-14（ユーザー指摘: home と settings の混同、タブがアイコンでない、サイドバーが無い）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目6 実装設計（NAV はデータ4節、設定・接続中のアプリは右上メニュー、pageTitle は SECTION_TITLES）・項目4 topbar の表示規則（ホームでは title 省略）・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §3-3（sidebar 見出しの brand リンクを削除し sidebar はナビ + 利用者表示のみ）・TASK-35 設計 tmp/tasks/tm-35/design_title-icon.md §2-1〜2-2（SECTION_TITLES を {title, icon} に拡張し NAV と一本化、表題テキストの左に該当節の AppIcon を併記）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:108"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:147"
 description = "ログイン後の画面はアイコン付きサイドバーとアイコン付き下部タブを持ち、どちらもデータの4節（ホーム・レシート・カテゴリ・店）だけを並べ（設定・接続中のアプリは無い）、現在の節を active 表示する。sidebar に brand 見出し（ロゴのリンク）は置かずナビと利用者表示のみ。下部タブの列数は --tab-count=4。topbar の page title は NAV に依存せず SECTION_TITLES の {title, icon} から引き、表題テキスト（.topbar-title-text）の左に該当節の AppIcon（20px・aria-hidden・テキストと同色）を併記し、ホームでは表題自体を省略する。アカウント設定は /settings でホームとは別画面で、右上メニューの設定項目に aria-current=page が付く。レシート詳細はレシート節"
 given = "/ を開き、/settings、/receipts/101 へ遷移"
 expect_return_shape = "サイドバー・下部タブとも nav 項目はホーム・レシート・カテゴリ・店の4件で各 svg アイコン・nav-settings / nav-apps は存在しない・sidebar に brand リンク（sidebar-head）が存在しない・tabbar の style に --tab-count: 4・ホーム active・topbar に page title なし（svg も無い） / 設定画面（settings-nav）が表示されアカウント番号は無くダッシュボードも無い・トップバー表題「設定」・表題内に svg（aria-hidden=\"true\"） / 右上メニューの設定項目に aria-current=\"page\" / レシート active・表題「レシート」・表題内に svg（aria-hidden=\"true\"）"
@@ -2316,15 +2316,15 @@ expect_return_shape = "サイドバー・下部タブとも nav 項目はホー�
 id = "web-shell.menus"
 target_function = "web/App.vue（topbar の menu ボタンによる drawer 開閉・scrim・inert・右上アカウントメニュー（PopoverMenu）・LedgerSwitcher の配置）"
 source = "TASK-14（ユーザー指摘: メニューボタンが無い）・docs/spec_auth.md §3（ログアウト）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目2 実装設計（menu-btn を topbar の最初の子）・項目6 実装設計（右上メニューは aria-haspopup=menu、設定 → 接続中のアプリ → ログアウト）・項目3（ledger-select を LedgerSwitcher に置換）・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §3-3 実装設計（menu ボタンは常に見え同じ位置のクリックで開閉・aria-expanded・aria-label とアイコンの切替・開くと現在節のリンクへフォーカス・閉じる手段（再押下・Escape・scrim・遷移）で menu ボタンへフォーカス・scrim も closeDrawer に一本化・開いている間 main-col / tabbar が inert・sidebar 見出しの drawer-close を削除。実機指摘改訂〔TASK-33 追加指摘〕で menu ボタンは全幅で常時表示し desktop では sidebar 列の折りたたしに使う）・decisions_user.md（menuボタンは常に見え、同位置クリックで閉じる）・TASK-37 設計 tmp/tasks/tm-37/design_usage.md 導線1（アカウントメニューに「使い方」を追加。設定 → 接続中のアプリ → 使い方 → ログアウト）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:160"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:199"
 description = "左上の menu ボタン（topbar の最初の要素・押すたびに開閉・全幅で常時表示。desktop では同じ overlay の開閉で詳細は web-shell.sidebar-overlay / web-shell.menu-btn-always-visible / web-shell.nav-open-state-on-resize）でドロワーを開閉する。開くと aria-expanded=true・aria-label「メニューを閉じる」・アイコン close になり、現在節のリンク（.side-link.active、無ければ先頭）へフォーカスする。開いている間 .main-col と .tabbar が inert になり topbar は inert にならない。閉じるのはボタン再押下・Escape・scrim クリック・別ルートへの遷移で、閉じると aria-expanded=false・aria-label「メニューを開く」・アイコン menu に戻り menu ボタンへフォーカスが戻る。ボタンは aria-controls=app-sidebar を持ち、sidebar 内に drawer-close は存在しない。右上のアバターボタンは aria-haspopup=menu を持ち、アカウントメニューに表示名と、項目 設定・接続中のアプリ・使い方・ログアウト（この順）がある（アカウント番号は web UI 非表示〔TASK-38 実機再々指摘〕）。ログアウトで POST /api/auth/logout 後ログイン画面へ（ログアウトはこのメニューのみ。設定画面には置かない）。家計簿切替は select でなく LedgerSwitcher（ledger-switch）で、ledger-select は存在しない"
 given = "menu ボタン押下（現在節レシートで .side-link.active あり / active なし） → Escape → 再度押下 → scrim クリック → /stores へ遷移、アカウントボタン押下 → ログアウト"
 expect_return_shape = "menu-button が header.topbar の最初の子で aria-controls=\"app-sidebar\" / 押下で drawer-open・aria-expanded=true・aria-label「メニューを閉じる」・フォーカスが active な side-link（active が無ければ先頭の side-link）/ 開いている間 .main-col と .tabbar に inert・header.topbar に inert なし・drawer-close 要素は存在しない / Escape・scrim クリック・遷移・再押下のいずれでも閉じ、閉じたら aria-expanded=false・aria-label「メニューを開く」・menu-button へフォーカス / アカウントボタンに aria-haspopup=\"menu\"・メニュー項目が 設定・接続中のアプリ・使い方・ログアウト の順・表示名表示（アカウント番号は含まない）・logout 1回・/login へ / ledger-select なし・ledger-switch あり"
 
 [[condition]]
 id = "web-categories.dashboard"
-target_function = "web/pages/CategoriesPage.vue・components/PeriodBar・RankedList・TrendBars・DonutChart・stores/period"
-source = "TASK-14（ユーザー指摘: カテゴリ・店・レシートのページは分析結果を見るページでありダッシュボード性が必須、編集はデフォルトにしない）・docs/spec_mcp-tools.md §10 by_category / monthly_trend"
+target_function = "web/pages/CategoriesPage.vue・RankedList・TrendBars・DonutChart・stores/period（期間の操作は topbar 中央バーの時期チップ〔TASK-44〕）"
+source = "TASK-14（ユーザー指摘: カテゴリ・店・レシートのページは分析結果を見るページでありダッシュボード性が必須、編集はデフォルトにしない）・docs/spec_mcp-tools.md §10 by_category / monthly_trend・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-5（PeriodBar を廃止し期間 UI を topbar 中央バーへ移設。表示の期待値は不変）"
 source_lines = "frontend/tests/unit/web/view-pages.test.ts:33"
 description = "カテゴリ画面は選択期間（既定は今月）の合計・前期比・カテゴリ別（ドーナツと順位）・推移を表示し、大分類を選ぶと小分類の内訳・そのカテゴリの推移・最近のレシートと、期間とカテゴリで絞ったレシート一覧へのリンクを出す。編集操作は無く、管理画面へのリンクのみ"
 given = "今日=2026-10-15 で /categories を開き、食費を選び、前の月へ"
@@ -2334,7 +2334,7 @@ expect_return_shape = "by_category&month=2026-10・合計 948円・食費 550円
 id = "web-stores.dashboard"
 target_function = "web/pages/StoresPage.vue"
 source = "TASK-14（同上）・docs/spec_mcp-tools.md §10 by_store"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:62"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:65"
 description = "店画面は選択期間の店別ランキングを表示し、店を選ぶとその店の推移・買ったもの（カテゴリ別）・店の種別と累計件数・最近のレシートを出す。編集・統合操作は無く、管理画面へのリンクのみ"
 given = "/stores を開き Aマートを選ぶ"
 expect_return_shape = "Aマート 400円・編集操作なし・管理リンク /settings/stores / 買ったものに食費・種別スーパー・推移の見出しが Aマート"
@@ -2343,7 +2343,7 @@ expect_return_shape = "Aマート 400円・編集操作なし・管理リンク 
 id = "web-receipts.dashboard"
 target_function = "web/pages/ReceiptsPage.vue"
 source = "TASK-14（同上）・docs/spec_mcp-tools.md §7-8・§10 monthly_overview / by_payment_method"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:77"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:80"
 description = "レシート画面は選択期間の合計・件数・1件あたり・前期、日別の支出（約2か月以内の期間）、支払方法別、日付ごとの一覧を表示する。絞り込み（店・品名・カテゴリ・削除済み）は折りたたみで、適用中の条件はチップで外せ、URL に残る。編集操作は無い"
 given = "/receipts を開き、品名「牛乳」で絞り込み、条件を外す"
 expect_return_shape = "948円・3 件・316円・日別31本・現金・10月10日（土）見出し・編集操作なし / query.item=牛乳・1 件・102 が消える / 102 が戻る"
@@ -2352,7 +2352,7 @@ expect_return_shape = "948円・3 件・316円・日別31本・現金・10月10�
 id = "web-receipts.dashboard-link-filters"
 target_function = "web/pages/ReceiptsPage.vue・stores/period fromQuery"
 source = "TASK-14（ダッシュボード間のドリルダウン）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:100"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:103"
 description = "他画面からのリンクの from/to（または month / year）・category・store・item を期間と絞り込み条件として引き継ぐ"
 given = "/receipts?from=2026-10-01&to=2026-10-31&category=日用品"
 expect_return_shape = "listReceipts に from/to/category・カテゴリのチップ・日用品のレシートのみ"
@@ -2361,7 +2361,7 @@ expect_return_shape = "listReceipts に from/to/category・カテゴリのチッ
 id = "web-receipts.detail-view-first"
 target_function = "web/components/ReceiptPanel.vue（Feed = ReceiptDetailPage.vue 内の各パネル）"
 source = "TASK-14（ユーザー指摘: 破壊的な編集作業を誘導する UI は事故を招く）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計 画面構成（単票表示・修正・削除・復元を ReceiptPanel へ移す）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:130"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:133"
 description = "Feed 内の各レシートパネルは既定で閲覧表示（入力欄・削除ボタン無し）。修正は「内容を修正」の明示操作で入り、削除は修正モード内の閉じた危険な操作欄にだけある。修正をやめると閲覧表示に戻る"
 given = "/receipts/101 を開き、receipt-panel-101 の範囲で修正に入って、やめる"
 expect_return_shape = "receipt-panel-101 内で合計 400円・edit-form と delete と入力欄なし / edit-form あり・danger-zone は閉じている / edit-form なし"
@@ -2370,7 +2370,7 @@ expect_return_shape = "receipt-panel-101 内で合計 400円・edit-form と del
 id = "web-settings.data-manage-links"
 target_function = "web/pages/settings/DataPanel.vue（データtab）・router /settings children"
 source = "TASK-14（編集は既定にしない: カテゴリ・店の編集は設定 > データの管理へ）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目6（設定は主ナビから外れ右上メニューへ。manage-* は settings 節に含める既存規則を維持）・TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 SettingsPage 行（データの管理にラベルへの導線）・TASK-36 設計 tmp/tasks/tm-36/design_settings-layout.md §3-§4・§10（実機指摘改訂後はデータtab /settings/data の settings-data-* リンクが導線。page-back パンくずは廃止のまま）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:148"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:151"
 description = "カテゴリ・店・ラベルの編集画面は設定の「データ」tab（/settings/data）のリンクから開き、設定節として扱われる（主ナビに設定項目は無いため、トップバー表題「設定」とアカウントメニューの設定項目の aria-current で示す）。manage 画面に page-back パンくずは持たない（戻り導線は tab strip が担い、manage 画面ではデータtab が aria-current=\"page\" になる）。店の統合（元に戻せない操作）は閉じた折りたたみに入っている"
 given = "/settings を開き（redirect で /settings/general に着地）データtab へ遷移し、リンクから店・ラベルの管理へ遷移"
 expect_return_shape = "settings-data-categories の href が /settings/categories（stores・labels も同形）・遷移先に page-back パンくず無し・データtab（settings-tab-data）に aria-current=\"page\"・トップバー表題「設定」・アカウントメニューの設定項目に aria-current=\"page\"・主ナビのどの項目も active でない・merge は閉じた details"
@@ -3317,7 +3317,7 @@ expect_return_shape = "101: listReceipts が from=2026-10-01・to=2026-10-31 で
 id = "web-receipts.recent-links-carry-context"
 target_function = "web/pages/HomePage.vue・StoresPage.vue・CategoriesPage.vue（最近のレシートのリンク）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計 文脈「ホーム・店・カテゴリ画面の『最近のレシート』のリンクは、各画面の期間と絞り込み（店・カテゴリ）を文脈 query として付ける」"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:202"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:205"
 description = "ホーム・店・カテゴリ画面の最近のレシートのリンクは、各画面の選択期間と絞り込み（店画面は店、カテゴリ画面はカテゴリ）を文脈 query として持つ"
 given = "期間 2026-10 でホームを表示 / 店画面で Aマートを選択 / カテゴリ画面で食費を選択"
 expect_return_shape = "各リンクの href が /receipts/<id>?from=2026-10-01&to=2026-10-31（ホーム）/ 同 + store=Aマート（店）/ 同 + category=食費（カテゴリ）"
@@ -3416,7 +3416,7 @@ expect_return_shape = "editor・未削除で canEdit=true / viewer で false / �
 id = "web-shell.menus-stay-on-query-change"
 target_function = "web/App.vue（navKey 監視によるドロワー・メニューの閉じ）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計「App.vue のメニュー閉じ: … 監視対象を navKey = route.name === 'receipt' ? 'receipt' : route.path に変える」・項目2・項目6（閉じ条件は navKey 監視 + 項目クリック時の明示的な close）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:326"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:365"
 description = "右上メニュー・家計簿切替・ドロワーを開いたまま、receipt ルート内の id 変化や query だけの変化があっても閉じない。別ルート（path）への遷移では閉じる。メニュー項目のクリックでは明示的に閉じる"
 given = "/receipts/101 で右上メニューを開き router.replace('/receipts/102?from=..') / /receipts で家計簿切替を開き query のみ変更 / 開いた状態で /stores へ遷移 / メニューの設定項目をクリック"
 expect_return_shape = "id 変化・query 変化ではメニュー・ポップオーバーが開いたまま / /stores 遷移で閉じる / 項目クリックで閉じる"
@@ -3443,7 +3443,7 @@ expect_return_shape = "トリガの aria-label が「家計簿: default book（�
 id = "web-shell.ledger-color-band"
 target_function = "web/App.vue（.shell の --ledger-current・topbar の ledger-scoped）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目3 決定7（トリガのチップ色 + topbar 下端の 3px 色帯、ページ全体のアクセント色は変えない）・実装設計 frontend App.vue / styles.css・TASK-39 設計 tmp/tasks/tm-39/design_atomic-transition.md P3（色帯・チップに transition を付け、切替時のデータ再取得 fade と一体の変化にする）"
-source_lines = "frontend/tests/unit/web/ledger-switcher.test.ts:112, frontend/tests/unit/web/styles.test.ts:310"
+source_lines = "frontend/tests/unit/web/ledger-switcher.test.ts:112, frontend/tests/unit/web/styles.test.ts:341"
 description = "ledgerScoped の画面では topbar に ledger-scoped クラスが付き、.shell に選択中家計簿の --ledger-current（var(--ledger-<key>)）が設定される。ledgerScoped でない画面では ledger-scoped が付かない。styles.css は .topbar.ledger-scoped に --ledger-current の下端色帯を定義する。色帯と LedgerSwitcher のチップ色は切替時に 0.2s で遷移的に変わる（家計簿切替で topbar の色だけが一瞬先に変わる印象を解消。prefers-reduced-motion では即時）"
 given = "選択中家計簿の color='orange' でホームを表示 / /settings を表示。styles.css を読む"
 expect_return_shape = "ホーム: topbar に ledger-scoped、.shell の style に --ledger-current: var(--ledger-orange) / /settings: ledger-scoped なし。styles.css に .topbar.ledger-scoped の box-shadow（inset 0 -3px 0 var(--ledger-current)）と transition: box-shadow 0.2s ease、.ledger-chip に transition: background-color 0.2s ease（reduced-motion 側で none）"
@@ -3452,7 +3452,7 @@ expect_return_shape = "ホーム: topbar に ledger-scoped、.shell の style �
 id = "web-shell.ledger-palette-css"
 target_function = "web/styles.css（--ledger-* 変数）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目3 決定2・14（固定パレットのキー、light / dark で実色差し替え、ラベルの red / yellow / green / blue / purple と色名・色相を重ねない）・並行タスクとの境界（--ledger-* と --label-* を分け互いに参照しない）"
-source_lines = "frontend/tests/unit/web/styles.test.ts:290"
+source_lines = "frontend/tests/unit/web/styles.test.ts:321"
 description = "家計簿パレット6色（teal・orange・pink・brown・slate・graphite）の CSS 変数が :root と dark mode の両方に定義され、ラベル色名の --ledger-* は存在せず、--ledger-* の値が --label-* を参照しない"
 given = "styles.css を読む"
 expect_return_shape = ":root と dark（prefers-color-scheme: dark 側）の両方に --ledger-teal / orange / pink / brown / slate / graphite が定義。--ledger-red / yellow / green / blue / purple は無い。--ledger-* の値に var(--label- が含まれない"
@@ -3461,7 +3461,7 @@ expect_return_shape = ":root と dark（prefers-color-scheme: dark 側）の両�
 id = "web-shell.popover-menu"
 target_function = "web/components/PopoverMenu.vue・web/composables/popover.ts（usePopover）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目3 実装設計 frontend PopoverMenu.vue（トリガ slot + 項目 slot、role=menu、矢印キー移動、Escape・外側クリックで閉じ、閉じたらトリガへフォーカス復帰。LedgerSwitcher と右上メニューで共用）・レビュー指摘#11・TASK-27 設計 tmp/tasks/tm-27/design_shell.md §4-2 実装設計（内部を usePopover に置換。props / slot / 挙動は不変）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:365"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:404"
 description = "PopoverMenu はトリガで開閉し、開くと role=menu の一覧が出る。ArrowDown / ArrowUp で項目間のフォーカスを移し、Escape または外側クリック（pointerdown）で閉じ、閉じるとトリガへフォーカスが戻る。開閉・外側検知・Escape・フォーカス戻しは usePopover（composables/popover.ts）への置換後も同じ期待が通る"
 given = "項目 4 件の PopoverMenu（アカウントメニュー。TASK-37 で使い方が追加）をマウントしトリガをクリック → ArrowDown 2 回・ArrowUp 1 回 → Escape / 再度開いて外側をクリック"
 expect_return_shape = "role=menu が表示・トリガに aria-expanded=true / フォーカスが 1→2→1 番目の項目へ移る / Escape で閉じトリガにフォーカス・aria-expanded=false / 外側クリックで閉じトリガにフォーカス"
@@ -3479,7 +3479,7 @@ expect_return_shape = "ルート span に role=\"img\"・aria-label=\"kakeiboot\
 id = "web-shell.topbar-logo-responsive"
 target_function = "web/App.vue（topbar のロゴ出し分け）・web/styles.css（520px メディアクエリによる出し分け）"
 source = "TASK-27 設計 tmp/tasks/tm-27/design_shell.md §1-2（topbar の出し分けは 520px 以下 compact・それより広い幅は full、CSS は現状を踏襲。2026-10-16 実機確認: topbar 521px 以上の wordmark は word=\"Kakei\" に短縮。ログイン系画面は header の外なので既定の kakeiboot のまま）・§3-3（sidebar 見出しの brand リンクを削除）（旧: TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目4）・テストへの影響（表示切替の実挙動は [[excluded]]）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:409, frontend/tests/unit/web/styles.test.ts:237"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:448, frontend/tests/unit/web/styles.test.ts:268"
 description = "topbar には full と compact のロゴが出し分け用クラス付きで両方存在し、520px 以下で compact・それより広い幅で full が表示される定義が styles.css にある。topbar の full の wordmark は「Kakei」に短縮する（header 内で kakeiboot 全文字は邪魔。word prop で上書き）。compact（520px 以下）は「kb」のまま。sidebar にロゴ（brand リンク）は置かれない"
 given = "ログイン後のホームを表示。styles.css を読む"
 expect_return_shape = "topbar 内に full（出し分けクラス付き。logo-word のテキストは「Kakei」）と compact（別の出し分けクラス付き。logo-word のテキストは「kb」）、sidebar に brand リンク・ロゴが存在しない。styles.css に 520px 境界のメディアクエリで full と compact の表示切替が定義される"
@@ -3506,7 +3506,7 @@ expect_return_shape = "全ての .dash-grid の grid-template-columns に minmax
 id = "web-stores.long-name-no-overflow"
 target_function = "web/pages/StoresPage.vue・components/TrendBars.vue"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目5 実装設計（.sub-row 先頭セルの ellipsis と title、.kpi-sub dd の折返し・2行 clamp と title、TrendBars を .hscroll で包む）・テストへの影響"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:237"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:240"
 description = "長い店名（100 文字）でも店名要素は省略・折返し用のクラスと全文の title を持ち、推移（TrendBars）は .hscroll の中に描画される"
 given = "100 文字の店名を含む by_store 応答で StoresPage を表示し、その店を選ぶ"
 expect_return_shape = "ランキング行の店名要素に省略用クラスと title=全文、kpi-sub の最多店名に clamp 用クラスと title=全文、TrendBars のルートが .hscroll の中にある"
@@ -3768,12 +3768,12 @@ expect_return_shape = "setReceiptLabels が差分 1 回に合成され最終状�
 
 [[condition]]
 id = "web-receipts.label-filter"
-target_function = "web/components/LabelFilter.vue・web/pages/ReceiptsPage.vue（filter-chips・row-labels）"
-source = "TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 ReceiptsPage 行・1-3 A15（docs/spec_mcp-tools.md §12 へ反映）・TASK-26 設計 tmp/tasks/tm-26/design_managed-labels.md 2-4（ツールバー 1 ボタン + popover の LabelToggleGroup。チップは「ラベル」+ LabelChip（sm）で「ラベル: 赤・青」の色名テキストは廃止）"
+target_function = "web/components/TopbarFilterBar.vue（topbar 中央のラベルチップ・dialog）・web/pages/ReceiptsPage.vue（syncQuery・filters.labelColors・watch(period.labelQuery)・filter-chips・row-labels）"
+source = "TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 ReceiptsPage 行・1-3 A15（docs/spec_mcp-tools.md §12 へ反映）・TASK-26 設計 tmp/tasks/tm-26/design_managed-labels.md 2-4（popover 内の LabelToggleGroup。チップは「ラベル」+ LabelChip（sm）で「ラベル: 赤・青」の色名テキストは廃止）・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-3（ラベル変更の伝播と Receipts の URL 双方向同期。置き場所をページ内ツールバーの LabelFilter から topbar 中央のラベルチップへ。labels= URL 同期・L3 規則の期待は不変）・§11-7 条件書計画"
 source_lines = "frontend/tests/unit/web/data-pages.test.ts:308"
-description = "ReceiptsPage の LabelFilter はツールバーの 1 ボタン（未選択は語あり・選択中は語なしで選択色の点）で、押すと PopoverPanel 内の LabelToggleGroup（OR・aria-pressed）+「解除」から選ぶ。選択は URL query labels（カンマ区切り）に同期し、filter-chips は見出し語「ラベル」+ 選択ラベルの LabelChip（sm）+ 解除ボタンを表示する（色名テキストなし）。listReceipts と同ページの getStats（summary・payments・daily）に label_colors を渡す。一覧行の予約要素 row-labels に LabelDots compact（r.labels）が入る"
-given = "red・blue を選択 / チップの解除 / 未選択で一覧を表示"
-expect_return_shape = "URL が labels=red,blue に更新され listReceipts・getStats の引数に label_colors=['red','blue'] / 選択解除で再取得しボタンが語ありに戻る / labels= は付かない。チップに LabelChip（sm）・色名テキストなし。行の row-labels に色ドット（ラベルなし行は空）"
+description = "レシート一覧のラベル絞り込みは topbar 中央バーのラベルチップ（filter-labels）+ dialog 内の LabelToggleGroup（OR・aria-pressed）+「解除」で行う（ページ内ツールバーの LabelFilter は廃止。チップ部品自体の期待は web-labels.filter-button のまま）。選択は URL query labels（カンマ区切り）と双方向に同期する: 中央バーからの変更は watch(period.labelQuery) 内で syncQuery が URL へ反映し、直リンク（labels= 付き URL）で開いた場合は URL から採用した labels を period store へ書き戻す（チップ表示〔未選択〕と実態〔絞り込み中〕の矛盾を防ぐ）。filter-chips は見出し語「ラベル」+ 選択ラベルの LabelChip（sm）+ 解除ボタンを表示する（色名テキストなし）。listReceipts と同ページの getStats（summary・payments・daily）に label_colors を渡す。一覧行の予約要素 row-labels に LabelDots compact（r.labels）が入る"
+given = "topbar のラベル dialog で red・blue を選択 / 条件チップの解除 / labels=red,blue の直リンクで /receipts を開く / 未選択で一覧を表示"
+expect_return_shape = "URL が labels=red,blue に更新され listReceipts・getStats の引数に label_colors=['red','blue'] / 選択解除で再取得しチップが未選択表示に戻る / 直リンクは URL の labels を採用して period store へ書き戻しチップが選択点を示す / labels= は付かない。チップに LabelChip（sm）・色名テキストなし。行の row-labels に色ドット（ラベルなし行は空）"
 
 [[condition]]
 id = "web-receipts.feed-label-context"
@@ -3786,11 +3786,11 @@ expect_return_shape = "listReceipts に label_colors=['red','blue'] が渡り戻
 
 [[condition]]
 id = "web-dashboard.label-filter"
-target_function = "web/stores/period.ts（labelColors）・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue"
-source = "TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 period.ts 行・ラベル絞り込み状態の正（L3）（docs/spec_mcp-tools.md §12 へ反映）・TASK-26 設計 tmp/tasks/tm-26/design_managed-labels.md 2-4（絞り込み UI が 1 ボタン + popover になっても store・URL の規則は不変・ボタン操作に追随）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:265"
-description = "Home・Categories・Stores の LabelFilter（1 ボタン + popover）は period store の labelColors に結合し、getStats と「最近のレシート」の listReceipts に label_colors を渡し、画面をまたいで保持し、ledger 切替で空に戻り、「最近のレシート」のリンクに labels= を含める。ledger 切替のリセット（selectedLedgerId への watch）は flush:'sync' で確定する（各画面の useLedger watcher による再取得より前に必ず走る。両 watcher の実行順はschedulerの木構造uid依存で保証されないため、App.vue の構成変更〔TASK-39 branch Transition 追加〕で反転し旧フィルタで新ledgerへ問い合わせる回帰が発生した）。ReceiptsPage は URL に labels が無ければ period store の値で URL を補い（router.replace・空なら補わない）、URL にあれば URL を優先し、変更（解除含む）を period store に書く。Feed は period store を読まない・書かない"
-given = "Home で red を選び下部タブで /receipts へ遷移 / ReceiptsPage で blue を追加して Home へ戻る / URL 付きで Feed を開く / ledger を切替える"
+target_function = "web/stores/period.ts（labelColors）・web/components/TopbarFilterBar.vue（topbar 中央のラベルチップ・dialog）・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue（watch(period.labelQuery)）"
+source = "TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 period.ts 行・ラベル絞り込み状態の正（L3）（docs/spec_mcp-tools.md §12 へ反映）・TASK-26 設計 tmp/tasks/tm-26/design_managed-labels.md 2-4（絞り込み UI の中身は不変・store・URL の規則は不変）・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-3・§11-6（置き場所を topbar 中央のラベルチップへ移設。state の正本は period store のまま。各ページへ watch(period.labelQuery) を追加し既存の watch(period.range) と同じ経路で再取得）・§11-7 条件書計画"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:268"
+description = "ラベル絞り込みは topbar 中央バーのラベルチップ（filter-labels。dialog の中身は web-browse.filter-dialogs・部品は web-labels.filter-button）で period store の labelColors に結合し、getStats と「最近のレシート」の listReceipts に label_colors を渡し、画面をまたいで保持し、ledger 切替で空に戻り、「最近のレシート」のリンクに labels= を含める（中央バーが書くのは period store〔setLabelColors〕だけで、各ページは watch(period.labelQuery) で受け取る）。ledger 切替のリセット（selectedLedgerId への watch）は flush:'sync' で確定する（各画面の useLedger watcher による再取得より前に必ず走る。両 watcher の実行順はschedulerの木構造uid依存で保証されないため、App.vue の構成変更〔TASK-39 branch Transition 追加〕で反転し旧フィルタで新ledgerへ問い合わせる回帰が発生した）。ReceiptsPage は URL に labels が無ければ period store の値で URL を補い（router.replace・空なら補わない）、URL にあれば URL を優先し、変更（解除含む）を period store に書く。Feed は period store を読まない・書かない"
+given = "Home 表示中に topbar のラベル dialog で red を選び下部タブで /receipts へ遷移 / ReceiptsPage で blue を追加して Home へ戻る / URL 付きで Feed を開く / ledger を切替える"
 expect_return_shape = "URL が labels=red で補われる / Home の getStats・listReceipts に label_colors=['red','blue'] が保持 / Feed の listReceipts は URL の labels のみ / labelColors が空に戻る"
 
 [[condition]]
@@ -4292,18 +4292,18 @@ expect_return_shape = "ファイル内に var( が無い。#e3f2e7 と #2e9a5e �
 
 [[condition]]
 id = "web-shell.topbar-title-ellipsis"
-target_function = "web/styles.css（.topbar-title・.topbar-title-text・.topbar-title .icon）"
-source = "TASK-27 設計 tmp/tasks/tm-27/design_shell.md §2-1（表題は 1 行 ellipsis。現状の overflow-wrap: anywhere による折り返しをやめる）・§6 topbar・TASK-35 設計 tmp/tasks/tm-35/design_title-icon.md §3（表題アイコン併記に伴い .topbar-title を flex 化し nowrap / ellipsis を .topbar-title-text へ移動、.topbar-title .icon に flex: none）（docs/spec_mcp-tools.md §12 へ反映）"
+target_function = "web/styles.css（.topbar-title・.topbar-title-text・.topbar-title .icon・帯別の表題出し分け media query〔max-width: 360px / 390px〕）"
+source = "TASK-27 設計 tmp/tasks/tm-27/design_shell.md §2-1（表題は 1 行 ellipsis。現状の overflow-wrap: anywhere による折り返しをやめる）・§6 topbar・TASK-35 設計 tmp/tasks/tm-35/design_title-icon.md §3（表題アイコン併記に伴い .topbar-title を flex 化し nowrap / ellipsis を .topbar-title-text へ移動、.topbar-title .icon に flex: none）（docs/spec_mcp-tools.md §12 へ反映）・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-4（topbar 中央にチップを置くため表題を帯別に出し分け: 〜360px 表題なし〔U10〕・361〜390px icon のみ・391px〜 icon＋テキスト。境界の実測は web-shell.topbar-title-breakpoints-real）・§11-7 条件書計画（TASK-44 側で自ら改訂）"
 source_lines = "frontend/tests/unit/web/styles.test.ts:116"
-description = "topbar のページ表題は 1 行に制限し、収まらない分は ellipsis で切り詰める（折り返して topbar の高さを崩さない）。アイコン併記（TASK-35）により表題は icon + テキスト（.topbar-title-text）の flex 行で、アイコンは縮まずテキスト側が ellipsis になる"
+description = "topbar のページ表題は 1 行に制限し、収まらない分は ellipsis で切り詰める（折り返して topbar の高さを崩さない）。アイコン併記（TASK-35）により表題は icon + テキスト（.topbar-title-text）の flex 行で、アイコンは縮まずテキスト側が ellipsis になる。表題は幅帯で出し分けする（TASK-44: 〜360px は表題ごと非表示〔ホームと同じ〕・361〜390px は icon のみでテキスト非表示・391px〜 は icon＋テキスト。既存の 520px ロゴ・900px と同じ media query 運用）"
 given = "frontend/src/web/styles.css を読む"
-expect_return_shape = ".topbar-title に display: flex・gap: 0.375rem・min-width: 0・overflow: hidden が定義され、子の .topbar-title-text に white-space: nowrap・overflow: hidden・text-overflow: ellipsis・min-width: 0、.topbar-title .icon に flex: none がある。overflow-wrap: anywhere は無い"
+expect_return_shape = ".topbar-title に display: flex・gap: 0.375rem・min-width: 0・overflow: hidden が定義され、子の .topbar-title-text に white-space: nowrap・overflow: hidden・text-overflow: ellipsis・min-width: 0、.topbar-title .icon に flex: none がある。overflow-wrap: anywhere は無い。max-width: 390px の media query に .topbar-title-text の display: none があり、max-width: 360px の media query に .topbar-title の display: none がある"
 
 [[condition]]
 id = "web-shell.menu-btn-always-visible"
 target_function = "web/styles.css（.menu-btn）"
 source = "TASK-33 実機追加指摘（desktop でも sidebar を閉じたい）・tmp/tasks/tm-27/design_shell.md §3（実機指摘改訂: menu ボタンは全幅で常時表示し、900px 以上でも同じ overlay の開閉に使う）"
-source_lines = "frontend/tests/unit/web/styles.test.ts:215"
+source_lines = "frontend/tests/unit/web/styles.test.ts:246"
 description = "menu ボタンはどの幅でも非表示にされない（旧 desktop での display:none は廃止）。900px 以上でも同じ menu ボタンで sidebar overlay を開閉する（旧 desktop 折りたたみの .sidebar-collapsed・grid 列切替・display:none は廃止。詳細は web-shell.sidebar-overlay）、899px 以下の drawer 挙動（scrim・inert・フォーカス）は従来どおり"
 given = "frontend/src/web/styles.css を読む"
 expect_return_shape = "top-level の .menu-btn 規則に display の定義が無い（非表示にしない）。899px 以下の media query 内の .menu-btn に width: 44px・height: 44px がある。sidebar-collapsed の規則が css 内に存在しない"
@@ -4312,7 +4312,7 @@ expect_return_shape = "top-level の .menu-btn 規則に display の定義が無
 id = "web-shell.sidebar-overlay"
 target_function = "web/App.vue（drawerOpen・isDesktop・drawerModal・toggleMenu・closeDrawer）・web/styles.css（.sidebar・.shell-body・.scrim）"
 source = "TASK-33 実機指摘（sidebar の開閉にアニメーションが無い・sidebar の出し入れで main の位置が変わるのはおかしい）・tmp/tasks/tm-27/design_shell.md §3（再改訂: desktop 折りたたみの grid 列切替を廃止し overlay に統一）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:296, frontend/tests/unit/web/styles.test.ts:184"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:335, frontend/tests/unit/web/styles.test.ts:215"
 description = "sidebar は全幅で常時 fixed overlay で、開閉は transform: translateX(-100%) ↔ none の slide（transition 0.2s・prefers-reduced-motion で無効）で行う。.shell-body は main 1列のみ（grid 列切替・display:none・sidebar-collapsed は廃止。main は常に全幅で位置不変）。desktop（900px 以上）は初期 open で menu ボタンでのみ開閉し、open 時も scrim 無し・.main-col/.tabbar は inert にしない・html に drawer-lock を付けない・ナビゲーション遷移でも Escape でも閉じない。899px 以下は従来の modal drawer（scrim・inert・Escape・フォーカス管理・drawer-lock）"
 given = "matchMedia('(min-width: 900px)') を true にして App を mount し menu ボタン・nav link・Escape を押す。frontend/src/web/styles.css を読む"
 expect_return_shape = "mount 直後 .shell に drawer-open があり .main-col・.tabbar は inert でなく html に drawer-lock が無い。nav link 押下・Escape でも drawer-open が外れず menu ボタン押下でのみ外れる / styles.css の .sidebar（top-level）に position: fixed・transform: translateX(-100%)・transition: transform 0.2s ease、.drawer-open .sidebar に transform: none、.shell-body に grid-template-columns: minmax(0, 1fr)、sidebar-collapsed が無く、.drawer-open .scrim の display: block が899px 以下の media query 内のみ、reduced-motion で .sidebar の transition: none"
@@ -4321,7 +4321,7 @@ expect_return_shape = "mount 直後 .shell に drawer-open があり .main-col�
 id = "web-shell.drawer-below-topbar"
 target_function = "web/App.vue（shell のテンプレート構造）・web/styles.css（.topbar・.sidebar・.scrim の top と z-index）"
 source = "TASK-27 設計 tmp/tasks/tm-27/design_shell.md §3-2（S2: 全幅 topbar + その下に sidebar）・§3-3 実装設計（テンプレート・CSS）・decisions_user.md（左sidebarはheaderに重ならずheaderの下に展開）・TASK-33 実機指摘（sidebar を全幅で fixed overlay へ統一）（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/styles.test.ts:149"
+source_lines = "frontend/tests/unit/web/styles.test.ts:180"
 description = "topbar は .main-col の外（.shell 直下）の全幅 sticky で、sidebar（全幅帯で fixed overlay）と mobile の scrim は topbar の下端（var(--topbar-h)）から下にだけ展開する。topbar の z-index は sidebar・scrim より大きい（topbar が覆われない）"
 given = "frontend/src/web/App.vue のテンプレートと styles.css を読む"
 expect_return_shape = "header.topbar が .main-col の外側（.shell 直下）にあり、top-level の .sidebar の top が var(--topbar-h) で position: fixed、899px 以下の .drawer-open .scrim の top が var(--topbar-h)。.topbar の z-index が .sidebar と .scrim の z-index より大きい"
@@ -4330,7 +4330,7 @@ expect_return_shape = "header.topbar が .main-col の外側（.shell 直下）�
 id = "web-shell.nav-open-state-on-resize"
 target_function = "web/App.vue（matchMedia('(min-width: 900px)') の change 監視・drawerOpen・isDesktop・drawerModal・toggleMenu）"
 source = "TASK-33 実機追加指摘（desktop でも sidebar を閉じたい）・tmp/tasks/tm-27/design_shell.md §3（実機指摘改訂: 開閉状態を維持。900px 越えで drawer を閉じる処理は削除）・TASK-33 実機指摘（overlay 統一により単一の drawerOpen 状態へ）"
-source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:254"
+source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:293"
 description = "ナビの開閉状態（単一の drawerOpen）は viewport 変化（双方向）で維持される。mobile で drawer を開いたまま 900px 以上へリサイズすると開いたまま desktop の overlay になり、mobile 専用の modal 効果（.main-col/.tabbar の inert・html.drawer-lock・scrim）だけ解ける（逆方向も開閉状態は維持され、開いていれば modal drawer として開いたまま）。desktop では同じ menu ボタンで overlay を閉じ（slide-out）・再度開ける。desktop は初期 open"
 given = "drawer を開いた状態で matchMedia('(min-width: 900px)') の change リスナーを発火させ、その後 menu ボタンを2回押し、再度 change リスナーを逆方向に発火させる"
 expect_return_shape = "resize 後も .shell の drawer-open が維持され .main-col・.tabbar の inert と html.drawer-lock が解かれる / menu ボタン押下で drawer-open が外れ aria-expanded=false・aria-label「メニューを開く」、再押下で付き aria-expanded=true・aria-label「メニューを閉じる」 / 逆方向の resize で drawer-open が維持され inert と drawer-lock が戻る"
@@ -4637,7 +4637,7 @@ expect_return_shape = "router.ts に () => import( の記述が無い・helpers.
 id = "web-shell.page-transition"
 target_function = "web/App.vue（showShell の v-if/v-else branch 切替を包む外側・shell 内・public 内の両 RouterView）・web/pages/SettingsPage.vue（設定tab の内側 RouterView）・web/pages/settings/AuthPanel.vue（単一root）・web/styles.css（.page-*・.msg・reduced-motion）"
 source = "TASK-39 ユーザー追加指摘（アニメーションがなく突然の変化が多い）・設計 tmp/tasks/tm-39/design_atomic-transition.md P5・対策C（docs/spec_mcp-tools.md §12 へ反映）・TASK-39 実機再指摘（設定tab 切替にアニメーションが効いていない。AuthPanel が複数root のため Transition が skip）・TASK-39 実機follow-up（ログイン直後にアニメーションなしで画面が突然表示される: login→home は showShell の v-if/v-else branch 切替を伴い、branch 切替には Transition が無かった）"
-source_lines = "frontend/tests/unit/web/styles.test.ts:251, frontend/tests/unit/web/transition.test.ts:59, frontend/tests/unit/web/transition.test.ts:104, frontend/tests/unit/web/transition.test.ts:167, frontend/tests/unit/web/transition.test.ts:198"
+source_lines = "frontend/tests/unit/web/styles.test.ts:282, frontend/tests/unit/web/transition.test.ts:59, frontend/tests/unit/web/transition.test.ts:104, frontend/tests/unit/web/transition.test.ts:167, frontend/tests/unit/web/transition.test.ts:198"
 description = "App.vue の RouterView（shell 内・public 内の両方）と SettingsPage の内側 RouterView（設定の水平tab は子route 切替のため）は name=\"page\"・mode=\"out-in\" の Transition で component :is（route key 付き）を包む。login→home（logout・401 はその逆）は showShell による v-if/v-else の branch 切替（shell と public のlayout 入れ替え）を伴い内側 RouterView の Transition は発火しないため、branch 切替自体も同じ name=\"page\"・mode=\"out-in\" の Transition で v-if/v-else の外側を包む（両branch のroot は div.shell・main.public の単一root）。内側の切替が実挙動としてアニメーションするには切替成分が単一root element であることも必要: AuthPanel の3カードは1つの div（.settings-panel）にまとめ、component :is には route key を付ける（同名 component を使い回す切替でも remount させる）。複数root の panel は fragment のため Transition は class 付与を丸ごと skip する（Vue は \"renders non-element root node that cannot be animated\" を警告）— 実機再指摘の「設定tab 切替にアニメーションがない」はこれが原因だった。ページ遷移は opacity + 8px の translateY の 0.2s ease の fade/slide で、prefers-reduced-motion: reduce では無効化する（transition-duration 0s・transform none）。.msg（エラー・情報メッセージ）とコピー完了表示は v-if で挿入されたとき 0.16s の fade-in（@keyframes bb-fade-in。reduced-motion では none）で出現する。popover・drawer の開閉機構は既存のまま変えない"
 given = "ページ遷移・設定tab 切替・login→home / logout のbranch 切替・エラー/コピー完了の出現（reduced-motion あり/なし）。App.vue・SettingsPage.vue・AuthPanel.vue・styles.css の source と、設定tab・branch 切替を実際に切替えた mount"
 expect_return_shape = "App.vue に name=\"page\" + mode=\"out-in\" の Transition が3箇所（branch 切替を包む外側1 + shell/public 両 RouterView 2。外側が v-if=\"showShell より前）・SettingsPage.vue に1箇所（RouterView v-slot）で component :is に :key（route.name）付き・AuthPanel.vue は単一root（div.settings-panel）・設定tab 切替（general→auth・auth→general）と branch 切替（login→home・logout の replace→clear）で離れる側の root に page-leave-active・page-leave-from class が付き（jsdom は stylesheet 無しのため inline transition-duration で観測）out-in により次の panel・branch は leave 完了後に mount・旧 root は除去される・離れる branch の中身は切替前の画面のまま（login→home で home が旧branch 内に二重mount せず home の stats fetch は1回のみ）・全tab と manage 画面の切替で cannot be animated 警告なし / styles.css の .page-enter-active が opacity と transform の 0.2s ease・.page-enter-from が opacity 0 + translateY(8px)・.page-leave-to が opacity 0・prefers-reduced-motion 内で .page-* の transition-duration 0s と transform none・.msg が bb-fade-in 0.16s ease（reduced で animation none）"
@@ -4646,7 +4646,7 @@ expect_return_shape = "App.vue に name=\"page\" + mode=\"out-in\" の Transitio
 id = "web-shell.loading-skeleton"
 target_function = "web/components/DashSkeleton.vue・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue・AppsPage.vue（初回 loading と再取得）・web/styles.css（.skeleton・.sr-only）"
 source = "TASK-39 設計 tmp/tasks/tm-39/design_atomic-transition.md P2・対策D（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:56, frontend/tests/unit/web/styles.test.ts:275, frontend/tests/unit/web/view-pages.test.ts:109"
+source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:93, frontend/tests/unit/web/styles.test.ts:306, frontend/tests/unit/web/view-pages.test.ts:112"
 description = "主要データ画面（ホーム・カテゴリ・店・レシート一覧）の初回 loading は dash-grid と同形状の skeleton（DashSkeleton.vue。CSSのみ・.skeleton class・単色で shimmer なし・出現時に 0.2s の fade-in）で統一し、1行テキスト「読み込んでいます...」を出さない。小さい一覧（接続中のアプリ）も同一の .skeleton block（最小の card）で揃える（公開の認証画面〔同意・登録〕は dash-grid 系でなく対象外）。skeleton の装飾 block は aria-hidden=\"true\" とし、.sr-only の「読み込んでいます...」で読み上げは維持する。再取得（月切替・家計簿切替・絞り込み）は既存データを .dash-grid.loading（opacity 0.6）で薄めて残す二段描画のまま（skeleton に戻さない。レシート一覧は初回完了フラグ loaded で切替え、スクロール復帰の lookup はフラグ確定の後）"
 given = "データ未取得で /・/categories・/stores・/receipts・/apps を開く / 読込完了後に月を切替える。styles.css を読む"
 expect_return_shape = "初回は data-test=\"loading\" の .skeleton（aria-hidden=\"true\"・.sr-only に「読み込んでいます...」）で kpi・summary・grant 行等の実データを描かない / 完了後に skeleton が消え実データ / 再取得中は .dash-grid に loading class が付き skeleton に戻らない / styles.css に .skeleton .sk（var(--bb-surface-2) の単色）と .sr-only があり reduced-motion 側で animation none"
@@ -4738,11 +4738,11 @@ expect_return_shape = "107 が表示中になり窓が [3,7] へ展開（108 が
 
 [[condition]]
 id = "web-layout.page-width-fits-viewport"
-target_function = "web/pages/（HomePage・CategoriesPage・StoresPage・ReceiptDetailPage）と web/styles.css の全体レイアウト（min-width: 0・minmax(0)・.hscroll）"
-source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 3・docs/spec_mcp-tools.md §12 画面骨格の段（旧: tmp/tasks/tm-16/design_ui-feedback.md 項目5 テストへの影響。旧 excluded の「§2-2 の幅配分（padding・gap・各要素幅・360px の固定分計算）の実測」は数値定数が分岐を持たないため本条件の横方向溢れ検査と capture 撮影で代替）"
+target_function = "web/pages/（HomePage・CategoriesPage・StoresPage・ReceiptDetailPage）と web/styles.css の全体レイアウト（min-width: 0・minmax(0)・.hscroll・topbar の .topbar-filters）"
+source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 3・docs/spec_mcp-tools.md §12 画面骨格の段（旧: tmp/tasks/tm-16/design_ui-feedback.md 項目5 テストへの影響。旧 excluded の「§2-2 の幅配分（padding・gap・各要素幅・360px の固定分計算）の実測」は数値定数が分岐を持たないため本条件の横方向溢れ検査と capture 撮影で代替）・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-4（topbar 中央バー導入後の 360px 積算 約336〜348px〔1a 過渡状態〕）・§11-7（表示対象に topbar のチップ構成を含む前提へ見直し）"
 source_lines = "frontend/tests/browser/verify.spec.ts:168"
-description = "主要画面（ホーム・カテゴリ・店・レシートフィード）は狭幅（360・390px）と 768px で横方向の溢れを生じない"
-given = "360・390・768px の viewport で /・/categories?month=2026-10・/stores?month=2026-10・/receipts/101 を表示（chromium）"
+description = "主要画面（ホーム・カテゴリ・店・レシートフィード）は狭幅（360・390px）と 768px で横方向の溢れを生じない。topbar の絞り込みチップ構成（第1段a は時期・ラベルの2チップ。§11-4 の積算）を表示に含む"
+given = "360・390・768px の viewport で /・/categories?month=2026-10・/stores?month=2026-10・/receipts/101 を表示（chromium・topbar に時期・ラベルのチップが表示された状態）"
 expect_return_shape = "全画面 × 全幅で document.documentElement.scrollWidth <= clientWidth"
 
 [[condition]]
@@ -4771,6 +4771,64 @@ source_lines = "frontend/tests/browser/verify.spec.ts:261"
 description = "topbar の高さと表題の font-size は 899px 境界で実効切替する（899px 以下: --topbar-h 56px・表題 1rem / 900px 以上: 60px・1.15rem）"
 given = "899px と 900px の viewport で /receipts（表題あり）を表示（chromium）"
 expect_return_shape = "899px: :root の --topbar-h=56px・.topbar の高さ 56px・.topbar-title の font-size 16px / 900px: --topbar-h=60px・高さ 60px・font-size 18.4px（誤差 0.5px 以内）"
+
+# ---------------------------------------------------------------------------
+# TASK-44 topbar 中央の compact 絞り込みバー（第1段a。時期・ラベルの2チップを topbar 中央に常時表示し、
+# 押下で開く小 dialog（PopoverPanel 再利用）で編集。PeriodBar を廃止してページ内ツールバーを1行化し、
+# Home の月送りは時期チップへ。第1段b〔TASK-41 の /search とセット〕で検索チップ filter-search と
+# web-search.topbar-entry が加わる〔§11-7。本更新には含めない〕）。
+# 正本は tmp/tasks/tm-28/design_browsing.md §11（改訂3: 設計レビュー19件反映済み。§11-7 が条件書計画）。
+# docs への反映先は docs/spec_mcp-tools.md §12（画面骨格の topbar 中央絞り込みバー〔§11-9〕）。
+# 既存更新（元の位置）: web-receipts.label-filter・web-dashboard.label-filter・web-home.dashboard-month-switch・
+# web-layout.page-width-fits-viewport・web-shell.topbar-title-ellipsis・web-categories.dashboard（target_function の
+# PeriodBar を時期チップへ。§11-7 追加分）。web-period.* は §1 実装時に新設（操作経路が PeriodBar → 時期 dialog に
+# 変わるだけで期待は不変）。実装・テストコード・[covers:<id>] タグは後続フェーズのため、本時点で新設5条件が
+# uncovered で source_lines が空（ダミー）なのは想定内（テストコード作成後に verify-conditions.py が自動 sync する）。
+
+[[condition]]
+id = "web-browse.topbar-filter-bar"
+target_function = "web/components/TopbarFilterBar.vue・web/App.vue（topbar 内 div.topbar-filters・v-if）・web/router.ts（route.meta filters）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-3（配置・出すページ・チップ仕様）・§11-4（時期チップの帯別ラベル）・§11-6（App.vue の v-if は route.meta.filters と未参加判定の組み合わせ）・§11-7 条件書計画（期待は段で分割: 1a は時期・ラベルの2チップ、1b〔TASK-41 /search とセット〕で検索チップ filter-search が加わり search を含む全閲覧系で3チップ）"
+source_lines = "frontend/tests/unit/web/filter-bar.test.ts:65, frontend/tests/unit/web/filter-bar.test.ts:129, frontend/tests/unit/web/styles.test.ts:158"
+description = "閲覧系ルート（home / receipts / receipt〔Feed〕/ categories・category・subcategory・category-uncategorized / stores・store。1b で search を追加）の topbar 中央（表題の直後・topbar-actions の前）に時期・ラベルの2チップが常時表示される。出すページは route.meta の filters: true（列挙した閲覧ルートのみに設定し ledgerScoped 判定と共通化しない）と未参加判定（閲覧できる家計簿が無い間は出さない）の組み合わせで、管理系（manage-*）・apps・usage・公開画面には出ない。各チップは高さ 36px・最小タップ領域 44px（padding で確保）・pill・背景 surface-2・選択中（絞り込みが効いている）は accent 枠で、data-test は filter-period / filter-labels。時期チップは現在の期間ラベル（period.label / labelShort。899px 以下は短縮〔月「10月」・年「26年」・範囲「10/3〜」〕・900px 以上はフル〔「2026年10月」等〕。範囲指定中は「〜」付き。帯別の出し分けは labelShort とフルラベルの2要素を CSS media query で切替）を示し、ラベルチップは未選択で tag アイコンのみ（44px 正方）・選択中は選択色の点のみ（521px 以上は tag アイコン＋点）を示す。aria-label は時期「期間で絞り込み: 2026年10月」・ラベル「ラベルで絞り込み: 旅行、ラベル2」（labelAriaList）。ラッパー div.topbar-filters が margin-left: auto を担う（topbar-actions から移設）"
+given = "route.meta.filters を付けた閲覧ルート（/・/receipts・/categories・/stores・/receipts/101）と filters 無し（/settings・/settings/categories〔manage-*〕・/apps・/usage・公開ルート）を mount / 家計簿に未参加 / 時期を 2026年10月（month）・ラベル red（名前「旅行」）選択"
+expect_return_shape = "閲覧系の topbar に .topbar-filters（表題より後・topbar-actions より前）内の filter-period・filter-labels が存在し filter-search は無い（1a）/ filters 無しルートと未参加では .topbar-filters が存在しない / filter-period に labelShort「10月」とフルラベル「2026年10月」の両要素があり aria-label「期間で絞り込み: 2026年10月」/ filter-labels は未選択で tag アイコン・選択中で選択色の点（aria-label に「旅行」）/ 各チップが .filter-chip-btn を持ち styles.css に高さ 36px・タップ領域 44px・pill・選択中 accent 枠の規則が定義される"
+
+[[condition]]
+id = "web-browse.filter-dialogs"
+target_function = "web/components/TopbarFilterBar.vue（時期・ラベル dialog）・web/components/PeriodPicker.vue（時期 dialog の中身。PeriodBar から置換）・web/components/LabelFilter.vue（topbar サイズのラベルチップ）・web/components/PopoverPanel.vue（既存部品の再利用）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-3（dialog 仕様: すべて PopoverPanel・role=dialog・外側押下と Escape で閉じ・チップへフォーカス戻し。時期は variant=sheet-narrow〔480px 以下でシート〕・ラベルは anchored）・§11-6（PeriodPicker 新設〔現行 PeriodBar のスクリプトを流用〕・PeriodBar 削除・各ページ watch(period.labelQuery)）・§11-7 条件書計画（時期・ラベルの dialog は 1a・検索の dialog は 1b で有効化）"
+source_lines = "frontend/tests/unit/web/filter-bar.test.ts:139, frontend/tests/unit/web/filter-bar.test.ts:196, frontend/tests/unit/web/filter-bar.test.ts:232, frontend/tests/unit/web/filter-bar.test.ts:256, frontend/tests/unit/web/filter-bar.test.ts:335, frontend/tests/unit/web/filter-bar.test.ts:350"
+description = "各チップ押下で PopoverPanel（role=dialog）が開く（aria-expanded / aria-controls は trigger slot 経由。z-index は .popover-dialog 41 > topbar 40 の既存のまま）。時期 dialog の中身は PeriodPicker で、タブ「月｜年｜期間」の mode 切替と ‹ › の送りは即時反映（dialog は開いたままチップの表示が変わり、ページの再取得は既存の watch(period.range) 経由。Home は月固定のためタブは「月」のみ）、期間モードは date 2つ＋「表示」ボタンの押下でのみ確定する（入力中は未確定）。ラベル dialog の中身は LabelToggleGroup＋「解除」で、変更は即時に period.setLabelColors へ出て各ページの watch(period.labelQuery) で再取得され、Receipts は labels= URL も更新する（伝播の期待は web-dashboard.label-filter / web-receipts.label-filter）。外側押下・Escape で閉じてトリガのチップへフォーカスが戻る。dialog 開いたままの別ルートへの遷移でも dialog は閉じる（Feed 内の URL replace〔スクロール同期〕は遷移ではないため閉じない）"
+given = "時期チップを押してタブ「年」へ切替・‹ › を押す / 期間モードで date を入力し「表示」押下の前後 / ラベルチップを押して red をトグルし「解除」を押す / Escape・外側 pointerdown"
+expect_return_shape = "dialog が role=dialog で開きトリガチップに aria-expanded=true / タブ切替・step が即時に period store と時期チップの表示へ反映され dialog は閉じない（ページは watch(period.range) で再取得）/ 「表示」を押すまで from/to は store に反映されない / red のトグルで period.setLabelColors(['red']) が呼ばれ各ページが再取得され Receipts の URL が labels=red に / 解除で選択が空になり未選択表示へ / Escape・外側押下で dialog が閉じ aria-expanded=false になりトリガチップへフォーカス"
+
+[[condition]]
+id = "web-layout.toolbar-one-row"
+target_function = "web/pages/ReceiptsPage.vue（1行のページ内ツールバー: 絞り込みボタン＋条件チップ）・web/pages/HomePage.vue・web/styles.css（.page-toolbar の 720px column 化の削除。BrowseToolbar 部品化は後続段階の構成）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §6-3（移設後: ページ内ツールバーは絞り込みボタン＋条件チップの1行）・§11-1（U12: PeriodBar 廃止）・§11-5（BrowseToolbar の縮小と各ページでの適用）・§11-7 条件書計画（jsdom ではクラスの構成と要素の順序だけを確かめる。寸法〔360/390px で高さ 44px 以下・横スクロールなし〕は web-layout.page-width-fits-viewport の実測側）"
+source_lines = "frontend/tests/unit/web/filter-bar.test.ts:288"
+description = "ページ内ツールバーは1行で、絞り込みボタン（レシート一覧のみ）＋条件チップ（FilterChips）＋slot menu のみを担う（「…」は TASK-45 が追加するもので TASK-44 では置かない）。PeriodBar 相当の期間 UI（mode タブ・‹ › の月送り）とページ内のラベル絞り込みボタン（LabelFilter）は本文から無くなり（topbar 中央バーへ移設）、.page-toolbar の 720px column 化（2行設計）は削除される。Home にはページ内ツールバーを置かない（月送りは topbar の時期チップから。TrendBars の棒押下 setMonth は store を動かしチップに即時反映）。categories・stores の一覧と詳細にもページ内ツールバーを置かない（「…」のみの1行は TASK-45）"
+given = "/receipts と /・/categories・/stores を開きページ内ツールバーの構成（クラスと要素の順序）を読む"
+expect_return_shape = "/receipts のツールバーが1行で絞り込みボタン + filter-chips が並び期間 UI（mode 切替・‹ ›）とラベル絞り込みボタンが存在しない / Home・Categories・Stores にページ内ツールバー（PeriodBar・LabelFilter 相当）が存在しない / styles.css に .page-toolbar の 720px media query の column 化が無い"
+
+[[condition]]
+id = "web-shell.topbar-title-breakpoints-real"
+target_function = "web/App.vue（topbar 表題）・web/styles.css（@media (max-width: 360px / 390px) の表題出し分け）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-4（表題の扱い〔U10〕: 〜360px 表題なし・361〜390px icon のみ・391px〜 icon＋テキスト〔ellipsis〕。実装は既存の 520px・900px と同じ media query 運用）・§11-7（TASK-19 体系の -real 系条件として境界を実測）"
+source_lines = "frontend/tests/browser/verify.spec.ts:300"
+description = "topbar 表題の出し分けは 360px と 390px の境界で実効切替する（〜360px: 表題ごと非表示〔ホームと同じ〕/ 361〜390px: icon のみでテキストは非表示 / 391px〜: icon＋テキスト）。第1段a の時期・ラベル2チップ構成でも表題とチップがともに欠けない"
+given = "360・361・390・391px の viewport で /receipts（表題ありの閲覧系）を表示（chromium）"
+expect_return_shape = "360px: .topbar-title の computed display=none / 361px・390px: .topbar-title が可視で .topbar-title-text の display=none・.topbar-title .icon が可視（box 幅 > 0）/ 391px: .topbar-title-text が可視（computed display が none 以外）"
+
+[[condition]]
+id = "web-browse.filter-period-label-widths-real"
+target_function = "web/components/TopbarFilterBar.vue（時期チップの labelShort / フルラベル両要素）・web/styles.css（〜899px の max-width 56px・900px の切替）・web/stores/period.ts（labelShort）"
+source = "TASK-44 統合の正本 tmp/tasks/tm-28/design_browsing.md §11-4（短縮ラベルの規則〔月「10月」・年「26年」・範囲「10/3〜」〕・フルラベルの帯は 900px 以上〔中間帯は設けず既存の 899/900px 境界に揃える〕・フルラベル幅 90〜100px と固定分約 424px は見積のため実測で確認）・§11-7（-real 系条件）"
+source_lines = "frontend/tests/browser/verify.spec.ts:349, frontend/tests/browser/verify.spec.ts:402"
+description = "時期チップは 899px 以下で短縮ラベル（labelShort）・900px 以上でフルラベル（「2026年10月」等）が実効表示される。899px 以下では時期チップの幅は max-width 56px（ellipsis）に収まり、900px 以上のフルラベルの実測幅が見積（90〜100px 程度）から外れないことを確認する"
+given = "899px と 900px の viewport で /receipts（2026年10月・month モード）を表示（chromium）"
+expect_return_shape = "899px: 短縮ラベル要素（「10月」）が可視でフルラベル要素の display=none・filter-period の boundingBox 幅が 56px 以下（許容 1px）/ 900px: フルラベル要素（「2026年10月」）が可視で短縮ラベル要素の display=none・フルラベルの実測幅が約 90〜100px"
 
 # ---------------------------------------------------------------------------
 # TASK-49 直リンク初期スクロール（TASK-19 §2-8(a) の発見を条件化）。

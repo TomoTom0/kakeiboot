@@ -50,7 +50,10 @@ describe('CategoriesPage (dashboard)', () => {
     const link = detail.find('[data-test="detail-receipts"]').attributes('href')!
     expect(decodeURIComponent(link)).toBe('/receipts?from=2026-10-01&to=2026-10-31&category=食費')
 
-    // the previous month has no records
+    // the previous month has no records (the period moves via the topbar's
+    // period chip now; the page's own PeriodBar is gone, TASK-44 §11-5)
+    await wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
@@ -255,10 +258,10 @@ describe('StoresPage long names (TASK-16)', () => {
   })
 })
 
-describe('Dashboard label filter (TASK-17/26)', () => {
-  /** Open the current screen's label filter popover (the toggles live in it). */
-  async function openFilter(wrapper: Awaited<ReturnType<typeof mountApp>>['wrapper']): Promise<void> {
-    await wrapper.find('[data-test="label-filter-button"]').trigger('click')
+describe('Dashboard label filter (TASK-17/26/44)', () => {
+  /** Open the topbar label chip's dialog (the toggles live in it, TASK-44). */
+  async function openFilter(wrapper: W): Promise<void> {
+    await wrapper.find('[data-test="filter-labels"]').trigger('click')
     await settle()
   }
 

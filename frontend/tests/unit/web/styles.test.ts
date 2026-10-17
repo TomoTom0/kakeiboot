@@ -142,6 +142,37 @@ describe('topbar title', () => {
     for (const r of [...titles, ...texts]) {
       expect(decl(r.body, 'overflow-wrap') ?? '', 'overflow-wrap').not.toBe('anywhere')
     }
+    // TASK-44 (§11-4): the title folds by width band to free the center for
+    // the filter chips — icon-only below 390px, gone entirely below 360px
+    // (the same media-query pattern as the 520px logo switch)
+    const n390 = blockAfter(/@media\s*\(max-width:\s*390px\)/)
+    expect(n390, 'max-width: 390px block').toBeDefined()
+    expect(rulesFor('.topbar-title-text', n390!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+    const n360 = blockAfter(/@media\s*\(max-width:\s*360px\)/)
+    expect(n360, 'max-width: 360px block').toBeDefined()
+    expect(rulesFor('.topbar-title', n360!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+  })
+})
+
+describe('topbar filter bar CSS (TASK-44)', () => {
+  it('[covers:web-browse.topbar-filter-bar] .topbar-filters は flex + margin-left auto、.filter-chip-btn は高さ36px・pill・surface-2背景・44px タップ領域、選択中は accent 枠', () => {
+    // the wrapper takes the margin-left:auto over from topbar-actions (§11-6)
+    expect(
+      rulesFor('.topbar-filters').some(
+        (r) => decl(r.body, 'display') === 'flex' && decl(r.body, 'margin-left') === 'auto',
+      ),
+    ).toBe(true)
+    // the chips (§11-3): 36px tall pills on surface-2 with a 44px minimum
+    // tap area and an accent border while a filter is active
+    const chips = rulesFor('.filter-chip-btn')
+    expect(chips.length, '.filter-chip-btn rules').toBeGreaterThan(0)
+    expect(chips.some((r) => decl(r.body, 'height') === '36px')).toBe(true)
+    expect(chips.some((r) => /44px/.test(r.body)), '44px tap area').toBe(true)
+    expect(chips.some((r) => decl(r.body, 'border-radius') === '999px')).toBe(true)
+    expect(chips.some((r) => /--bb-surface-2/.test(decl(r.body, 'background') ?? ''))).toBe(true)
+    expect(
+      rulesFor('.filter-chip-btn.active').some((r) => decl(r.body, 'border-color') === 'var(--bb-accent)'),
+    ).toBe(true)
   })
 })
 

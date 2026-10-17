@@ -1,0 +1,366 @@
+// TASK-44 stage 1a red-first specs (design: tmp/tasks/tm-28/design_browsing.md
+// §11, rev 3): the topbar's center filter bar — the two always-on chips
+// (period / labels, §11-3), their PopoverPanel dialogs (§11-6: PeriodPicker
+// for the period, the label toggle group for labels), and the one-row page
+// toolbar left behind (§11-5). The search chip (filter-search) belongs to
+// stage 1b (TASK-41 /search) and must NOT exist yet. Conditions:
+// web-browse.topbar-filter-bar / web-browse.filter-dialogs /
+// web-layout.toolbar-one-row in tests/design/conditions.toml.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setDataApi, type DataApi } from '@/web/api/data'
+import { createMockDataApi } from '@/web/api/data/mock'
+import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
+
+let api: DataApi
+
+beforeEach(() => {
+  // the mock ledger's receipts are in 2026-10; "today" is 2026-10-15 JST
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-15T03:00:00Z'))
+  api = createMockDataApi()
+  setDataApi(api)
+})
+afterEach(() => {
+  vi.useRealTimers()
+  setDataApi(null)
+  cleanup()
+})
+
+type W = Awaited<ReturnType<typeof mountApp>>['wrapper']
+
+/** Exact leaf texts of a chip's descendants (both width labels ride the chip; CSS media queries pick the visible one). */
+function leafTexts(w: W, testId: string): Set<string> {
+  return new Set(
+    w
+      .find(`[data-test="${testId}"]`)
+      .findAll('*')
+      .filter((e) => e.element.children.length === 0)
+      .map((e) => e.text().trim()),
+  )
+}
+
+/** Open a topbar chip's dialog (PopoverPanel) and wait a tick. */
+async function openDialog(w: W, testId: 'filter-period' | 'filter-labels'): Promise<void> {
+  await w.find(`[data-test="${testId}"]`).trigger('click')
+  await settle()
+}
+
+/** Body of the first balanced {} block whose head matches (an @media block). */
+function mediaBlock(head: RegExp): string | undefined {
+  const css = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  const m = head.exec(css)
+  if (!m) return undefined
+  const open = css.indexOf('{', m.index)
+  let depth = 0
+  for (let i = open; i < css.length; i++) {
+    if (css[i] === '{') depth++
+    else if (css[i] === '}' && --depth === 0) return css.slice(open + 1, i)
+  }
+  return undefined
+}
+
+describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a)', () => {
+  it('[covers:web-browse.topbar-filter-bar] 閲覧系topbar中央に時期・ラベルの2チップ常時（表題とtopbar-actionsの間・aria-label・短縮/フル両要素・選択中accent）', async () => {
+    // a titled label makes the label chip's spoken name visible in the assertions
+    await api.updateLabelTitle(1, 'red', { title: '旅行' })
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
+    const { wrapper, router } = await mountApp('/receipts')
+
+    // §11-3: the bar sits between the page title and the topbar actions
+    const bar = wrapper.find('header.topbar .topbar-filters')
+    expect(bar.exists()).toBe(true)
+    expect(bar.element.previousElementSibling?.classList.contains('topbar-title')).toBe(true)
+    expect(bar.element.nextElementSibling?.classList.contains('topbar-actions')).toBe(true)
+
+    // stage 1a: period + labels only; the search chip is stage 1b (TASK-41)
+    const chip = (id: string) => wrapper.find(`header.topbar .topbar-filters [data-test="${id}"]`)
+    expect(chip('filter-period').exists()).toBe(true)
+    expect(chip('filter-labels').exists()).toBe(true)
+    expect(chip('filter-search').exists()).toBe(false)
+    expect(chip('filter-period').classes()).toContain('filter-chip-btn')
+    expect(chip('filter-labels').classes()).toContain('filter-chip-btn')
+
+    // the period chip reads the current period and renders BOTH width labels
+    // (labelShort <=899px / full >=900px; the media query picks one)
+    expect(chip('filter-period').attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
+    const texts = leafTexts(wrapper, 'filter-period')
+    expect(texts.has('10月')).toBe(true)
+    expect(texts.has('2026年10月')).toBe(true)
+
+    // the label chip: unselected is the tag icon only, no active state
+    expect(chip('filter-labels').attributes('aria-label')).toBe('ラベルで絞り込み')
+    expect(chip('filter-labels').find('svg').exists()).toBe(true)
+    expect(chip('filter-labels').classes()).not.toContain('active')
+
+    // a selection turns the chip active with the label names in the aria
+    await openDialog(wrapper, 'filter-labels')
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    expect(chip('filter-labels').attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
+    expect(chip('filter-labels').classes()).toContain('active')
+
+    // every browsing route carries the bar (§11-3 route.meta.filters)
+    for (const path of ['/', '/categories', '/stores', '/receipts/101']) {
+      await router.push(path)
+      await settle()
+      const onBar = wrapper.find('header.topbar .topbar-filters')
+      expect(onBar.exists(), path).toBe(true)
+      // home has no page title: there the bar follows the brand directly
+      // (on the titled routes the h1 sits in between — the /receipts
+      // adjacency check above covers that side)
+      if (path === '/') {
+        expect(onBar.element.previousElementSibling?.classList.contains('topbar-brand'), path).toBe(true)
+      }
+    }
+    // the settings / manage / apps / usage screens do not
+    for (const path of ['/settings', '/settings/labels', '/apps', '/usage']) {
+      await router.push(path)
+      await settle()
+      expect(wrapper.find('.topbar-filters').exists(), path).toBe(false)
+    }
+    // and a browsing route brings the chips back
+    await router.push('/receipts')
+    await settle()
+    expect(wrapper.find('.topbar-filters').exists()).toBe(true)
+  })
+
+  it('[covers:web-browse.topbar-filter-bar] 家計簿に未参加の間はtopbar中央バーを出さない', async () => {
+    const ME_NONE: typeof ME = { ...ME, ledgers: [], default_ledger_id: null }
+    mockFetch({ 'GET /api/auth/me': { body: ME_NONE } })
+    const { wrapper } = await mountApp('/')
+    expect(wrapper.find('header.topbar').exists()).toBe(true)
+    expect(wrapper.find('.topbar-filters').exists()).toBe(false)
+  })
+})
+
+describe('topbar period dialog (PeriodPicker)', () => {
+  it('[covers:web-browse.filter-dialogs] 時期dialog: タブ「月｜年｜期間」・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const list = vi.spyOn(api, 'listReceipts')
+    const { wrapper } = await mountApp('/receipts')
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+
+    await chip().trigger('click')
+    await settle()
+    // a PopoverPanel dialog opens and the chip is its expanded trigger
+    const dialog = wrapper.get('[role="dialog"]')
+    expect(chip().attributes('aria-expanded')).toBe('true')
+    expect(chip().attributes('aria-controls')).toBe(dialog.attributes('id'))
+    for (const m of ['mode-month', 'mode-year', 'mode-range']) {
+      expect(wrapper.find(`[data-test="${m}"]`).exists(), m).toBe(true)
+    }
+
+    // the year tab applies at once: the chip swaps to the year labels and the
+    // page re-queries through watch(period.range); the dialog stays open
+    await wrapper.find('[data-test="mode-year"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年')
+    const yearTexts = leafTexts(wrapper, 'filter-period')
+    expect(yearTexts.has('26年')).toBe(true)
+    expect(yearTexts.has('2026年')).toBe(true)
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-01-01', to: '2026-12-31' }))
+
+    // back on months: next is capped at the current month, prev applies at once
+    await wrapper.find('[data-test="mode-month"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年9月')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-09-01', to: '2026-09-30' }))
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await settle()
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-01' }))
+
+    // the range tab commits only on 表示: typing alone never touches the store
+    await wrapper.find('[data-test="mode-range"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="range-from"]').setValue('2026-10-03')
+    await wrapper.find('[data-test="range-to"]').setValue('2026-10-15')
+    await settle()
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-01' }))
+    await wrapper.find('[data-test="range-apply"]').trigger('click')
+    await settle()
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-03', to: '2026-10-15' }))
+    // the dialog stays open for further adjustments
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+  })
+})
+
+describe('topbar label dialog', () => {
+  it('[covers:web-browse.filter-dialogs] ラベルdialog: LabelToggleGroup+解除は即時にperiod storeへ出て各ページの再取得へ伝播（dialogは開いたまま）', async () => {
+    await api.updateLabelTitle(1, 'red', { title: '旅行' })
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stats = vi.spyOn(api, 'getStats')
+    const list = vi.spyOn(api, 'listReceipts')
+    const { wrapper } = await mountApp('/')
+    const chip = () => wrapper.find('[data-test="filter-labels"]')
+
+    await openDialog(wrapper, 'filter-labels')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('.label-toggle-group').exists()).toBe(true)
+    // nothing selected: the clear button starts disabled
+    expect(wrapper.find('[data-test="label-filter-clear"]').attributes('disabled')).toBeDefined()
+
+    // toggling red is period.setLabelColors(['red']) at once: Home's getStats
+    // and the recent list re-query with the filter, the chip shows the
+    // selection, and the dialog stays open
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
+    expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
+    expect(chip().classes()).toContain('active')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+
+    // OR with blue, then 解除 empties the selection and re-queries with []
+    await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
+    await settle()
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
+    await wrapper.find('[data-test="label-filter-clear"]').trigger('click')
+    await settle()
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: [] }))
+    expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み')
+    expect(chip().classes()).not.toContain('active')
+  })
+
+  it('[covers:web-browse.filter-dialogs] Receipts はラベル変更で labels= URL を更新し、直リンク labels= は period store へ書き戻す', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const list = vi.spyOn(api, 'listReceipts')
+    const { wrapper, router } = await mountApp('/receipts')
+
+    await openDialog(wrapper, 'filter-labels')
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
+    await settle()
+    // the URL carries the labels query (L3) and the list re-queries with it
+    expect(router.currentRoute.value.query['labels']).toBe('red,blue')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
+
+    // a deep link adopts the URL labels into the period store, so the chip
+    // shows the selection the list is actually filtering with (§11-3)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const direct = await mountApp('/receipts?labels=red,blue')
+    const chip = direct.wrapper.find('[data-test="filter-labels"]')
+    expect(chip.classes()).toContain('active')
+    // untitled labels read their neutral spoken names (red=1, blue=4)
+    expect(chip.attributes('aria-label')).toBe('ラベルで絞り込み: ラベル1、ラベル4')
+  })
+
+  it('[covers:web-browse.filter-dialogs] Escape・外側押下でdialogを閉じトリガのチップへフォーカスが戻る', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/receipts', { attach: true })
+    const period = () => wrapper.find('[data-test="filter-period"]')
+
+    await period().trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(period().attributes('aria-expanded')).toBe('true')
+    ;(document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(period().attributes('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(period().element)
+
+    // an outside pointerdown closes the label dialog the same way
+    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    const outside = wrapper.find('.app-main').element
+    for (const type of ['pointerdown', 'mousedown', 'click']) {
+      outside.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    }
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.find('[data-test="filter-labels"]').element)
+  })
+})
+
+describe('one-row page toolbar (TASK-44 §11-5)', () => {
+  it('[covers:web-layout.toolbar-one-row] /receipts は絞り込みボタン+条件チップの1行（期間・ラベルUIは本文に無い）、Home・Categories・Stores はページ内ツールバーなし、720px の column 化なし', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    // receipts: the filter button and the condition chips; the period UI
+    // (mode tabs / step) and the label button moved to the topbar
+    const { wrapper } = await mountApp('/receipts?item=牛乳')
+    const toolbar = wrapper.find('.page-toolbar')
+    expect(toolbar.exists()).toBe(true)
+    expect(toolbar.find('[data-test="filters-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('.filter-chips').exists()).toBe(true)
+    const main = wrapper.find('.app-main')
+    for (const sel of [
+      '[data-test="mode-month"]',
+      '[data-test="mode-year"]',
+      '[data-test="mode-range"]',
+      '[data-test="period-prev"]',
+      '[data-test="period-next"]',
+      '[data-test="label-filter-button"]',
+      '.period-bar',
+    ]) {
+      expect(main.find(sel).exists(), sel).toBe(false)
+    }
+
+    // Home carries no page toolbar: the month switch moved to the period chip
+    // (the "..." row is TASK-45, not TASK-44)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const home = await mountApp('/')
+    for (const sel of ['.page-toolbar', '[data-test="month-prev"]', '[data-test="month-next"]', '.period-bar', '[data-test="label-filter-button"]']) {
+      expect(home.wrapper.find(sel).exists(), sel).toBe(false)
+    }
+    // categories / stores neither
+    for (const path of ['/categories', '/stores']) {
+      cleanup()
+      mockFetch({ 'GET /api/auth/me': { body: ME } })
+      const page = await mountApp(path)
+      for (const sel of ['.page-toolbar', '.period-bar', '[data-test="label-filter-button"]']) {
+        expect(page.wrapper.find(sel).exists(), `${path} ${sel}`).toBe(false)
+      }
+    }
+
+    // the stylesheet drops the 720px two-row design for the page toolbar
+    const narrow = mediaBlock(/@media\s*\(max-width:\s*720px\)/)
+    if (narrow !== undefined) expect(narrow).not.toMatch(/\.page-toolbar/)
+  })
+})
+
+describe('dialog closes on navigation (TASK-44 review)', () => {
+  it('[covers:web-browse.filter-dialogs] dialog を開いたまま別ルートへ遷移すると閉じる（aria-expanded=false）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/receipts')
+    await openDialog(wrapper, 'filter-period')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+
+    await router.push('/')
+    await settle()
+    // the bar survives the page swap; its dialog does not
+    expect(wrapper.find('header.topbar .topbar-filters').exists()).toBe(true)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(chip().attributes('aria-expanded')).toBe('false')
+  })
+
+  it('[covers:web-browse.filter-dialogs] Feed 内の URL replace（スクロール同期）では閉じない', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/receipts/101?from=2026-10-01&to=2026-10-31')
+    await openDialog(wrapper, 'filter-period')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+
+    // the feed rewrites its URL to the visible receipt while scrolling
+    // (router.replace within the receipt route): not a navigation, the
+    // dialog stays open
+    await router.replace({ name: 'receipt', params: { id: 102 }, query: { from: '2026-10-01', to: '2026-10-31' } })
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/receipts/102')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-expanded')).toBe('true')
+  })
+})

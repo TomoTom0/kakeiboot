@@ -24,7 +24,9 @@ describe('HomePage (dashboard)', () => {
     const spy = vi.spyOn(api, 'getStats')
     const { wrapper } = await mountApp('/')
     expect(spy).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10' })
-    expect(wrapper.find('[data-test="month"]').text()).toBe('2026年10月')
+    // the month rides the KPI card (the in-page month switch is TASK-44's
+    // topbar period chip now); its identity is the getStats month above
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('今月の支出')
     expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
     expect(wrapper.find('[data-test="receipt-count"]').text()).toContain('3 件')
     expect(wrapper.find('[data-test="diff"]').text()).toContain('+948円')
@@ -41,16 +43,51 @@ describe('HomePage (dashboard)', () => {
     expect(recent.pathname).toBe('/receipts/101')
   })
 
-  it('[covers:web-home.dashboard-month-switch] 前月へ切替で空表示、未来の月へは進めない', async () => {
+  it('[covers:web-home.dashboard-month-switch] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const { wrapper } = await mountApp('/')
-    expect(wrapper.find('[data-test="month-next"]').attributes('disabled')).toBeDefined()
-    await wrapper.find('[data-test="month-prev"]').trigger('click')
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper, router } = await mountApp('/')
+    // the page carries no month switch of its own anymore: the month moves
+    // only through the topbar's period chip (TASK-44 §11-5)
+    expect(wrapper.find('.page-toolbar').exists()).toBe(false)
+    expect(wrapper.find('[data-test="month-prev"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="month-next"]').exists()).toBe(false)
+
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
+    await chip().trigger('click')
     await settle()
-    expect(wrapper.find('[data-test="month"]').text()).toBe('2026年9月')
+    // the current month cannot move forward
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    // the empty previous month: the KPI reads 2026年9月 with zero and the
+    // empty-state nudge; the dialog stays open and next is enabled again
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年9月の支出')
     expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
     expect(wrapper.find('[data-test="recent"]').text()).toContain('ChatGPT でレシートの写真を送ると')
-    expect(wrapper.find('[data-test="month-next"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
+
+    // a trend bar press moves the shared store (and the chip) as well
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await settle()
+    keydown('Escape')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    const bar = wrapper.find('[data-test="bar-2026-09"]').exists()
+      ? wrapper.find('[data-test="bar-2026-09"]')
+      : wrapper
+          .findAll('[data-test="trend"] .bar-col')
+          .find((b) => (b.attributes('title') ?? '').startsWith('9月'))
+    expect(bar).toBeTruthy()
+    await bar!.trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年9月')
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年9月の支出')
+    // the month is shared: another screen queries the same 2026-09
+    await router.push('/categories')
+    await settle()
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ month: '2026-09' }))
   })
 
   it('[covers:web-shell.loading-skeleton] 初回 loading は dash-grid 同形の skeleton（aria-hidden + sr-only 文言）、再取得は既存 grid の dim', async () => {
@@ -62,7 +99,7 @@ describe('HomePage (dashboard)', () => {
       await gate
       return orig(...args)
     })
-    const { wrapper } = await mountApp('/')
+    const { wrapper, pinia } = await mountApp('/')
     // first load: the dash-grid silhouette, decorative blocks aria-hidden,
     // the loading state itself stays readable (sr-only)
     const sk = wrapper.find('[data-test="loading"]')
@@ -76,9 +113,11 @@ describe('HomePage (dashboard)', () => {
     expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
 
-    // reload (month switch): the loaded grid stays and dims, no skeleton
+    // reload (a ledger switch; the month switch itself moved to the topbar
+    // period chip in TASK-44): the loaded grid stays and dims, no skeleton
     gate = new Promise((r) => (release = r))
-    await wrapper.find('[data-test="month-prev"]').trigger('click')
+    const { useSessionStore } = await import('@/web/stores/session')
+    useSessionStore(pinia).selectedLedgerId = 2
     await settle()
     const grid = wrapper.find('.dash-grid')
     expect(grid.classes()).toContain('loading')

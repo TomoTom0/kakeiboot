@@ -7,15 +7,17 @@ import BrandLogo from '@/shared/components/BrandLogo.vue'
 import LedgerSwitcher from './components/LedgerSwitcher.vue'
 import PopoverMenu from './components/PopoverMenu.vue'
 import StepUpDialog from './components/StepUpDialog.vue'
+import TopbarFilterBar from './components/TopbarFilterBar.vue'
 import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
 // sidebar — a fixed overlay at every width (TASK-33 real-device review:
 // the desktop grid-column fold is gone), open by default on desktop
 // (>= 900px) or a modal drawer opening under the topbar on mobile. The top
-// bar carries the brand logo, the page title, the ledger switcher and the
-// top-right account menu (settings / connected apps / usage / logout), and
-// an icon tab bar sits at the bottom on mobile.
+// bar carries the brand logo, the page title, the center filter bar
+// (TASK-44 §11: period / label chips on the browsing routes), the ledger
+// switcher and the top-right account menu (settings / connected apps /
+// usage / logout), and an icon tab bar sits at the bottom on mobile.
 // Public screens (login / register / consent) render without the shell.
 const session = useSessionStore()
 const route = useRoute()
@@ -58,6 +60,12 @@ const ledgerScoped = computed(
   () =>
     ['home', 'receipts', 'categories', 'stores'].includes(section.value) ||
     String(route.name ?? '').startsWith('manage-'),
+)
+// The topbar center filter bar (TASK-44 §11-3/11-6): only on the browsing
+// routes that opted in via route.meta.filters, and only while the user can
+// actually view a ledger (no membership -> no shared filters to show).
+const showFilters = computed(
+  () => route.meta.filters === true && (session.me?.ledgers.length ?? 0) > 0,
 )
 const pageTitle = computed(() => SECTION_TITLES[section.value as SectionName]?.title ?? '')
 const pageIcon = computed(() => SECTION_TITLES[section.value as SectionName]?.icon)
@@ -223,6 +231,9 @@ async function logout(): Promise<void> {
           />
           <span class="topbar-title-text">{{ pageTitle }}</span>
         </h1>
+        <!-- the center filter bar (TASK-44 §11): right after the title, in
+             front of the actions; it owns the margin-left:auto push -->
+        <TopbarFilterBar v-if="showFilters" />
         <div class="topbar-actions">
           <LedgerSwitcher v-if="ledgerScoped" />
           <PopoverMenu
