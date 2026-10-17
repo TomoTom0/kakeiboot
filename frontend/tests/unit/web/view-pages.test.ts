@@ -29,8 +29,32 @@ function expectNoEditing(w: W): void {
   expect(w.find('.app-main').find('input:not([type="date"]), select, textarea').exists()).toBe(false)
 }
 
+/**
+ * TASK-45: the manage link is not a standalone toolbar link anymore; it lives
+ * in the "..." page menu (PageMenu wrapping PopoverMenu). In the closed state
+ * no manage-link is in the DOM at all; the trigger opens role=menu holding
+ * the menuitem link and closes again on re-press.
+ */
+async function expectManageLinkInMenu(w: W, href: string): Promise<void> {
+  expect(w.find('[data-test="manage-link"]').exists()).toBe(false)
+  const trigger = w.find('[data-test="page-menu"]')
+  expect(trigger.attributes('aria-haspopup')).toBe('menu')
+  expect(trigger.attributes('aria-label')).toBe('その他の操作')
+  expect(trigger.classes()).toContain('page-menu-trigger')
+  await trigger.trigger('click')
+  await settle()
+  expect(trigger.attributes('aria-expanded')).toBe('true')
+  const item = w.find('[role="menu"] [data-test="manage-link"]')
+  expect(item.attributes('role')).toBe('menuitem')
+  expect(item.attributes('href')).toBe(href)
+  await trigger.trigger('click')
+  await settle()
+  expect(w.find('[role="menu"]').exists()).toBe(false)
+  expect(trigger.attributes('aria-expanded')).toBe('false')
+}
+
 describe('CategoriesPage (dashboard)', () => {
-  it('[covers:web-categories.dashboard] 期間の合計・カテゴリ別・推移、選択で内訳とレシート、編集操作なし', async () => {
+  it('[covers:web-categories.dashboard][covers:web-layout.manage-link-in-menu] 期間の合計・カテゴリ別・推移、選択で内訳とレシート、編集操作なし、管理導線は三点メニュー内', async () => {
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/categories')
     expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10' })
@@ -38,7 +62,7 @@ describe('CategoriesPage (dashboard)', () => {
     expect(wrapper.find('[data-test="row-食費"]').text()).toContain('550円')
     expect(wrapper.find('[data-test="trend-card"] [data-test="bar-2026-10"]').classes()).toContain('current')
     expectNoEditing(wrapper)
-    expect(wrapper.find('[data-test="manage-link"]').attributes('href')).toBe('/settings/categories')
+    await expectManageLinkInMenu(wrapper, '/settings/categories')
 
     await wrapper.find('[data-test="row-食費"]').trigger('click')
     await settle()
@@ -62,11 +86,11 @@ describe('CategoriesPage (dashboard)', () => {
 })
 
 describe('StoresPage (dashboard)', () => {
-  it('[covers:web-stores.dashboard] 店別ランキング、選択で推移・買ったもの・レシート、編集操作なし', async () => {
+  it('[covers:web-stores.dashboard][covers:web-layout.manage-link-in-menu] 店別ランキング、選択で推移・買ったもの・レシート、編集操作なし、管理導線は三点メニュー内', async () => {
     const { wrapper } = await mountApp('/stores')
     expect(wrapper.find('[data-test="row-Aマート"]').text()).toContain('400円')
     expectNoEditing(wrapper)
-    expect(wrapper.find('[data-test="manage-link"]').attributes('href')).toBe('/settings/stores')
+    await expectManageLinkInMenu(wrapper, '/settings/stores')
     await wrapper.find('[data-test="row-Aマート"]').trigger('click')
     await settle()
     const detail = wrapper.find('[data-test="detail"]')

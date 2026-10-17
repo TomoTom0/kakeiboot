@@ -5,6 +5,7 @@ import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult, type StoreRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
@@ -75,6 +76,12 @@ async function load(id?: number): Promise<void> {
 const ledgerId = useLedger((id) => load(id))
 watch([() => period.range, () => period.labelQuery, selected], () => void load())
 
+// The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
+// standalone manage link on a read-only dashboard.
+const menuItems: PageMenuItem[] = [
+  { to: '/settings/stores', label: '店を管理', icon: 'store', test: 'manage-link' },
+]
+
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)
 const selectedRow = computed(() => rows.value.find((r) => r.labels[0] === selected.value) ?? null)
@@ -108,18 +115,10 @@ function diffText(d: number | null | undefined): string {
 
 <template>
   <div class="view-page">
-    <div class="manage-row">
-      <RouterLink
-        to="/settings/stores"
-        class="manage-link"
-        data-test="manage-link"
-      >
-        <AppIcon
-          name="settings"
-          :size="16"
-        />店を管理
-      </RouterLink>
-    </div>
+    <PageMenu
+      ariaLabel="その他の操作"
+      :items="menuItems"
+    />
 
     <p
       v-if="error"

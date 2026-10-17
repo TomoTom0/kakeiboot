@@ -2323,27 +2323,27 @@ expect_return_shape = "menu-button が header.topbar の最初の子で aria-con
 
 [[condition]]
 id = "web-categories.dashboard"
-target_function = "web/pages/CategoriesPage.vue・RankedList・TrendBars・DonutChart・stores/period（期間の操作は topbar 中央バーの時期チップ〔TASK-44〕）"
-source = "TASK-14（ユーザー指摘: カテゴリ・店・レシートのページは分析結果を見るページでありダッシュボード性が必須、編集はデフォルトにしない）・docs/spec_mcp-tools.md §10 by_category / monthly_trend・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-5（PeriodBar を廃止し期間 UI を topbar 中央バーへ移設。表示の期待値は不変）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:33"
-description = "カテゴリ画面は選択期間（既定は今月）の合計・前期比・カテゴリ別（ドーナツと順位）・推移を表示し、大分類を選ぶと小分類の内訳・そのカテゴリの推移・最近のレシートと、期間とカテゴリで絞ったレシート一覧へのリンクを出す。編集操作は無く、管理画面へのリンクのみ"
+target_function = "web/pages/CategoriesPage.vue・RankedList・TrendBars・DonutChart・stores/period（期間の操作は topbar 中央バーの時期チップ〔TASK-44〕。管理導線は toolbar 右端の PageMenu〔TASK-45〕）"
+source = "TASK-14（ユーザー指摘: カテゴリ・店・レシートのページは分析結果を見るページでありダッシュボード性が必須、編集はデフォルトにしない）・docs/spec_mcp-tools.md §10 by_category / monthly_trend・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-5（PeriodBar を廃止し期間 UI を topbar 中央バーへ移設。表示の期待値は不変）・TASK-45 設計 tmp/tasks/tm-40/design_manage-pages.md §2-4（管理導線を⋯メニュー内へ移行し単独の .manage-link は削除。開閉・aria の期待は web-layout.manage-link-in-menu）"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:57"
+description = "カテゴリ画面は選択期間（既定は今月）の合計・前期比・カテゴリ別（ドーナツと順位）・推移を表示し、大分類を選ぶと小分類の内訳・そのカテゴリの推移・最近のレシートと、期間とカテゴリで絞ったレシート一覧へのリンクを出す。編集操作は無く、管理画面への導線は⋯メニュー（page-menu）内の管理リンクのみで単独の管理リンクは持たない"
 given = "今日=2026-10-15 で /categories を開き、食費を選び、前の月へ"
-expect_return_shape = "by_category&month=2026-10・合計 948円・食費 550円・当月の棒が強調・編集操作なし・管理リンク /settings/categories / 内訳に食料品・外食・推移の見出しが食費・category=食費 で集計・レシートリンク from/to/category / 9月は0円"
+expect_return_shape = "by_category&month=2026-10・合計 948円・食費 550円・当月の棒が強調・編集操作なし・単独の管理リンクは存在せず⋯メニュー内の管理リンク（menuitem の manage-link）が /settings/categories / 内訳に食料品・外食・推移の見出しが食費・category=食費 で集計・レシートリンク from/to/category / 9月は0円"
 
 [[condition]]
 id = "web-stores.dashboard"
 target_function = "web/pages/StoresPage.vue"
-source = "TASK-14（同上）・docs/spec_mcp-tools.md §10 by_store"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:65"
-description = "店画面は選択期間の店別ランキングを表示し、店を選ぶとその店の推移・買ったもの（カテゴリ別）・店の種別と累計件数・最近のレシートを出す。編集・統合操作は無く、管理画面へのリンクのみ"
+source = "TASK-14（同上）・docs/spec_mcp-tools.md §10 by_store・TASK-45 設計 tmp/tasks/tm-40/design_manage-pages.md §2-4（管理導線を⋯メニュー内へ移行し単独の .manage-link は削除。開閉・aria の期待は web-layout.manage-link-in-menu）"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:89"
+description = "店画面は選択期間の店別ランキングを表示し、店を選ぶとその店の推移・買ったもの（カテゴリ別）・店の種別と累計件数・最近のレシートを出す。編集・統合操作は無く、管理画面への導線は⋯メニュー（page-menu）内の管理リンクのみで単独の管理リンクは持たない"
 given = "/stores を開き Aマートを選ぶ"
-expect_return_shape = "Aマート 400円・編集操作なし・管理リンク /settings/stores / 買ったものに食費・種別スーパー・推移の見出しが Aマート"
+expect_return_shape = "Aマート 400円・編集操作なし・単独の管理リンクは存在せず⋯メニュー内の管理リンク（menuitem の manage-link）が /settings/stores / 買ったものに食費・種別スーパー・推移の見出しが Aマート"
 
 [[condition]]
 id = "web-receipts.dashboard"
 target_function = "web/pages/ReceiptsPage.vue"
 source = "TASK-14（同上）・docs/spec_mcp-tools.md §7-8・§10 monthly_overview / by_payment_method"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:80"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:104"
 description = "レシート画面は選択期間の合計・件数・1件あたり・前期、日別の支出（約2か月以内の期間）、支払方法別、日付ごとの一覧を表示する。絞り込み（店・品名・カテゴリ・削除済み）は折りたたみで、適用中の条件はチップで外せ、URL に残る。編集操作は無い"
 given = "/receipts を開き、品名「牛乳」で絞り込み、条件を外す"
 expect_return_shape = "948円・3 件・316円・日別31本・現金・10月10日（土）見出し・編集操作なし / query.item=牛乳・1 件・102 が消える / 102 が戻る"
@@ -2352,7 +2352,7 @@ expect_return_shape = "948円・3 件・316円・日別31本・現金・10月10�
 id = "web-receipts.dashboard-link-filters"
 target_function = "web/pages/ReceiptsPage.vue・stores/period fromQuery"
 source = "TASK-14（ダッシュボード間のドリルダウン）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:103"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:127"
 description = "他画面からのリンクの from/to（または month / year）・category・store・item を期間と絞り込み条件として引き継ぐ"
 given = "/receipts?from=2026-10-01&to=2026-10-31&category=日用品"
 expect_return_shape = "listReceipts に from/to/category・カテゴリのチップ・日用品のレシートのみ"
@@ -2361,7 +2361,7 @@ expect_return_shape = "listReceipts に from/to/category・カテゴリのチッ
 id = "web-receipts.detail-view-first"
 target_function = "web/components/ReceiptPanel.vue（Feed = ReceiptDetailPage.vue 内の各パネル）"
 source = "TASK-14（ユーザー指摘: 破壊的な編集作業を誘導する UI は事故を招く）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計 画面構成（単票表示・修正・削除・復元を ReceiptPanel へ移す）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:133"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:157"
 description = "Feed 内の各レシートパネルは既定で閲覧表示（入力欄・削除ボタン無し）。修正は「内容を修正」の明示操作で入り、削除は修正モード内の閉じた危険な操作欄にだけある。修正をやめると閲覧表示に戻る"
 given = "/receipts/101 を開き、receipt-panel-101 の範囲で修正に入って、やめる"
 expect_return_shape = "receipt-panel-101 内で合計 400円・edit-form と delete と入力欄なし / edit-form あり・danger-zone は閉じている / edit-form なし"
@@ -2370,7 +2370,7 @@ expect_return_shape = "receipt-panel-101 内で合計 400円・edit-form と del
 id = "web-settings.data-manage-links"
 target_function = "web/pages/settings/DataPanel.vue（データtab）・router /settings children"
 source = "TASK-14（編集は既定にしない: カテゴリ・店の編集は設定 > データの管理へ）・TASK-16 設計 tmp/tasks/tm-16/design_ui-feedback.md 項目6（設定は主ナビから外れ右上メニューへ。manage-* は settings 節に含める既存規則を維持）・TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 SettingsPage 行（データの管理にラベルへの導線）・TASK-36 設計 tmp/tasks/tm-36/design_settings-layout.md §3-§4・§10（実機指摘改訂後はデータtab /settings/data の settings-data-* リンクが導線。page-back パンくずは廃止のまま）"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:151"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:175"
 description = "カテゴリ・店・ラベルの編集画面は設定の「データ」tab（/settings/data）のリンクから開き、設定節として扱われる（主ナビに設定項目は無いため、トップバー表題「設定」とアカウントメニューの設定項目の aria-current で示す）。manage 画面に page-back パンくずは持たない（戻り導線は tab strip が担い、manage 画面ではデータtab が aria-current=\"page\" になる）。店の統合（元に戻せない操作）は閉じた折りたたみに入っている"
 given = "/settings を開き（redirect で /settings/general に着地）データtab へ遷移し、リンクから店・ラベルの管理へ遷移"
 expect_return_shape = "settings-data-categories の href が /settings/categories（stores・labels も同形）・遷移先に page-back パンくず無し・データtab（settings-tab-data）に aria-current=\"page\"・トップバー表題「設定」・アカウントメニューの設定項目に aria-current=\"page\"・主ナビのどの項目も active でない・merge は閉じた details"
@@ -3317,7 +3317,7 @@ expect_return_shape = "101: listReceipts が from=2026-10-01・to=2026-10-31 で
 id = "web-receipts.recent-links-carry-context"
 target_function = "web/pages/HomePage.vue・StoresPage.vue・CategoriesPage.vue（最近のレシートのリンク）"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目1 実装設計 文脈「ホーム・店・カテゴリ画面の『最近のレシート』のリンクは、各画面の期間と絞り込み（店・カテゴリ）を文脈 query として付ける」"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:205"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:229"
 description = "ホーム・店・カテゴリ画面の最近のレシートのリンクは、各画面の選択期間と絞り込み（店画面は店、カテゴリ画面はカテゴリ）を文脈 query として持つ"
 given = "期間 2026-10 でホームを表示 / 店画面で Aマートを選択 / カテゴリ画面で食費を選択"
 expect_return_shape = "各リンクの href が /receipts/<id>?from=2026-10-01&to=2026-10-31（ホーム）/ 同 + store=Aマート（店）/ 同 + category=食費（カテゴリ）"
@@ -3506,7 +3506,7 @@ expect_return_shape = "全ての .dash-grid の grid-template-columns に minmax
 id = "web-stores.long-name-no-overflow"
 target_function = "web/pages/StoresPage.vue・components/TrendBars.vue"
 source = "tmp/tasks/tm-16/design_ui-feedback.md 項目5 実装設計（.sub-row 先頭セルの ellipsis と title、.kpi-sub dd の折返し・2行 clamp と title、TrendBars を .hscroll で包む）・テストへの影響"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:240"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:264"
 description = "長い店名（100 文字）でも店名要素は省略・折返し用のクラスと全文の title を持ち、推移（TrendBars）は .hscroll の中に描画される"
 given = "100 文字の店名を含む by_store 応答で StoresPage を表示し、その店を選ぶ"
 expect_return_shape = "ランキング行の店名要素に省略用クラスと title=全文、kpi-sub の最多店名に clamp 用クラスと title=全文、TrendBars のルートが .hscroll の中にある"
@@ -3788,7 +3788,7 @@ expect_return_shape = "listReceipts に label_colors=['red','blue'] が渡り戻
 id = "web-dashboard.label-filter"
 target_function = "web/stores/period.ts（labelColors）・web/components/TopbarFilterBar.vue（topbar 中央のラベルチップ・dialog）・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue（watch(period.labelQuery)）"
 source = "TASK-17 設計 tmp/tasks/tm-17/design_receipt-labels.md 2-5 period.ts 行・ラベル絞り込み状態の正（L3）（docs/spec_mcp-tools.md §12 へ反映）・TASK-26 設計 tmp/tasks/tm-26/design_managed-labels.md 2-4（絞り込み UI の中身は不変・store・URL の規則は不変）・TASK-44 設計 tmp/tasks/tm-28/design_browsing.md §11-3・§11-6（置き場所を topbar 中央のラベルチップへ移設。state の正本は period store のまま。各ページへ watch(period.labelQuery) を追加し既存の watch(period.range) と同じ経路で再取得）・§11-7 条件書計画"
-source_lines = "frontend/tests/unit/web/view-pages.test.ts:268"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:292"
 description = "ラベル絞り込みは topbar 中央バーのラベルチップ（filter-labels。dialog の中身は web-browse.filter-dialogs・部品は web-labels.filter-button）で period store の labelColors に結合し、getStats と「最近のレシート」の listReceipts に label_colors を渡し、画面をまたいで保持し、ledger 切替で空に戻り、「最近のレシート」のリンクに labels= を含める（中央バーが書くのは period store〔setLabelColors〕だけで、各ページは watch(period.labelQuery) で受け取る）。ledger 切替のリセット（selectedLedgerId への watch）は flush:'sync' で確定する（各画面の useLedger watcher による再取得より前に必ず走る。両 watcher の実行順はschedulerの木構造uid依存で保証されないため、App.vue の構成変更〔TASK-39 branch Transition 追加〕で反転し旧フィルタで新ledgerへ問い合わせる回帰が発生した）。ReceiptsPage は URL に labels が無ければ period store の値で URL を補い（router.replace・空なら補わない）、URL にあれば URL を優先し、変更（解除含む）を period store に書く。Feed は period store を読まない・書かない"
 given = "Home 表示中に topbar のラベル dialog で red を選び下部タブで /receipts へ遷移 / ReceiptsPage で blue を追加して Home へ戻る / URL 付きで Feed を開く / ledger を切替える"
 expect_return_shape = "URL が labels=red で補われる / Home の getStats・listReceipts に label_colors=['red','blue'] が保持 / Feed の listReceipts は URL の labels のみ / labelColors が空に戻る"
@@ -4646,7 +4646,7 @@ expect_return_shape = "App.vue に name=\"page\" + mode=\"out-in\" の Transitio
 id = "web-shell.loading-skeleton"
 target_function = "web/components/DashSkeleton.vue・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・ReceiptsPage.vue・AppsPage.vue（初回 loading と再取得）・web/styles.css（.skeleton・.sr-only）"
 source = "TASK-39 設計 tmp/tasks/tm-39/design_atomic-transition.md P2・対策D（docs/spec_mcp-tools.md §12 へ反映）"
-source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:93, frontend/tests/unit/web/styles.test.ts:306, frontend/tests/unit/web/view-pages.test.ts:112"
+source_lines = "frontend/tests/unit/web/account-pages.test.ts:292, frontend/tests/unit/web/dashboard-shell.test.ts:93, frontend/tests/unit/web/styles.test.ts:306, frontend/tests/unit/web/view-pages.test.ts:136"
 description = "主要データ画面（ホーム・カテゴリ・店・レシート一覧）の初回 loading は dash-grid と同形状の skeleton（DashSkeleton.vue。CSSのみ・.skeleton class・単色で shimmer なし・出現時に 0.2s の fade-in）で統一し、1行テキスト「読み込んでいます...」を出さない。小さい一覧（接続中のアプリ）も同一の .skeleton block（最小の card）で揃える（公開の認証画面〔同意・登録〕は dash-grid 系でなく対象外）。skeleton の装飾 block は aria-hidden=\"true\" とし、.sr-only の「読み込んでいます...」で読み上げは維持する。再取得（月切替・家計簿切替・絞り込み）は既存データを .dash-grid.loading（opacity 0.6）で薄めて残す二段描画のまま（skeleton に戻さない。レシート一覧は初回完了フラグ loaded で切替え、スクロール復帰の lookup はフラグ確定の後）"
 given = "データ未取得で /・/categories・/stores・/receipts・/apps を開く / 読込完了後に月を切替える。styles.css を読む"
 expect_return_shape = "初回は data-test=\"loading\" の .skeleton（aria-hidden=\"true\"・.sr-only に「読み込んでいます...」）で kpi・summary・grant 行等の実データを描かない / 完了後に skeleton が消え実データ / 再取得中は .dash-grid に loading class が付き skeleton に戻らない / styles.css に .skeleton .sk（var(--bb-surface-2) の単色）と .sr-only があり reduced-motion 側で animation none"
@@ -4852,3 +4852,19 @@ source_lines = "frontend/tests/browser/verify.spec.ts:120, frontend/tests/browse
 description = "深い位置への直リンクは URL を変えずに anchor パネルの上端が scroll-margin-top 実効値（topbar 高 + 操作バー高 + 0.5rem）に着地し、表示窓は anchor 中心のまま（窓内は実パネル・窓外上部は placeholder。IO が文書頭を current 化しない）。浅い位置（先頭）でも同様に URL 不変で着地する"
 given = "stub の feed 拡張（12 件・2026-10）で /receipts/104（idx 8・窓 [6,10]・上に 6 件の placeholder）と /receipts/112（idx 0）を直接開く（chromium・viewport 390px）"
 expect_return_shape = "104: .receipt-panel-104 の top が scroll-margin-top 実効値と誤差 2px 以内・URL の pathname が /receipts/104 で query 空・feed-position が「9 / 12」・106 の .detail-title が可視で 112 が .receipt-panel-placeholder / 112: top が 2px 以内・query 空・feed-position が「1 / 12」"
+
+# ---------------------------------------------------------------------------
+# TASK-45 閲覧画面の管理導線を⋯メニューへ移行（CategoriesPage・StoresPage の単独 .manage-link を
+# 廃止し toolbar 右端の三点メニューボタン〔PageMenu・PopoverMenu の薄い wrapper〕の中に格納。
+# 正本は tmp/tasks/tm-40/design_manage-pages.md §1-5・§2-1・§2-4〜§2-6（TASK-40 との統合設計）。
+# docs への反映先は docs/spec_mcp-tools.md §12 閲覧画面の段（⋯移行は本差分で実装済み・focus受け入れは後続フェーズ（TASK-40））。
+# 既存更新（元の位置）: web-categories.dashboard・web-stores.dashboard（管理リンクの期待を⋯メニュー内へ）。
+
+[[condition]]
+id = "web-layout.manage-link-in-menu"
+target_function = "web/components/PageMenu.vue（新設。PopoverMenu の薄い wrapper）・web/pages/CategoriesPage.vue・web/pages/StoresPage.vue（.manage-link の削除と PageMenu 配置）・web/components/AppIcon.vue（dots icon）・web/styles.css（.page-menu-trigger 44px・.manage-link と .manage-row の削除）"
+source = "TASK-45 設計（TASK-40 統合の正本）tmp/tasks/tm-40/design_manage-pages.md §1-5（F1: ⋯の中身は管理導線のみで相手ページへの導線は入れない）・§2-1（PageMenu 仕様: trigger は 44px の icon button・dots・aria-haspopup=\"menu\"・aria-label は props・項目は RouterLink + role=\"menuitem\" + AppIcon + label で押下で close・data-test=\"page-menu\" は trigger に・項目側の data-test は item.test で渡す）・§2-4（両ページの toolbar 右端に配置・ariaLabel「その他の操作」・HomePage・ReceiptsPage には置かない）・§2-5（.page-menu-trigger 追加・.manage-link/.manage-row 削除）・§2-6（aria まとめ）・tmp/tasks/tm-28/design_browsing.md §6-7（同梱条件を本タスクが登録する）"
+source_lines = "frontend/tests/unit/web/view-pages.test.ts:57, frontend/tests/unit/web/view-pages.test.ts:89"
+description = "閲覧画面（カテゴリ・店）に単独の管理リンクは存在せず、toolbar 右端の⋯メニューボタン（PageMenu・trigger は 44px 四方の .page-menu-trigger・dots icon・data-test=page-menu・aria-label「その他の操作」・aria-haspopup=menu・aria-expanded）を押すと PopoverMenu（role=menu）が開き、その中の管理導線（カテゴリ画面は「カテゴリを管理」・店画面は「店を管理」）が role=menuitem の RouterLink（data-test=manage-link を item.test で引継ぎ・href は各 /settings/*）として存在する。trigger 再押下で閉じる（開閉・矢印キー・Escape・外側押下・focus 復帰は PopoverMenu/usePopover 既存の挙動。web-shell.popover-menu）"
+given = "/categories と /stores を開き、閉じた状態で単独の manage-link の有無を確かめ、page-menu の trigger 押下 → menuitem の href・role → trigger 再押下"
+expect_return_shape = "閉状態で data-test=\"manage-link\" が DOM に存在しない（単独の管理リンクは無い）/ trigger（data-test=\"page-menu\"）に aria-haspopup=\"menu\"・aria-label「その他の操作」・.page-menu-trigger / 押下で role=\"menu\" が開き trigger の aria-expanded=true・[role=\"menu\"] [data-test=\"manage-link\"] が role=\"menuitem\" で href が当該画面の /settings/* / trigger 再押下で menu が閉じ aria-expanded=false"

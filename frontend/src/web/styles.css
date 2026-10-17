@@ -875,22 +875,27 @@ a.legend-row:hover { background: var(--bb-hover); }
 .period-step { display: flex; align-items: center; gap: 0.25rem; }
 .period-step strong { min-width: 7.5rem; text-align: center; }
 .period-range { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
-/* transitional home of the manage links on the category / store dashboards:
-   the page toolbar is gone (TASK-44 §11-5 moved its period and label rows
-   to the topbar); TASK-45 folds these into the "..." menu row */
-.manage-row { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
-.manage-link {
+/* the "..." page menu of the category / store dashboards (PageMenu,
+   TASK-45 §2-4): it takes the old manage-row's spot — the right end of the
+   row above the dashboard cards — so the wrapper carries the alignment and
+   the 44px dots trigger follows the avatar-btn family */
+.page-menu { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+.page-menu-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.6rem;
-  border-radius: 8px;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
   color: var(--bb-muted);
-  font-size: 0.85rem;
-  text-decoration: none;
-  transition: background-color 0.15s, color 0.15s;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
 }
-.manage-link:hover { background: var(--bb-hover); color: var(--bb-fg); }
+.page-menu-trigger:hover, .page-menu-trigger[aria-expanded='true'] { box-shadow: 0 0 0 2px var(--bb-accent-soft); }
 
 h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 .card-head h3 { margin-top: 1rem; }
