@@ -54,13 +54,17 @@ async function expectManageLinkInMenu(w: W, href: string): Promise<void> {
 }
 
 describe('CategoriesPage (dashboard)', () => {
-  it('[covers:web-categories.dashboard][covers:web-layout.manage-link-in-menu] 期間の合計・カテゴリ別・推移、選択で内訳とレシート、編集操作なし、管理導線は三点メニュー内', async () => {
+  it('[covers:web-categories.dashboard][covers:web-layout.manage-link-in-menu][covers:web-browse.trend-axis-minimal] 期間の合計・カテゴリ別・推移、選択で内訳とレシート、編集操作なし、管理導線は三点メニュー内', async () => {
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/categories')
     expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10' })
     expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
     expect(wrapper.find('[data-test="row-食費"]').text()).toContain('550円')
     expect(wrapper.find('[data-test="trend-card"] [data-test="bar-2026-10"]').classes()).toContain('current')
+    // TASK-42: the 12-month window spans a year boundary, so the axis ends
+    // carry the full "YYYY年M月" form
+    expect(wrapper.find('[data-test="trend-card"] .bar-label').exists()).toBe(false)
+    expect(wrapper.find('[data-test="trend-card"] [data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['2025年11月', '2026年10月'])
     expectNoEditing(wrapper)
     await expectManageLinkInMenu(wrapper, '/settings/categories')
 

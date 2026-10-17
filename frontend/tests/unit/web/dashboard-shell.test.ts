@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 describe('HomePage (dashboard)', () => {
-  it('[covers:web-home.dashboard-month-overview] 今月の支出・前月比・内訳・推移・店・最近のレシート', async () => {
+  it('[covers:web-home.dashboard-month-overview][covers:web-browse.trend-axis-minimal] 今月の支出・前月比・内訳・推移・店・最近のレシート', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getStats')
     const { wrapper } = await mountApp('/')
@@ -36,7 +36,11 @@ describe('HomePage (dashboard)', () => {
     expect(legend[0]!.text()).toContain('550円')
     expect(legend[1]!.text()).toContain('日用品')
     expect(wrapper.findAll('[data-test="trend"] .bar-col')).toHaveLength(6)
-    expect(wrapper.find('[data-test="trend"] .bar-col.current').text()).toContain('10月')
+    // TASK-42: no per-bar month labels; the axis carries the window ends
+    expect(wrapper.find('[data-test="trend"] .bar-label').exists()).toBe(false)
+    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['5月', '10月'])
+    expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
+    expect(wrapper.find('[data-test="bar-2026-10"]').attributes('aria-label')).toBe('2026年10月 948円')
     expect(wrapper.find('[data-test="stores"]').text()).toContain('Aマート')
     // the link carries the period context (web-receipts.recent-links-carry-context)
     const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
@@ -78,7 +82,7 @@ describe('HomePage (dashboard)', () => {
       ? wrapper.find('[data-test="bar-2026-09"]')
       : wrapper
           .findAll('[data-test="trend"] .bar-col')
-          .find((b) => (b.attributes('title') ?? '').startsWith('9月'))
+          .find((b) => (b.attributes('title') ?? '').startsWith('2026年9月'))
     expect(bar).toBeTruthy()
     await bar!.trigger('click')
     await settle()

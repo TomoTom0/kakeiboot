@@ -24,6 +24,17 @@ export function monthLabel(month: string): string {
   return `${y}年${m}月`
 }
 
+/** First/last axis labels for a monthly trend ("YYYY-MM" keys, oldest first).
+ *  Short "M月" while both ends are in one year, full "YYYY年M月" across years,
+ *  null when there are no bars, last=null for a single bar. */
+export function axisMonthLabels(keys: readonly string[]): { first: string; last: string | null } | null {
+  if (keys.length === 0) return null
+  const first = keys[0]!
+  const last = keys[keys.length - 1]!
+  const fmt = (k: string) => (first.slice(0, 4) === last.slice(0, 4) ? `${Number(k.slice(5))}月` : monthLabel(k))
+  return { first: fmt(first), last: keys.length > 1 ? fmt(last) : null }
+}
+
 /** Last day of the month ("YYYY-MM-DD"). */
 export function monthEnd(month: string): string {
   const [y, m] = month.split('-').map(Number) as [number, number]

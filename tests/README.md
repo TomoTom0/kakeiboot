@@ -94,6 +94,7 @@
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37]（/usage トピック一覧の行リンク、/usage/connect の3ステップ構成と許可内容が backend scope_description と同一文言・毎回許可・90日・/apps 導線、接続URLの runtime 生成表示とコピー〔copy-done の role=status・失敗時 msg-error〕、figure+figcaption と未配置図の placeholder、アカウントメニューの導線と NAV 4項目不変、/apps 未接続表示からのリンク） |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ（2階層表示・作成と親なしエラー・改名/移動/アーカイブ・アーカイブ済みの表示切替）、店（更新と過去分反映の注記・確認後の統合と件数移動・同一店の拒否）、レシート（一覧と詳細・revision 付き保存・revision 不一致の読み直し・preview → confirm 削除・復元・詳細の画像表示（/media/img/ prefix 以外の URL は非採用・期限切れの再取得・画像なしは省略）・ラベル絞り込みは topbar ラベルチップ+dialog から [TASK-44]（URL labels 同期と LabelChip チップは不変 [TASK-26]））、XSS 文字列のテキスト描画 |
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（レシート一覧ダッシュボード・他画面からの絞り込みリンク・最近のレシートの文脈引き継ぎ・詳細の既定閲覧表示、カテゴリ・店のダッシュボード、長い店名の省略、設定のデータ管理リンク、label 絞り込み [TASK-17/44]（topbar チップ経由・Receipts の URL 補いと書き戻し・ledger 切替リセット・Feed は URL のみ）、レシート一覧の初回 skeleton [TASK-39]） |
+| `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels ヘルパ [TASK-42]（同年「M月」・年跨ぎ「YYYY年M月」・単月は first のみ・空は null。推移バーの月ラベル廃止と軸両端化の書式規則） |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈 query からの並び・直リンクの購入月フォールバック・戻るリンク・URL 同期（replace）・外部ナビ・家計簿切替で一覧へ・ページングと前後2件の描画窓・上方向展開のスクロール補正・直リンク・再初期化の初期スクロール着地〔上側 loaded 待ち・IO 抑制・待ち中の窓内移動は優先・単票はスクロールなし〕・snap なし〔snapFeed.ts 不在〕・前後ボタンと矢印キー〔ドロワー開放中は無効〕・修正中の停止） |
 | `frontend/tests/unit/web/receipt-panel.test.ts` | 単体 | ReceiptPanel の labels slot 契約（receipt・ledgerId・canEdit・editing・applyReceipt・changed、TASK-17 差し込み口・TASK-26 で .tags 内末尾へ） |
 | `frontend/tests/unit/web/receipt-context.test.ts` | 単体 | 文脈 query ↔ ReceiptListQuery の対称変換（CONTEXT_FIELDS の網羅、labels ↔ label_colors [TASK-17]） |
@@ -110,4 +111,4 @@
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面の png・metrics.json を幅別に出力（390/360/768/1280。TASK-19 で 768 追加） |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（390px。`mise run frontend:usage-shots` が asset へ配置） |
-| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウトの実測（前後ボタン着地 + 44px タップ領域・上方向展開のスクロール補正〔overflow-anchor:none 注入〕・直リンク初期着地〔深い/浅い・URL 不変〕・狭幅ページ幅・daily-bars 最小幅・ロゴ 520/521・topbar 899/900・表題の 360/390px 帯別出し分け [TASK-44]・時期チップ短縮/フルの 899/900px 境界と 56px 幅 [TASK-44]。chromium + stub） |
+| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウトの実測（前後ボタン着地 + 44px タップ領域・上方向展開のスクロール補正〔overflow-anchor:none 注入〕・直リンク初期着地〔深い/浅い・URL 不変〕・狭幅ページ幅・daily-bars 最小幅・trend axis の両端が棒の両端と一致し月ラベル不在〔360px 溢れ・.trend-wrap〕[TASK-42]・ロゴ 520/521・topbar 899/900・表題の 360/390px 帯別出し分け [TASK-44]・時期チップ短縮/フルの 899/900px 境界と 56px 幅 [TASK-44]。chromium + stub） |

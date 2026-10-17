@@ -416,7 +416,7 @@ const groups = computed(() => {
             />
           </span>
         </div>
-        <div class="daily-axis muted small">
+        <div class="axis-ends muted small">
           <span>{{ dayLabel(daily[0]!.date) }}</span>
           <span>{{ dayLabel(daily[daily.length - 1]!.date) }}</span>
         </div>

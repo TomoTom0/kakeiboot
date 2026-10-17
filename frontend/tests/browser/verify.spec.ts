@@ -210,6 +210,51 @@ test.describe('daily bars (360x780)', () => {
   })
 })
 
+// --- TASK-42 trend axis: the two end labels sit under the outer bars even
+// when the 12-month window overflows the 360px viewport (design:
+// tmp/tasks/tm-42/design_trend-labels.md §1-6 / §4-4). The axis rides inside
+// .trend-wrap (fit-content) so its ends follow the scroll content, not the
+// visible port; jsdom cannot measure this. ---
+
+test.describe('trend axis (360x780)', () => {
+  test.use({ viewport: { width: 360, height: 780 } })
+
+  test('[covers:web-browse.trend-axis-minimal-real] 軸ラベルの両端は棒の両端と一致し月ラベルは存在しない（360px・溢れ）', async ({ page }) => {
+    logPageIssues(page, 'trend-axis')
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rect = (el: Element | null | undefined) => el?.getBoundingClientRect() ?? null
+      const axis = document.querySelector('[data-test="trend-axis"]')
+      const spans = axis ? Array.from(axis.querySelectorAll('span')) : []
+      const first = rect(spans[0])
+      const last = rect(spans.at(-1))
+      const barFirst = rect(document.querySelector('[data-test="bar-2025-11"]'))
+      const barLast = rect(document.querySelector('[data-test="bar-2026-10"]'))
+      const wrap = rect(document.querySelector('.trend-wrap'))
+      const axisRect = rect(axis)
+      return {
+        missing: !axisRect || !first || !last || !barFirst || !barLast || !wrap,
+        labelCount: document.querySelectorAll('.bar-label').length,
+        firstDx: first && barFirst ? Math.abs(first.left - barFirst.left) : -1,
+        lastDx: last && barLast ? Math.abs(last.right - barLast.right) : -1,
+        axisOverWrap: axisRect && wrap ? axisRect.right - wrap.right : -1,
+      }
+    })
+    const dump = JSON.stringify(m)
+    expect(m.missing, 'the trend axis, the wrap and both end bars render').toBe(false)
+    // no per-bar month labels anywhere on the page
+    expect(m.labelCount, dump).toBe(0)
+    // the axis ends align with the first / last bar columns (button edges)
+    expect(m.firstDx, dump).toBeLessThanOrEqual(2)
+    expect(m.lastDx, dump).toBeLessThanOrEqual(2)
+    // the axis stays inside the wrap (never wider than the bars)
+    expect(m.axisOverWrap, dump).toBeLessThanOrEqual(2)
+  })
+})
+
 // --- topbar logo: the 520px media-query boundary ---
 
 for (const [width, below] of [

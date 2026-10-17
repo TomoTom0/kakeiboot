@@ -7,7 +7,7 @@ import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { jstMonth, jstToday, monthEnd as lastDay, monthLabel, shortDate } from '../composables/period'
+import { axisMonthLabels, jstMonth, jstToday, monthEnd as lastDay, monthLabel, shortDate } from '../composables/period'
 import { usePeriodStore } from '../stores/period'
 
 // Dashboard: the month's spending at a glance (GET /api/ledgers/{l}/summary,
@@ -114,13 +114,16 @@ const trend = computed(() => {
     const key = String(r.keys[0] ?? r.labels[0] ?? '')
     return {
       key,
-      label: `${Number(key.slice(5))}月`,
+      title: `${monthLabel(key)} ${formatYen(r.value)}`,
       value: r.value,
       height: Math.round((r.value / max) * 100),
       current: key === period.month,
     }
   })
 })
+// TASK-42: no per-bar month labels; the axis under the bars carries the
+// window ends only (same helper as TrendBars).
+const axis = computed(() => axisMonthLabels(trend.value.map((t) => t.key)))
 
 const stores = computed(() => {
   const rows = section('stores')
@@ -192,7 +195,8 @@ const stores = computed(() => {
             :key="t.key"
             class="bar-col"
             :class="{ current: t.current }"
-            :title="`${t.label} ${formatYen(t.value)}`"
+            :title="t.title"
+            :aria-label="t.title"
             :data-test="`bar-${t.key}`"
             type="button"
             @click="period.setMonth(t.key)"
@@ -202,8 +206,15 @@ const stores = computed(() => {
               class="bar"
               :style="{ height: `${Math.max(t.height, 2)}%` }"
             />
-            <span class="bar-label">{{ t.label }}</span>
           </button>
+        </div>
+        <div
+          v-if="axis"
+          class="axis-ends muted small"
+          data-test="trend-axis"
+        >
+          <span>{{ axis.first }}</span>
+          <span v-if="axis.last">{{ axis.last }}</span>
         </div>
       </section>
 
