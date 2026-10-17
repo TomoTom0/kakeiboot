@@ -1,7 +1,7 @@
 // TASK-19 real-browser verification (chromium): the layout facts jsdom
 // cannot compute, asserted as pass/fail numbers. capture.spec.ts takes the
 // pictures; this spec measures. Each test title carries its [covers:<id>]
-// tag for scripts/design/verify-conditions.py; the six conditions live in
+// tag for scripts/design/verify-conditions.py; the conditions live in
 // tests/design/conditions.toml (design: tmp/tasks/tm-19/design_browser.md
 // §2). Test 2 (feed-scroll-compensation-real) is the red-first spec for the
 // §2-7 determinism work in ReceiptPanel / ReceiptDetailPage.
@@ -110,6 +110,45 @@ test.describe('feed (390x780, reduced motion)', () => {
     // non-vacuous proof: 108 really grew past the placeholder height
     const grown = await panelTop(page, 108)
     expect(grown.height).toBeGreaterThan(320)
+  })
+
+  // TASK-49 direct-link initial scroll (tmp/tasks/tm-49/design_direct-link.md
+  // §3-1): a deep direct link must land on the anchor itself with the URL
+  // unchanged. Before the fix the initial viewport is the top-of-document
+  // placeholders, the first IO delivery re-currents one of them, and the URL
+  // is replaced away from the anchor (the deep test is the red-first spec).
+  test('[covers:web-receipts.feed-direct-link-initial-scroll-real] 深い位置の直リンクは URL そのままで着地し窓は anchor 中心', async ({ page }) => {
+    logPageIssues(page, 'direct-link-deep')
+    await installApiStub(page, { feed: 9 })
+    // 104 is idx 8 of 12: window [6,10], six placeholders above it
+    await page.goto('/receipts/104')
+    await expect(page.locator('[data-test="receipt-panel-104"] .detail-title')).toBeVisible()
+    await expect
+      .poll(() => panelTop(page, 104).then((r) => Math.abs(r.top - r.expected)), { timeout: 3_000 })
+      .toBeLessThanOrEqual(2)
+    // the URL stays the direct link: no params rewrite, no context query adoption
+    // (an IO re-current would replace to another id AND add the context query)
+    expect(new URL(page.url()).pathname).toBe('/receipts/104')
+    expect(new URL(page.url()).search).toBe('')
+    // the window is anchored at 104: 106 (in window) is a real panel,
+    // 112 (above the window) stays a placeholder — the top-of-document
+    // panels were not re-currented
+    await expect(page.locator('[data-test="receipt-panel-106"] .detail-title')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('[data-test="receipt-panel-112"] .receipt-panel-placeholder')).toBeVisible()
+    expect(page.locator('[data-test="feed-position"]')).toContainText('9 / 12')
+  })
+
+  test('[covers:web-receipts.feed-direct-link-initial-scroll-real] 浅い位置（先頭）の直リンクも URL そのままで着地', async ({ page }) => {
+    logPageIssues(page, 'direct-link-shallow')
+    await installApiStub(page, { feed: 9 })
+    await page.goto('/receipts/112') // idx 0
+    await expect(page.locator('[data-test="receipt-panel-112"] .detail-title')).toBeVisible()
+    await expect
+      .poll(() => panelTop(page, 112).then((r) => Math.abs(r.top - r.expected)), { timeout: 3_000 })
+      .toBeLessThanOrEqual(2)
+    expect(new URL(page.url()).pathname).toBe('/receipts/112')
+    expect(new URL(page.url()).search).toBe('')
+    expect(page.locator('[data-test="feed-position"]')).toContainText('1 / 12')
   })
 })
 

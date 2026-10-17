@@ -56,9 +56,15 @@ let loadSeq = 0
  * compensation whose loaded-wait resolves after its move was superseded
  * must not scrollBy */
 let moveSeq = 0
-/** an upward-expansion compensation is between its wait and its scrollBy:
- * IO deliveries are ignored (the layout above is transient — onIntersect) */
+/** an upward-expansion compensation or the initial scroll is between its
+ * wait and its landing: IO deliveries are ignored (the layout above /
+ * around the anchor is transient — onIntersect) */
 let compPending = false
+/** generation of the holder that last set compPending: an aborted holder's
+ * finally must not clear the suppression a superseding holder established
+ * (a re-initialization can start its own wait while the old one is still
+ * pending — only the current owner clears) */
+let compOwner = 0
 
 const contextQuery = computed(() => listQueryToContext(effectiveCtx.value))
 const ctxKey = computed(() => contextKeyOf(route.query))
@@ -124,6 +130,9 @@ function setSingle(id: number, withNote: boolean): void {
 async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): Promise<void> {
   const n = ++loadSeq
   moveSeq++ // this reload supersedes any pending compensation
+  const mseq = moveSeq // this loadSequence's own generation (capture-at-bump:
+  // a bump during the awaits below must abort the initial scroll, not feed
+  // it the newer generation at the anchor branch)
   loadError.value = false
   const all: ReceiptSummary[] = []
   let cursor: string | undefined
@@ -139,6 +148,7 @@ async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): P
         currentId.value = anchor
         fallbackNote.value = false
         void ensureObserved()
+        void initialScroll(anchor, mseq)
         return
       }
       if (!res.next_cursor) break
@@ -348,6 +358,30 @@ watch(windowIds, (ids) => {
   }
 })
 
+/** A direct link (or any re-initialization) lands on the anchor itself:
+ * wait for the panels above it in the render window to load (they grow
+ * from the 18rem placeholder — scrolling before that would land short by
+ * the growth), then scrollIntoView once, immediately (behavior 'auto':
+ * smooth cannot be awaited and its intermediate deliveries could
+ * re-current a panel mid-flight). IO deliveries are ignored while this
+ * is pending (compPending); a superseding move (moveSeq) aborts. */
+async function initialScroll(id: number, seq: number): Promise<void> {
+  if (seq !== moveSeq) return
+  compPending = true
+  const mine = ++compOwner
+  try {
+    const above = sequence.value.slice(winStart.value, currentIdx.value).map((s) => s.receipt_id)
+    const settled = await waitForPanelLoaded(above, 1_000)
+    if (seq !== moveSeq) return
+    if (settled) await settleTicks()
+    if (seq !== moveSeq) return
+    panelEl(id)?.scrollIntoView({ block: 'start', behavior: 'auto' })
+    await settleTicks()
+  } finally {
+    if (compOwner === mine) compPending = false
+  }
+}
+
 async function handleCurrent(id: number): Promise<void> {
   const seq = ++moveSeq
   const beforeStart = winStart.value
@@ -363,6 +397,7 @@ async function handleCurrent(id: number): Promise<void> {
     // pre-growth measurement would mis-scroll). IO deliveries are ignored
     // while this is pending (onIntersect).
     compPending = true
+    const mine = ++compOwner
     try {
       const mounted = windowIds.value.filter((x) => !beforeIds.has(x))
       const settled = await waitForPanelLoaded(mounted, 1_000)
@@ -377,7 +412,7 @@ async function handleCurrent(id: number): Promise<void> {
         window.scrollBy({ top: afterTop - beforeTop, behavior: 'auto' })
       }
     } finally {
-      compPending = false
+      if (compOwner === mine) compPending = false
     }
   }
   void maybeLoadMore()

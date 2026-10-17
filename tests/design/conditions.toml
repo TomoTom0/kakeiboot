@@ -4740,7 +4740,7 @@ expect_return_shape = "107 が表示中になり窓が [3,7] へ展開（108 が
 id = "web-layout.page-width-fits-viewport"
 target_function = "web/pages/（HomePage・CategoriesPage・StoresPage・ReceiptDetailPage）と web/styles.css の全体レイアウト（min-width: 0・minmax(0)・.hscroll）"
 source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 3・docs/spec_mcp-tools.md §12 画面骨格の段（旧: tmp/tasks/tm-16/design_ui-feedback.md 項目5 テストへの影響。旧 excluded の「§2-2 の幅配分（padding・gap・各要素幅・360px の固定分計算）の実測」は数値定数が分岐を持たないため本条件の横方向溢れ検査と capture 撮影で代替）"
-source_lines = "frontend/tests/browser/verify.spec.ts:129"
+source_lines = "frontend/tests/browser/verify.spec.ts:168"
 description = "主要画面（ホーム・カテゴリ・店・レシートフィード）は狭幅（360・390px）と 768px で横方向の溢れを生じない"
 given = "360・390・768px の viewport で /・/categories?month=2026-10・/stores?month=2026-10・/receipts/101 を表示（chromium）"
 expect_return_shape = "全画面 × 全幅で document.documentElement.scrollWidth <= clientWidth"
@@ -4749,7 +4749,7 @@ expect_return_shape = "全画面 × 全幅で document.documentElement.scrollWid
 id = "web-receipts.daily-bars-min-track"
 target_function = "web/pages/ReceiptsPage.vue（.daily-bars の gridTemplateColumns）・web/styles.css（.daily-bars）"
 source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 4・docs/spec_mcp-tools.md §12 ダッシュボードの段（日別バーの最小本幅 4px を確定）（旧: tmp/tasks/tm-16/design_ui-feedback.md 項目5）"
-source_lines = "frontend/tests/browser/verify.spec.ts:151"
+source_lines = "frontend/tests/browser/verify.spec.ts:190"
 description = "日別の支出（.daily-bars）は期間の日数分の等分トラック（repeat(N, minmax(0.25rem, 1fr))・gap 2px）で描かれ、各本（.daily-col）の幅は最小 4px（0.25rem）を下回らず、トラック全体もカード内に収まる"
 given = "?month=2026-10（31 日）で /receipts を 360px 幅で表示（chromium）"
 expect_return_shape = ".daily-col が 31 本あり全 .daily-col の width >= 4px（許容 0.05px）・.daily-bars の scrollWidth <= clientWidth + 1"
@@ -4758,7 +4758,7 @@ expect_return_shape = ".daily-col が 31 本あり全 .daily-col の width >= 4p
 id = "web-shell.topbar-logo-breakpoints"
 target_function = "web/App.vue（topbar のロゴ出し分け）・web/styles.css（520px メディアクエリ）"
 source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 5・docs/spec_mcp-tools.md §12 アプリ名・ロゴの段（520px 以下 compact / 521px 以上 full）（旧: TASK-27 設計 tmp/tasks/tm-27/design_shell.md §1-2）"
-source_lines = "frontend/tests/browser/verify.spec.ts:183"
+source_lines = "frontend/tests/browser/verify.spec.ts:222"
 description = "topbar のロゴは 520px 以下で compact（kb）・521px 以上で full（wordmark「Kakei」）が実効表示（display）される"
 given = "520px と 521px の viewport で / を表示（chromium）"
 expect_return_shape = "520px: .topbar-logo-full の display=none・.topbar-logo-compact が可視（computed display が none 以外・box 幅 > 0）/ 521px: full が可視・compact の display=none"
@@ -4767,7 +4767,30 @@ expect_return_shape = "520px: .topbar-logo-full の display=none・.topbar-logo-
 id = "web-shell.topbar-compact-metrics"
 target_function = "web/styles.css（899px メディアクエリの --topbar-h・.topbar-title の font-size）"
 source = "TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-2 test 6・docs/spec_mcp-tools.md §12 画面骨格の段（899px 以下 topbar 56px・表題 1rem）（旧: TASK-27 設計 tmp/tasks/tm-27/design_shell.md §2-1）"
-source_lines = "frontend/tests/browser/verify.spec.ts:222"
+source_lines = "frontend/tests/browser/verify.spec.ts:261"
 description = "topbar の高さと表題の font-size は 899px 境界で実効切替する（899px 以下: --topbar-h 56px・表題 1rem / 900px 以上: 60px・1.15rem）"
 given = "899px と 900px の viewport で /receipts（表題あり）を表示（chromium）"
 expect_return_shape = "899px: :root の --topbar-h=56px・.topbar の高さ 56px・.topbar-title の font-size 16px / 900px: --topbar-h=60px・高さ 60px・font-size 18.4px（誤差 0.5px 以内）"
+
+# ---------------------------------------------------------------------------
+# TASK-49 直リンク初期スクロール（TASK-19 §2-8(a) の発見を条件化）。
+# 正本は tmp/tasks/tm-49/design_direct-link.md。
+# docs への反映先は docs/spec_mcp-tools.md §12 レシート詳細の段（直リンクの着地）。
+
+[[condition]]
+id = "web-receipts.feed-direct-link-initial-scroll"
+target_function = "web/pages/ReceiptDetailPage.vue（loadSequence の初期スクロール initialScroll・compPending による IO 抑制）"
+source = "TASK-49 設計 tmp/tasks/tm-49/design_direct-link.md §1-§2・TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-8(a)（docs/spec_mcp-tools.md §12 レシート詳細の段へ反映）"
+source_lines = "frontend/tests/unit/web/receipt-feed.test.ts:486, frontend/tests/unit/web/receipt-feed.test.ts:499, frontend/tests/unit/web/receipt-feed.test.ts:523, frontend/tests/unit/web/receipt-feed.test.ts:550, frontend/tests/unit/web/receipt-feed.test.ts:576"
+description = "初期化（文脈の有無を問わない直リンク・再初期化）は anchor パネルへ初期スクロールで着地する。スクロールは anchor 上側の表示窓パネルの loaded を待ってから（上側の成長で着地がずれないように）1 回だけ behavior 'auto' で行う。待ちの間の IO 配送は無視し（compPending）URL の replace を起こさない。単票（setSingle）へのフォールバックではスクロールしない"
+given = "12 件の sequence で anchor が深い位置（idx 8）の直リンク / anchor 上側の窓内パネルの getReceipt のみが未解決の間（anchor 自身の取得は解決済みで sequence とパネルが成立している状態）に文書頭パネルの IO 配送が届く / purchased_on なし・4 ページ追っても anchor が見つからない"
+expect_return_shape = "anchor パネル（または内部）の scrollIntoView が {block: 'start', behavior: 'auto'} で 1 回呼ばれ、loaded 解決前は呼ばれない / IO 配送が抑制され router.replace が呼ばれず URL は /receipts/<anchor> のまま（query 空） / 単票では scrollIntoView が呼ばれない"
+
+[[condition]]
+id = "web-receipts.feed-direct-link-initial-scroll-real"
+target_function = "web/pages/ReceiptDetailPage.vue（initialScroll の着地）・web/styles.css（.receipt-panel の scroll-margin-top）"
+source = "TASK-49 設計 tmp/tasks/tm-49/design_direct-link.md §3-1・TASK-19 設計 tmp/tasks/tm-19/design_browser.md §2-8(a)（docs/spec_mcp-tools.md §12 レシート詳細の段へ反映）"
+source_lines = "frontend/tests/browser/verify.spec.ts:120, frontend/tests/browser/verify.spec.ts:141"
+description = "深い位置への直リンクは URL を変えずに anchor パネルの上端が scroll-margin-top 実効値（topbar 高 + 操作バー高 + 0.5rem）に着地し、表示窓は anchor 中心のまま（窓内は実パネル・窓外上部は placeholder。IO が文書頭を current 化しない）。浅い位置（先頭）でも同様に URL 不変で着地する"
+given = "stub の feed 拡張（12 件・2026-10）で /receipts/104（idx 8・窓 [6,10]・上に 6 件の placeholder）と /receipts/112（idx 0）を直接開く（chromium・viewport 390px）"
+expect_return_shape = "104: .receipt-panel-104 の top が scroll-margin-top 実効値と誤差 2px 以内・URL の pathname が /receipts/104 で query 空・feed-position が「9 / 12」・106 の .detail-title が可視で 112 が .receipt-panel-placeholder / 112: top が 2px 以内・query 空・feed-position が「1 / 12」"

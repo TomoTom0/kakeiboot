@@ -476,3 +476,132 @@ describe('Feed controls', () => {
     expect(next().attributes('disabled')).toBeUndefined()
   })
 })
+
+// TASK-49: a direct link (or any re-initialization) must land on the anchor
+// itself. The design (tmp/tasks/tm-49/design_direct-link.md §3-2) has the
+// initial scroll wait for the panels above the anchor in the window (they
+// grow from the 18rem placeholder), suppress IO deliveries while waiting
+// (compPending), and never run on the setSingle fallback.
+describe('Feed direct link initial scroll', () => {
+  it('[covers:web-receipts.feed-direct-link-initial-scroll] 深い位置の直リンクは上側 loaded 後に behavior auto で一度だけ着地し URL を置き換えない', async () => {
+    await anyReceipt()
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([range(201, 212)]))
+    const { router } = await mountApp('/receipts/209') // idx 8 of 12, window [6,10]
+    const replace = vi.spyOn(router, 'replace')
+    expect(scrolledTo(209)).toBe(true)
+    expect(scrollMocks().intoView.filter((c) => c.el.closest('[data-test="receipt-panel-209"]'))).toHaveLength(1)
+    expect(scrollMocks().intoView.at(-1)!.arg).toEqual({ block: 'start', behavior: 'auto' })
+    expect(replace).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.path).toBe('/receipts/209')
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  it('[covers:web-receipts.feed-direct-link-initial-scroll] 単票へのフォールバック（purchased_on なし・4 ページ超え）ではスクロールしない', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    await anyReceipt((id) => (id === 105 ? { purchased_on: null } : {}))
+    const single = await mountApp('/receipts/105')
+    expect(panelIds(single.wrapper)).toEqual([105])
+    expect(scrollMocks().intoView).toHaveLength(0)
+    cleanup()
+
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    await anyReceipt()
+    vi.spyOn(api, 'listReceipts').mockImplementation(async (_l, q) => {
+      const i = q.cursor ? Number(q.cursor.slice(1)) : 0
+      return {
+        total_count: 1000,
+        sum_amount: 0,
+        receipts: range(1000 + i * 50, 1049 + i * 50).map((id) => summary(id)),
+        next_cursor: `c${i + 1}`,
+      }
+    })
+    const lost = await mountApp('/receipts/999')
+    expect(panelIds(lost.wrapper)).toEqual([999])
+    expect(scrollMocks().intoView).toHaveLength(0)
+  })
+
+  it('[covers:web-receipts.feed-direct-link-initial-scroll] loaded 待ちの間の IO 配送は無視され、loaded 後に着地する', async () => {
+    // defer ONLY the panels above the anchor in the window (207, 208); the
+    // anchor's own getReceipt (also reinitialize's) resolves at once
+    // — gating every getReceipt would stall reinitialize itself: sequence
+    // never lands, no panel is observed, and intersect() below would be a
+    // no-op (a vacuous pass)
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const base = await api.getReceipt(1, 102)
+    vi.spyOn(api, 'getReceipt').mockImplementation(async (_l, id) => {
+      if (id === 207 || id === 208) await gate
+      return { ...base, receipt_id: id }
+    })
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([range(201, 212)]))
+    const { wrapper, router } = await mountApp('/receipts/209')
+    const replace = vi.spyOn(router, 'replace')
+    // a delivery naming the top-of-document panel lands while the wait is pending
+    intersect(panel(wrapper, 201))
+    await settle()
+    expect(replace).not.toHaveBeenCalled() // suppressed: compPending
+    expect(scrolledTo(209)).toBe(false) // no premature scroll either
+    release()
+    await settle()
+    expect(scrolledTo(209)).toBe(true)
+    expect(router.currentRoute.value.path).toBe('/receipts/209')
+  })
+
+  it('[covers:web-receipts.feed-direct-link-initial-scroll] 待ち中の窓内移動は初期スクロールに優先し anchor へ引き戻さない', async () => {
+    // same gate as above: the initial scroll is waiting for 207 / 208 when a
+    // move inside the window (route watch: moveSeq bump + scrollTo) supersedes
+    // it — after the gate opens the aborted initial scroll must not yank the
+    // position back to the old anchor (209), the move target (211) stands
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const base = await api.getReceipt(1, 102)
+    vi.spyOn(api, 'getReceipt').mockImplementation(async (_l, id) => {
+      if (id === 207 || id === 208) await gate
+      return { ...base, receipt_id: id }
+    })
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([range(201, 212)]))
+    const { router } = await mountApp('/receipts/209')
+    scrollMocks().intoView.length = 0
+    // 209 (anchor) and 211 (move target) both resolve at once (outside the
+    // gate): only with this setup does the push complete and the handover
+    // become observable
+    await router.push(`/receipts/211?${CTX_QS}`)
+    await settle()
+    release()
+    await settle()
+    expect(scrolledTo(209)).toBe(false)
+    expect(scrolledTo(211)).toBe(true)
+  })
+
+  it('[covers:web-receipts.feed-direct-link-initial-scroll] listReceipts 待ちの handleCurrent の bump を経たら旧世代の初期スクロールは中止し yank しない', async () => {
+    // capture-at-bump pin: while the September listReceipts (a context
+    // change push) is gated, an IO delivery on the old sequence's panel
+    // runs handleCurrent — its moveSeq bump supersedes the pending
+    // loadSequence's generation. When the gate opens, the anchor branch
+    // must still abort the initial scroll on the stale generation; a naive
+    // `void initialScroll(anchor, moveSeq)` at the branch would pass the
+    // bumped generation and scrollIntoView the superseded anchor (yank).
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const oct = pagedList([range(201, 212)])
+    vi.spyOn(api, 'listReceipts').mockImplementation(async (_l, q) => {
+      if (q.from !== '2026-09-01') return oct(_l, q)
+      await gate
+      return { total_count: 12, sum_amount: 0, receipts: range(101, 112).map((id) => summary(id)), next_cursor: null }
+    })
+    await anyReceipt()
+    const { wrapper, router } = await mountApp('/receipts/209')
+    scrollMocks().intoView.length = 0
+    await router.push('/receipts/105?from=2026-09-01&to=2026-09-30')
+    // the delivery lands on the old (October) sequence while the September
+    // list is still gated: handleCurrent bumps moveSeq mid-await
+    intersect(panel(wrapper, 203))
+    await settle()
+    release()
+    await settle()
+    // the September sequence landed on 105 …
+    expect(panelIds(wrapper)).toEqual(range(101, 112))
+    // … but its initial scroll aborted on the stale generation: no landing
+    expect(scrollMocks().intoView).toHaveLength(0)
+  })
+})
