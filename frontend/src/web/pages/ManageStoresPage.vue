@@ -1,24 +1,116 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useDataApi, type StoreRow } from '../api/data'
+import RowMenu, { type RowMenuItem } from '../components/RowMenu.vue'
 import { errorMessage } from '../composables/format'
 import { useLedger } from '../composables/ledger'
+import { useSessionStore } from '../stores/session'
 
 // Store master (spec_mcp-tools.md 7-14: update; spec_data-model.md 5-2:
-// merge is a web-only explicit, irreversible operation).
+// merge is a web-only explicit, irreversible operation). Row editing
+// follows the manage-screen rules (TASK-40 §2-3): no per-row buttons; the
+// trailing "..." (編集 only) turns that row alone into the editor (Enter
+// saves, Escape cancels, an unsaved switch to another row is blocked once)
+// and results land on the row's inline status. Search and the collapsed
+// two-step merge stay as they were.
 const api = useDataApi()
+const session = useSessionStore()
+
+const rootEl = ref<HTMLElement | null>(null)
 const stores = ref<StoreRow[]>([])
 const categoryPaths = ref<string[]>([])
 const query = ref('')
 const error = ref('')
 const info = ref('')
 const busy = ref(false)
-const editing = ref<{ id: number; name: string; category: string | null } | null>(null)
+
+const ledgerId = useLedger(load)
+
+// Editing needs editor or above in this ledger; viewers see the rows
+// read-only (the "..." renders disabled, the menu never opens).
+const canEdit = computed(() => {
+  const role = session.me?.ledgers.find((l) => l.id === ledgerId.value)?.role
+  return role === 'owner' || role === 'editor'
+})
+
+// Inline results under the row they belong to: errors role=alert, success
+// info (the past-reflection note) role=status.
+type RowStatus = { role: 'alert' | 'status'; text: string }
+const statusById = ref<Record<number, RowStatus>>({})
+
+const statusOf = (id: number): RowStatus | null => statusById.value[id] ?? null
+function setStatus(id: number, status: RowStatus): void {
+  statusById.value = { ...statusById.value, [id]: status }
+}
+function clearStatus(id: number): void {
+  if (statusById.value[id] === undefined) return
+  const next = { ...statusById.value }
+  delete next[id]
+  statusById.value = next
+}
+
+interface EditorState {
+  id: number
+  name: string
+  category: string | null
+}
+
+const editing = ref<EditorState | null>(null)
 const mergeSource = ref<number | null>(null)
 const mergeTarget = ref<number | null>(null)
 const mergeConfirm = ref(false)
+// one-time guard: picking another row's 編集 with unsaved input first shows
+// the notice; the next pick goes through (discarding the input)
+const blocked = ref(false)
 
-const ledgerId = useLedger(load)
+function rowOf(id: number): StoreRow | null {
+  return stores.value.find((s) => s.store_id === id) ?? null
+}
+
+function isDirty(): boolean {
+  const e = editing.value
+  if (e === null) return false
+  const row = rowOf(e.id)
+  if (row === null) return e.name.trim() !== ''
+  return e.name !== row.name || e.category !== row.category
+}
+
+function openEditor(row: StoreRow): void {
+  if (!canEdit.value || busy.value) return
+  if (editing.value !== null && isDirty() && !blocked.value) {
+    blocked.value = true
+    setStatus(editing.value.id, { role: 'alert', text: '保存されていません' })
+    return
+  }
+  if (editing.value !== null) clearStatus(editing.value.id)
+  editing.value = { id: row.store_id, name: row.name, category: row.category }
+  blocked.value = false
+  clearStatus(row.store_id)
+  // focus lands on the name input, past the menu's trigger return
+  void nextTick(() => {
+    rootEl.value
+      ?.querySelector<HTMLElement>(`[data-test="store-${row.store_id}"] input[aria-label="店名"]`)
+      ?.focus()
+  })
+}
+
+function closeEditor(): void {
+  if (editing.value !== null) clearStatus(editing.value.id)
+  editing.value = null
+  blocked.value = false
+}
+
+/** Escape / やめる give up — never while a save is in flight. */
+function cancelEditor(): void {
+  if (busy.value) return
+  closeEditor()
+}
+
+const editItems: RowMenuItem[] = [{ action: 'menu-edit', label: '編集', test: 'menu-edit' }]
+
+function onMenu(row: StoreRow, action: string): void {
+  if (action === 'menu-edit') openEditor(row)
+}
 
 const sourceRow = computed(() => stores.value.find((s) => s.store_id === mergeSource.value) ?? null)
 const targetRow = computed(() => stores.value.find((s) => s.store_id === mergeTarget.value) ?? null)
@@ -34,6 +126,8 @@ async function load(l: number): Promise<void> {
   } catch (e) {
     error.value = errorMessage(e)
   }
+  // drop an editor whose row left the list (merged away, filtered out)
+  if (editing.value !== null && rowOf(editing.value.id) === null) closeEditor()
 }
 
 function search(): void {
@@ -54,18 +148,32 @@ async function run(task: (l: number) => Promise<void>): Promise<void> {
   }
 }
 
-function saveEdit(): Promise<void> {
-  return run(async (l) => {
-    const e = editing.value
-    if (!e) return
+// The editor's own results (error and info) stay on its row (TASK-40 §2-3);
+// only the merge / list errors use the card-level message.
+async function saveEdit(): Promise<void> {
+  const e = editing.value
+  const l = ledgerId.value
+  if (e === null || l === null || busy.value) return
+  busy.value = true
+  clearStatus(e.id)
+  try {
     const res = await api.updateStore(l, e.id, { name: e.name, category: e.category })
-    editing.value = null
-    info.value =
+    const note =
       res.before.category !== res.store.category
         ? `「${res.store.name}」を更新しました。店カテゴリの変更は過去のレシートの集計にも反映されます。`
         : `「${res.store.name}」を更新しました。`
     await load(l)
-  })
+    // the editor may have been switched / discarded while the request was in
+    // flight — only the one still on the same row closes here
+    if (editing.value?.id !== e.id) return
+    editing.value = null
+    blocked.value = false
+    setStatus(e.id, { role: 'status', text: note })
+  } catch (err) {
+    setStatus(e.id, { role: 'alert', text: errorMessage(err) })
+  } finally {
+    busy.value = false
+  }
 }
 
 function reviewMerge(): void {
@@ -97,7 +205,10 @@ function doMerge(): Promise<void> {
 </script>
 
 <template>
-  <section class="card">
+  <section
+    ref="rootEl"
+    class="card"
+  >
     <h2>店</h2>
     <form
       class="inline-form"
@@ -142,20 +253,30 @@ function doMerge(): Promise<void> {
         class="row"
         :data-test="`store-${s.store_id}`"
       >
+        <div class="row-main">
+          <strong data-test="store-name">{{ s.name }}</strong>
+          <span class="muted small block">
+            {{ s.category ?? 'カテゴリなし' }} / レシート <span data-test="receipt-count">{{ s.receipt_count }}</span> 件 / 最終 {{ s.last_purchased_on ?? '-' }}
+          </span>
+        </div>
         <div
-          v-if="editing && editing.id === s.store_id"
-          class="row-main inline-form"
+          v-if="editing !== null && editing.id === s.store_id"
+          class="row-editor"
         >
           <input
             v-model="editing.name"
             type="text"
             aria-label="店名"
             data-test="edit-name"
+            @keydown.enter.prevent="saveEdit"
+            @keydown.esc.prevent="cancelEditor"
           >
           <select
             v-model="editing.category"
             aria-label="店カテゴリ"
             data-test="edit-category"
+            @keydown.enter.prevent="saveEdit"
+            @keydown.esc.prevent="cancelEditor"
           >
             <option :value="null">
               なし
@@ -170,6 +291,7 @@ function doMerge(): Promise<void> {
           </select>
           <button
             class="btn btn-primary"
+            type="button"
             :disabled="busy"
             data-test="edit-save"
             @click="saveEdit"
@@ -178,28 +300,28 @@ function doMerge(): Promise<void> {
           </button>
           <button
             class="btn"
-            @click="editing = null"
+            type="button"
+            :disabled="busy"
+            @click="cancelEditor"
           >
-            取消
+            やめる
           </button>
         </div>
-        <template v-else>
-          <div class="row-main">
-            <strong data-test="store-name">{{ s.name }}</strong>
-            <span class="muted small block">
-              {{ s.category ?? 'カテゴリなし' }} / レシート <span data-test="receipt-count">{{ s.receipt_count }}</span> 件 / 最終 {{ s.last_purchased_on ?? '-' }}
-            </span>
-          </div>
-          <div class="actions">
-            <button
-              class="btn"
-              data-test="edit"
-              @click="editing = { id: s.store_id, name: s.name, category: s.category }"
-            >
-              編集
-            </button>
-          </div>
-        </template>
+        <RowMenu
+          v-else
+          :items="editItems"
+          :ariaLabel="`${s.name}の操作`"
+          :test="`row-menu-${s.store_id}`"
+          :disabled="!canEdit"
+          @select="(a) => onMenu(s, a)"
+        />
+        <p
+          v-if="statusOf(s.store_id)"
+          class="row-status"
+          :role="statusOf(s.store_id)!.role"
+        >
+          {{ statusOf(s.store_id)!.text }}
+        </p>
       </li>
     </ul>
   </section>

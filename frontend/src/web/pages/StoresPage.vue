@@ -77,9 +77,12 @@ const ledgerId = useLedger((id) => load(id))
 watch([() => period.range, () => period.labelQuery, selected], () => void load())
 
 // The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
-// standalone manage link on a read-only dashboard.
+// standalone manage link on a read-only dashboard. TASK-40 rev2 §2-4 adds
+// the classification entry ("店カテゴリを管理" opens the manage screen's
+// store-kind tab); both entries are fine for viewers (read-only there).
 const menuItems: PageMenuItem[] = [
   { to: '/settings/stores', label: '店を管理', icon: 'store', test: 'manage-link' },
+  { to: '/settings/categories?kind=store', label: '店カテゴリを管理', icon: 'tag', test: 'manage-store-categories-link' },
 ]
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])

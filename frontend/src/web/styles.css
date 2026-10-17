@@ -637,8 +637,85 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .row:last-child { border-bottom: 0; }
 .row:hover { background: var(--bb-hover); }
 .row.column { flex-direction: column; align-items: stretch; }
-.row.child { padding-left: 2rem; }
 .row-main { flex: 1 1 14rem; min-width: 0; }
+
+/* -------------------------------------- manage screens (TASK-40 §2-5) */
+/* 44px square icon buttons: the row's chevron / "+" / trailing "..." */
+.row-action-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bb-radius);
+  background: transparent;
+  color: var(--bb-muted);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.row-action-btn:hover:not(:disabled) { background: var(--bb-hover); color: var(--bb-fg); }
+.row-action-btn:disabled { opacity: 0.35; cursor: default; }
+.row-menu { display: inline-flex; flex: none; }
+.menu-item.danger { color: var(--bb-danger); }
+.head-actions { display: inline-flex; align-items: center; gap: 0.25rem; }
+
+/* top categories are collapsible group headers; children sit in a guided
+   block on the left edge */
+.cat-head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 44px;
+  margin: 0.25rem 0;
+  padding: 0 0.25rem;
+  border-radius: var(--bb-radius);
+  background: var(--bb-accent-soft);
+  font-weight: 600;
+}
+.cat-head .badge { font-weight: 400; }
+.cat-name { min-width: 0; overflow-wrap: anywhere; }
+.cat-add { margin-left: auto; }
+.cat-count { color: var(--bb-muted); font-size: 0.75rem; font-weight: 400; }
+.cat-fold .icon { transition: transform 0.15s ease; }
+.cat-fold[aria-expanded='false'] .icon { transform: rotate(-90deg); }
+.cat-children {
+  list-style: none;
+  margin: 0 0 0 0.75rem;
+  padding: 0 0 0 0.25rem;
+  border-left: 2px solid var(--bb-border);
+}
+
+/* the row editor and the add rows wrap their controls (narrow screens
+   flow them over several lines); results sit right under the row */
+.row-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+.row .row-editor { flex: 1 1 100%; }
+.add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+  padding: 0.5rem;
+  border: 1px dashed var(--bb-border);
+  border-radius: var(--bb-radius);
+}
+.row-status {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--bb-radius);
+  font-size: 0.85rem;
+}
+.row-status[role='alert'] { background: var(--bb-error-bg); color: var(--bb-danger); }
+.row-status[role='status'] { background: var(--bb-info-bg); }
 .link-row { display: flex; gap: 0.75rem; text-decoration: none; color: inherit; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 
@@ -1505,4 +1582,5 @@ a.sub-row:hover { background: var(--bb-hover); }
   .msg, .usage-copy-done, .skeleton .sk { animation: none; }
   .topbar.ledger-scoped { transition: none; }
   .ledger-chip { transition: none; }
+  .cat-fold .icon { transition: none; }
 }

@@ -13,6 +13,7 @@ import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
 import { usePeriodStore } from '../stores/period'
+import { useSessionStore } from '../stores/session'
 
 // Category dashboard (read-only): spending by top-level category for the
 // period, its trend, and for a selected category its sub-category breakdown,
@@ -23,6 +24,7 @@ import { usePeriodStore } from '../stores/period'
 const api = useDataApi()
 const route = useRoute()
 const period = usePeriodStore()
+const session = useSessionStore()
 period.fromQuery(route.query)
 
 const initial = typeof route.query.category === 'string' && route.query.category ? route.query.category : null
@@ -78,10 +80,22 @@ const ledgerId = useLedger((id) => load(id))
 watch([() => period.range, () => period.labelQuery, selected], () => void load())
 
 // The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
-// standalone manage link on a read-only dashboard.
-const menuItems: PageMenuItem[] = [
-  { to: '/settings/categories', label: 'カテゴリを管理', icon: 'tag', test: 'manage-link' },
-]
+// standalone manage link on a read-only dashboard. TASK-40 rev2 §2-4 adds
+// the create entry ("大分類を追加" deep-links the manage screen's top add
+// row); viewers get the manage link only — creation stays editor-only.
+const canEdit = computed(() => {
+  const role = session.me?.ledgers.find((l) => l.id === ledgerId.value)?.role
+  return role === 'owner' || role === 'editor'
+})
+const menuItems = computed<PageMenuItem[]>(() => {
+  const items: PageMenuItem[] = [
+    { to: '/settings/categories?kind=item', label: 'カテゴリを管理', icon: 'tag', test: 'manage-link' },
+  ]
+  if (canEdit.value) {
+    items.push({ to: '/settings/categories?kind=item&new=top', label: '大分類を追加', icon: 'plus', test: 'add-top-link' })
+  }
+  return items
+})
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)

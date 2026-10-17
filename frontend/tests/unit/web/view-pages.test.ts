@@ -30,12 +30,14 @@ function expectNoEditing(w: W): void {
 }
 
 /**
- * TASK-45: the manage link is not a standalone toolbar link anymore; it lives
- * in the "..." page menu (PageMenu wrapping PopoverMenu). In the closed state
- * no manage-link is in the DOM at all; the trigger opens role=menu holding
- * the menuitem link and closes again on re-press.
+ * TASK-45 + TASK-40 rev2: the manage link is not a standalone toolbar link;
+ * it lives in the "..." page menu (PageMenu wrapping PopoverMenu) next to a
+ * second create / classification entry. In the closed state no manage-link
+ * is in the DOM at all; the trigger opens role=menu holding exactly the
+ * given menuitem links (checked for role / label / href) and closes again
+ * on re-press.
  */
-async function expectManageLinkInMenu(w: W, href: string): Promise<void> {
+async function expectManageLinkInMenu(w: W, items: { test: string; label: string; href: string }[]): Promise<void> {
   expect(w.find('[data-test="manage-link"]').exists()).toBe(false)
   const trigger = w.find('[data-test="page-menu"]')
   expect(trigger.attributes('aria-haspopup')).toBe('menu')
@@ -44,9 +46,15 @@ async function expectManageLinkInMenu(w: W, href: string): Promise<void> {
   await trigger.trigger('click')
   await settle()
   expect(trigger.attributes('aria-expanded')).toBe('true')
-  const item = w.find('[role="menu"] [data-test="manage-link"]')
-  expect(item.attributes('role')).toBe('menuitem')
-  expect(item.attributes('href')).toBe(href)
+  const menu = w.find('[role="menu"]')
+  expect(menu.findAll('[role="menuitem"]')).toHaveLength(items.length)
+  for (const { test, label, href } of items) {
+    const item = menu.find(`[data-test="${test}"]`)
+    expect(item.exists(), test).toBe(true)
+    expect(item.attributes('role')).toBe('menuitem')
+    expect(item.text()).toBe(label)
+    expect(item.attributes('href')).toBe(href)
+  }
   await trigger.trigger('click')
   await settle()
   expect(w.find('[role="menu"]').exists()).toBe(false)
@@ -66,7 +74,10 @@ describe('CategoriesPage (dashboard)', () => {
     expect(wrapper.find('[data-test="trend-card"] .bar-label').exists()).toBe(false)
     expect(wrapper.find('[data-test="trend-card"] [data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['2025年11月', '2026年10月'])
     expectNoEditing(wrapper)
-    await expectManageLinkInMenu(wrapper, '/settings/categories')
+    await expectManageLinkInMenu(wrapper, [
+      { test: 'manage-link', label: 'カテゴリを管理', href: '/settings/categories?kind=item' },
+      { test: 'add-top-link', label: '大分類を追加', href: '/settings/categories?kind=item&new=top' },
+    ])
 
     await wrapper.find('[data-test="row-食費"]').trigger('click')
     await settle()
@@ -86,6 +97,17 @@ describe('CategoriesPage (dashboard)', () => {
     await settle()
     expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
     await router.push('/')
+
+    // a viewer gets the manage entries but not the create one (the manage
+    // screen is viewable read-only; creation stays editor-only)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: { ...ME, ledgers: [{ ...ME.ledgers[0]!, role: 'viewer' as const }] } } })
+    const viewer = await mountApp('/categories')
+    const vTrigger = viewer.wrapper.find('[data-test="page-menu"]')
+    await vTrigger.trigger('click')
+    await settle()
+    expect(viewer.wrapper.find('[role="menu"] [data-test="manage-link"]').exists()).toBe(true)
+    expect(viewer.wrapper.find('[role="menu"] [data-test="add-top-link"]').exists()).toBe(false)
   })
 })
 
@@ -94,7 +116,10 @@ describe('StoresPage (dashboard)', () => {
     const { wrapper } = await mountApp('/stores')
     expect(wrapper.find('[data-test="row-Aマート"]').text()).toContain('400円')
     expectNoEditing(wrapper)
-    await expectManageLinkInMenu(wrapper, '/settings/stores')
+    await expectManageLinkInMenu(wrapper, [
+      { test: 'manage-link', label: '店を管理', href: '/settings/stores' },
+      { test: 'manage-store-categories-link', label: '店カテゴリを管理', href: '/settings/categories?kind=store' },
+    ])
     await wrapper.find('[data-test="row-Aマート"]').trigger('click')
     await settle()
     const detail = wrapper.find('[data-test="detail"]')
