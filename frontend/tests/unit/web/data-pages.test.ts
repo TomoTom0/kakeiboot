@@ -652,6 +652,10 @@ describe('Receipts', () => {
     expect(p.exists()).toBe(true)
     expect(p.find('[data-test="items"]').text()).toContain('牛乳')
     expect(p.find('[data-test="items-total"]').text()).toContain('400円')
+    // the item category is a link into the hierarchy page (TASK-74 §4-8)
+    const cat = p.find('[data-test="item-cat-1001"]')
+    expect(cat.element.tagName).toBe('A')
+    expect(cat.attributes('href')).toBe('/categories/1/2?month=2026-10')
   })
 
   it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {

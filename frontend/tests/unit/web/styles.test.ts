@@ -86,8 +86,11 @@ describe('layout: grid children shrink', () => {
       'minmax(0, 1fr) auto auto',
     )
     expect(rulesFor('.hscroll').some((r) => decl(r.body, 'overflow-x') === 'auto')).toBe(true)
-    // the page itself is never clipped to hide overflow
-    for (const sel of ['body', '.main-col', 'html', '.app-main']) {
+    // the page itself is never clipped to hide overflow — .app-main is the
+    // slide transition's stage since TASK-74 (overflow-x: clip so the parked
+    // leaving page and the entering translateX(100%) never widen the
+    // document), so it stays out of this rule
+    for (const sel of ['body', '.main-col', 'html']) {
       for (const r of rulesFor(sel)) {
         expect(decl(r.body, 'overflow-x') ?? '', sel).not.toMatch(/hidden|clip/)
         expect(decl(r.body, 'overflow') ?? '', sel).not.toMatch(/hidden|clip/)

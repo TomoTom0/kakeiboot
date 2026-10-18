@@ -8,6 +8,8 @@ import LedgerSwitcher from './components/LedgerSwitcher.vue'
 import PopoverMenu from './components/PopoverMenu.vue'
 import StepUpDialog from './components/StepUpDialog.vue'
 import TopbarFilterBar from './components/TopbarFilterBar.vue'
+import { direction } from './composables/navDirection'
+import { markReady, notifyPageEntered, PAGE_READY_KEY, resetPageReady } from './composables/usePageReady'
 import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
@@ -31,6 +33,7 @@ const SECTION_TITLES = {
   receipts: { title: 'レシート', icon: 'receipt' },
   categories: { title: 'カテゴリ', icon: 'tag' },
   stores: { title: '店', icon: 'store' },
+  search: { title: '検索', icon: 'search' },
   settings: { title: '設定', icon: 'settings' },
   apps: { title: '接続中のアプリ', icon: 'link' },
   usage: { title: '使い方', icon: 'help' },
@@ -46,29 +49,23 @@ const NAV: { to: string; name: SectionName }[] = [
   { to: '/stores', name: 'stores' },
 ]
 
-/** Section of the current route (the receipt detail belongs to receipts). */
-const section = computed(() => {
-  const name = String(route.name ?? '')
-  if (name === 'receipt') return 'receipts'
-  if (route.path.startsWith('/settings')) return 'settings'
-  // usage-* subpages (e.g. /usage/connect) share the usage section, like
-  // manage-* collapses into settings
-  if (name.startsWith('usage-')) return 'usage'
-  return name
+/** Section of the current route, from route.meta (TASK-74 §4-2): the detail
+ * routes and /search carry their own section and manage-* inherits 'settings'
+ * from the /settings parent record. Routes without a section (the public
+ * screens) read as '' — they render outside the shell anyway. */
+const section = computed<SectionName | ''>(() => {
+  const s = route.meta.section
+  return typeof s === 'string' && s in SECTION_TITLES ? (s as SectionName) : ''
 })
-const ledgerScoped = computed(
-  () =>
-    ['home', 'receipts', 'categories', 'stores'].includes(section.value) ||
-    String(route.name ?? '').startsWith('manage-'),
-)
+const ledgerScoped = computed(() => route.meta.ledgerScoped === true)
 // The topbar center filter bar (TASK-44 §11-3/11-6): only on the browsing
 // routes that opted in via route.meta.filters, and only while the user can
 // actually view a ledger (no membership -> no shared filters to show).
 const showFilters = computed(
   () => route.meta.filters === true && (session.me?.ledgers.length ?? 0) > 0,
 )
-const pageTitle = computed(() => SECTION_TITLES[section.value as SectionName]?.title ?? '')
-const pageIcon = computed(() => SECTION_TITLES[section.value as SectionName]?.icon)
+const pageTitle = computed(() => (section.value === '' ? '' : SECTION_TITLES[section.value].title))
+const pageIcon = computed(() => (section.value === '' ? undefined : SECTION_TITLES[section.value].icon))
 
 // The selected ledger paints the top bar band and the switcher chip.
 const ledgerColor = computed(() => session.selectedLedger?.color ?? 'teal')
@@ -156,6 +153,26 @@ watch(navKey, () => {
   closeDrawer()
   accountOpen.value = false
 })
+
+// --- shell page transition (TASK-74 §4-3) --------------------------------------
+// The shell RouterView slides by the navigation direction: forward enters
+// from the right, back from the left, and a 'none' direction (tab switches,
+// every replace) skips the CSS machinery entirely. The key is the first path
+// segment: the feed rewrites its URL while scrolling without remounting, the
+// settings tabs all share 'settings' (so the shell never remounts and their
+// inner fade lives on), and only a real component change (list -> detail)
+// swaps — same key, different component still transitions.
+const transitionName = computed(() =>
+  direction.value === 'forward' ? 'slide-forward' : direction.value === 'back' ? 'slide-back' : '',
+)
+const pageKey = computed(() => route.path.split('/')[1] ?? '')
+function onAfterEnter(): void {
+  notifyPageEntered()
+}
+// pages report their data load through this (usePageReady); the parked scroll
+// restore of a pop waits for it alongside the finished enter
+provide(PAGE_READY_KEY, { markReady })
+watch(pageKey, () => resetPageReady())
 
 async function logout(): Promise<void> {
   accountOpen.value = false
@@ -347,11 +364,18 @@ async function logout(): Promise<void> {
         >
           <main class="app-main">
             <RouterView v-slot="{ Component }">
+              <!-- direction-based since TASK-74: no mode (both pages move at
+                   once) and :css off for a 'none' direction, so replaces and
+                   tab swaps swap instantly with no transition classes -->
               <Transition
-                name="page"
-                mode="out-in"
+                :name="transitionName"
+                :css="transitionName !== ''"
+                @after-enter="onAfterEnter"
               >
-                <component :is="Component" />
+                <component
+                  :is="Component"
+                  :key="pageKey"
+                />
               </Transition>
             </RouterView>
           </main>

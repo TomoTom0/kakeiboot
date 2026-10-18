@@ -10,6 +10,7 @@ import DashSkeleton from '../components/DashSkeleton.vue'
 import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
+import { usePageReady } from '../composables/usePageReady'
 import { dayLabel } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
 import { useLabelsStore } from '../stores/labels'
@@ -24,6 +25,7 @@ const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
+const { markReady } = usePageReady()
 period.fromQuery(route.query)
 const rootEl = ref<HTMLElement | null>(null)
 
@@ -121,6 +123,7 @@ async function load(id?: number): Promise<void> {
       // not depend on the list refs, so the flip must come first
       loading.value = false
       loaded.value = true
+      markReady()
       void scrollToReturned()
     }
   }
@@ -383,7 +386,6 @@ const groups = computed(() => {
           v-if="(payments?.sections[0]?.rows.length ?? 0) > 0"
           :rows="payments!.sections[0]!.rows"
           :compare-label="period.compareLabel"
-          :inert="payments!.sections[0]!.rows.map((r) => r.labels[0] ?? '')"
           colors
         />
         <p

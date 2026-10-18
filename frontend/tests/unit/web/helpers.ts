@@ -156,6 +156,8 @@ export interface ScrollMocks {
   /** every Element.scrollIntoView call: the element and its argument */
   intoView: { el: Element; arg: unknown }[]
   scrollBy: ReturnType<typeof vi.fn>
+  /** every window.scrollTo call (the router scrollBehavior since TASK-74) */
+  scrollTo: ReturnType<typeof vi.fn>
 }
 
 let scroll: ScrollMocks | null = null
@@ -174,10 +176,13 @@ function installScrollMocks(): void {
   MockIntersectionObserver.instances = []
   reducedMotion = false
   mediaChangeListeners.clear()
-  const s: ScrollMocks = { intoView: [], scrollBy: vi.fn() }
+  const s: ScrollMocks = { intoView: [], scrollBy: vi.fn(), scrollTo: vi.fn() }
   scroll = s
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
   vi.stubGlobal('scrollBy', s.scrollBy)
+  // the router scrollBehavior (TASK-74) scrolls on every navigation; jsdom's
+  // own window.scrollTo only logs "Not implemented", so stub it as well
+  vi.stubGlobal('scrollTo', s.scrollTo)
   vi.stubGlobal('matchMedia', (media: string) => ({
     matches: mediaMatches.has(media)
       ? mediaMatches.get(media)!

@@ -397,6 +397,11 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
         lg.receipts
           .filter((r) => r.deleted_at === null && (r.purchased_on ?? '') >= f && (r.purchased_on ?? '') <= t)
           .filter((r) => !q.store || (r.store?.name ?? '').includes(q.store))
+          // web-only exact store id and the store-category path (TASK-74 A1:
+          // a parent store category includes its children — the same
+          // resolve_path semantics the backend's filter_sql applies)
+          .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
+          .filter((r) => !q.store_category || (r.store?.category ?? '') === q.store_category || (r.store?.category ?? '').startsWith(`${q.store_category}/`))
           .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
           .flatMap((r) => r.items.map((it) => ({ r, it, top: (it.category ?? '未分類').split('/')[0]! })))
           .filter((x) =>
@@ -428,22 +433,66 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
       const pr = prevRange()
       const prev = pr ? facts(pr[0], pr[1]) : null
       const compare = prev ? sum(prev) : null
-      const ranked = (id: string, title: string, key: (x: (typeof cur)[number]) => string, limit = 10) => {
-        const map = new Map<string, number>()
-        for (const x of cur) map.set(key(x), (map.get(key(x)) ?? 0) + x.it.amount_incl)
-        const pmap = new Map<string, number>()
-        for (const x of prev ?? []) pmap.set(key(x), (pmap.get(key(x)) ?? 0) + x.it.amount_incl)
-        const rows = [...map.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, limit)
-          .map(([label, v]) => ({
-            keys: [label],
-            labels: [label],
+      // ranked_section parity (TASK-74 §4-1): the row keys hold the row's id
+      // — the category top/sub id or the store id — and every aggregate
+      // (その他 / 未分類 / 店不明, i.e. a key the ledger has no node for)
+      // keys null, so the screens decide linkability off keys[0]. Rows past
+      // the limit fold into a その他 row exactly like the backend's top-N.
+      const ranked = (
+        id: string,
+        title: string,
+        sel: (x: (typeof cur)[number]) => { group: string; key: number | string | null; label: string },
+        limit = 10,
+      ) => {
+        const agg = (xs: typeof cur) => {
+          const map = new Map<string, { key: number | string | null; label: string; v: number }>()
+          for (const x of xs) {
+            const s = sel(x)
+            const e = map.get(s.group) ?? { key: s.key, label: s.label, v: 0 }
+            e.v += x.it.amount_incl
+            map.set(s.group, e)
+          }
+          return map
+        }
+        const map = agg(cur)
+        const pmap = agg(prev ?? [])
+        const entries = [...map.entries()].sort((a, b) => b[1].v - a[1].v)
+        const total = entries.reduce((a, [, e]) => a + e.v, 0)
+        const rows = entries.slice(0, limit).map(([group, e]) => ({
+          keys: [e.key],
+          labels: [e.label],
+          value: e.v,
+          ...(prev ? { compare_value: pmap.get(group)?.v ?? 0, diff: e.v - (pmap.get(group)?.v ?? 0) } : {}),
+          share: total ? e.v / total : 0,
+        }))
+        const rest = entries.slice(limit)
+        if (rest.length) {
+          const v = rest.reduce((a, [, e]) => a + e.v, 0)
+          const c = rest.reduce((a, [group]) => a + (pmap.get(group)?.v ?? 0), 0)
+          rows.push({
+            keys: [null],
+            labels: ['その他'],
             value: v,
-            ...(prev ? { compare_value: pmap.get(label) ?? 0, diff: v - (pmap.get(label) ?? 0) } : {}),
-            share: value ? v / value : 0,
-          }))
+            ...(prev ? { compare_value: c, diff: v - c } : {}),
+            share: total ? v / total : 0,
+          })
+        }
         return { id, title, dims: [id], chart: 'bar_h', rows }
+      }
+      // key selectors: the numeric ids come off the ledger's own trees
+      const topSel = (x: (typeof cur)[number]) => ({
+        group: x.top,
+        key: lg.cats.find((c) => c.kind === 'item' && c.parentId === null && c.name === x.top)?.id ?? null,
+        label: x.top,
+      })
+      const storeSel = (x: (typeof cur)[number]) => ({
+        group: x.r.store?.name ?? '店不明',
+        key: x.r.store?.store_id ?? null,
+        label: x.r.store?.name ?? '店不明',
+      })
+      const subSel = (x: (typeof cur)[number]) => {
+        const path = x.it.category!
+        return { group: path, key: findPath(lg, 'item', path)?.id ?? null, label: path }
       }
       const months = (f: string, t: string) => {
         const out: string[] = []
@@ -462,21 +511,21 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
           const hi = clipTo && clipTo < `${m}-31` ? clipTo : `${m}-31`
           return { keys: [m], labels: [m], value: sum(facts(lo, hi)) }
         })
-      const catKey = (x: (typeof cur)[number]) =>
-        q.category && q.category !== '未分類' ? (x.it.category ?? q.category) : x.top
       let sections
       if (report === 'monthly_overview') {
         sections = [
-          ranked('categories', '品目カテゴリ（大分類）別', (x) => x.top),
-          ranked('stores', '上位の店', (x) => x.r.store?.name ?? '店不明', 5),
+          ranked('categories', '品目カテゴリ（大分類）別', topSel),
+          ranked('stores', '上位の店', storeSel, 5),
           { id: 'trend', title: '直近6か月の推移', dims: ['month'], chart: 'bar_v', rows: trendRows(months(`${shiftMonth(to.slice(0, 7), -5)}-01`, to)) },
         ]
       } else if (report === 'by_category') {
-        sections = [ranked('categories', q.category ? `「${q.category}」の内訳` : '品目カテゴリ（大分類）別', catKey)]
+        // with a category filter the backend groups by the item's direct
+        // category (label = the full path); 未分類 keeps the top-level dim
+        sections = [ranked('categories', q.category ? `「${q.category}」の内訳` : '品目カテゴリ（大分類）別', q.category && q.category !== '未分類' ? subSel : topSel)]
       } else if (report === 'by_store') {
-        sections = [ranked('stores', '店別', (x) => x.r.store?.name ?? '店不明')]
+        sections = [ranked('stores', '店別', storeSel)]
       } else if (report === 'by_payment_method') {
-        sections = [ranked('payment_methods', '支払方法別', (x) => (x.r.payment_method === 'cash' ? '現金' : x.r.payment_method ?? '支払方法不明'))]
+        sections = [ranked('payment_methods', '支払方法別', (x) => ({ group: x.r.payment_method ?? '支払方法不明', key: x.r.payment_method ?? null, label: x.r.payment_method === 'cash' ? '現金' : x.r.payment_method ?? '支払方法不明' }))]
       } else if (report === 'monthly_trend') {
         sections = [{ id: 'trend', title: '月別合計', dims: ['month'], chart: 'bar_v', rows: trendRows(months(from, to), from, to) }]
       } else if (report === 'item_price_history') {

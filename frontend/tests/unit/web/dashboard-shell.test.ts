@@ -52,6 +52,27 @@ describe('HomePage (dashboard)', () => {
     // the link carries the period context (web-receipts.recent-links-carry-context)
     const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
     expect(recent.pathname).toBe('/receipts/101')
+    // TASK-74: the legend and store rows drill into the hierarchy routes
+    // (keys[0] = the top category / store id), carrying the period
+    const legendLink = new URL(wrapper.find('[data-test="categories"] li a').attributes('href')!, 'http://localhost')
+    expect(legendLink.pathname).toBe('/categories/1')
+    expect(legendLink.searchParams.get('month')).toBe('2026-10')
+    expect(legendLink.searchParams.get('category')).toBe(null)
+    const storeRow = new URL(wrapper.find('[data-test="stores"] .rank-link').attributes('href')!, 'http://localhost')
+    expect(storeRow.pathname).toBe('/stores/1')
+    expect(storeRow.searchParams.get('month')).toBe('2026-10')
+
+    // a 未分類 legend row (an item with no category) links to the
+    // uncategorized carve-out; the その他 aggregate stays a non-link span
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    await api.updateReceipt(1, 102, { revision: 1, upsert_items: [{ item_id: 1003, category: null }] })
+    const again = await mountApp('/')
+    const legendRows = again.wrapper.findAll('[data-test="categories"] li')
+    const unc = legendRows.find((li) => li.text().includes('未分類'))!.find('a')
+    expect(new URL(unc.attributes('href')!, 'http://localhost').pathname).toBe('/categories/uncategorized')
+    // the store rows all carry their store id (mock parity keys)
+    expect(again.wrapper.findAll('[data-test="stores"] .rank-link').every((a) => a.element.tagName === 'A')).toBe(true)
   })
 
   it('[covers:web-home.dashboard-month-switch] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
@@ -176,11 +197,13 @@ describe('HomePage (dashboard)', () => {
     expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(12)
     expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['1月', '12月'])
     expect(wrapper.find('.bar-col.current').exists()).toBe(false)
-    // links carry the period in its URL form (year=, not from&to)
+    // links carry the period in its URL form (year=, not from&to); the
+    // legend drills into the category route (TASK-74) instead of the legacy
+    // ?category= selection
     const legend = new URL(wrapper.find('[data-test="categories"] li a').attributes('href')!, 'http://localhost')
-    expect(legend.pathname).toBe('/categories')
+    expect(legend.pathname).toBe('/categories/1')
     expect(legend.searchParams.get('year')).toBe('2026')
-    expect(legend.searchParams.get('category')).toBe('食費')
+    expect(legend.searchParams.get('category')).toBe(null)
     const more = new URL(wrapper.find('[data-test="recent"] a.more').attributes('href')!, 'http://localhost')
     expect(more.searchParams.get('year')).toBe('2026')
 
@@ -273,6 +296,53 @@ describe('App shell', () => {
     expect(receiptsSvg.exists()).toBe(true)
     expect(receiptsSvg.attributes('aria-hidden')).toBe('true')
     expect(receiptsSvg.html()).toContain('M5 3h14v18l-2.5-1.5') // the "receipt" glyph
+  })
+
+  it('[covers:web-shell.section-from-meta] section・ledgerScoped は route.meta から（/search の表題・ledger スコープ・nav active・manage-* の settings 継承）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    const { wrapper, router } = await mountApp('/search')
+    // the /search title was empty since TASK-41: the section now comes from
+    // route.meta and SECTION_TITLES carries search (TASK-74 §4-2)
+    expect(wrapper.find('.topbar-title').text()).toBe('検索')
+    expect(wrapper.find('.topbar-title svg').exists()).toBe(true)
+    // search joins the ledger-scoped browsing routes: the switcher shows
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    expect(wrapper.find('header.topbar').classes()).toContain('ledger-scoped')
+    // search is no nav section: none of the four tabs claims it
+    for (const n of ['home', 'receipts', 'categories', 'stores']) {
+      expect(wrapper.find(`[data-test="nav-${n}"]`).classes()).not.toContain('active')
+    }
+    // the browsing routes carry their section / depth / ledgerScoped meta
+    // (TASK-74 §4-2 route table; the hierarchy routes landed in stage 5)
+    const m = (p: string) => router.resolve(p).meta
+    expect(m('/')).toMatchObject({ section: 'home', depth: 1, ledgerScoped: true })
+    expect(m('/receipts')).toMatchObject({ section: 'receipts', depth: 1, ledgerScoped: true })
+    expect(m('/receipts/101')).toMatchObject({ section: 'receipts', depth: 2, ledgerScoped: true })
+    expect(m('/categories')).toMatchObject({ section: 'categories', depth: 1, ledgerScoped: true })
+    expect(m('/categories/1')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
+    expect(m('/categories/1/2')).toMatchObject({ section: 'categories', depth: 3, ledgerScoped: true })
+    expect(m('/categories/uncategorized')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
+    expect(m('/stores')).toMatchObject({ section: 'stores', depth: 1, ledgerScoped: true })
+    expect(m('/stores/1')).toMatchObject({ section: 'stores', depth: 2, ledgerScoped: true })
+    expect(m('/search')).toMatchObject({ section: 'search', depth: 1, ledgerScoped: true })
+    // manage-* inherits the settings section from the /settings parent record
+    // but keeps the ledger scope; the plain settings tabs have no scope
+    expect(m('/settings/categories')).toMatchObject({ section: 'settings', ledgerScoped: true })
+    expect(m('/settings/general').section).toBe('settings')
+    expect(m('/settings/general').ledgerScoped).toBeFalsy()
+    expect(m('/apps').section).toBe('apps')
+    expect(m('/usage/connect').section).toBe('usage')
+
+    // the manage screen keeps the settings title with its switcher; usage is
+    // not ledger scoped
+    await router.push('/settings/categories')
+    await settle()
+    expect(wrapper.find('.topbar-title').text()).toBe('設定')
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    await router.push('/usage')
+    await settle()
+    expect(wrapper.find('.topbar-title').text()).toBe('使い方')
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
   })
 
   it('[covers:web-shell.menus] 左上 menu ボタンで drawer を開閉（aria・アイコン・フォーカス・inert・scrim）、右上アカウントメニューからログアウト', async () => {

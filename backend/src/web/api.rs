@@ -560,6 +560,11 @@ pub struct StatsQuery {
     #[serde(default)]
     store: Option<String>,
     #[serde(default)]
+    store_category: Option<String>,
+    /// Web-only exact store match (the MCP filters have no store_id)
+    #[serde(default)]
+    store_id: Option<i64>,
+    #[serde(default)]
     item_query: Option<String>,
     /// Comma-separated palette keys (OR), e.g. `label_colors=red,blue`
     #[serde(default)]
@@ -595,9 +600,10 @@ pub async fn get_stats(
     let filters = Filters {
         category: q.category,
         store: q.store,
+        store_category: q.store_category,
+        store_id: q.store_id,
         item_query: q.item_query,
         label_colors: (!label_colors.is_empty()).then_some(label_colors),
-        ..Filters::default()
     };
     let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
     let (res, meta) = stats::summarize(

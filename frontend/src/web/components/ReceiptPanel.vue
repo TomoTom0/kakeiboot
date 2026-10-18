@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 import {
   useDataApi,
   type DeleteReceiptResult,
@@ -12,6 +14,8 @@ import { errorCodeOf, errorMessage, formatDateTime, formatYen } from '../composa
 import { PAYMENT_LABEL } from '../composables/labels'
 import AppIcon from './AppIcon.vue'
 import { dayLabel } from '../composables/period'
+import { useCatalogStore } from '../stores/catalog'
+import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
 // One receipt in the feed (TASK-16 item 1): view by default, edit / delete /
@@ -84,6 +88,43 @@ async function load(): Promise<void> {
 }
 onMounted(load)
 watch(() => [props.ledgerId, props.receiptId], () => void load())
+
+// The detail links below (TASK-74 §4-8) need the catalog's path → id map;
+// a failed fetch must not break the panel (everything stays a plain span).
+const catalog = useCatalogStore()
+const period = usePeriodStore()
+onMounted(() => {
+  void catalog.load().catch(() => {})
+})
+
+/** Link query of the receipt's purchase month (D28 §5-1: a receipt without
+ * a purchase date keeps the current period — urlQuery's three forms). */
+const linkQuery = computed<Record<string, string>>(() =>
+  receipt.value?.purchased_on
+    ? { month: receipt.value.purchased_on.slice(0, 7) }
+    : { ...period.urlQuery },
+)
+
+/** Read-mode item rows, each with its category's hierarchy-route target
+ * (TASK-74 §4-8): null keeps the plain span — 未分類, a path the active
+ * catalog cannot resolve, or the edit mode (no moving while editing). */
+const itemRows = computed(() =>
+  (receipt.value?.items ?? []).map((it) => {
+    let catTo: RouteLocationRaw | null = null
+    const path = it.category
+    if (!editing.value && path) {
+      const node = catalog.resolve('item', path)
+      const parent = node === null ? null : catalog.parentIdOf('item', node.id)
+      if (node) {
+        catTo = {
+          path: parent === null ? `/categories/${node.id}` : `/categories/${parent}/${node.id}`,
+          query: linkQuery.value,
+        }
+      }
+    }
+    return { it, catTo }
+  }),
+)
 
 // The role in the panel's own ledger decides editability (with the receipt
 // not deleted); viewers stay read-only.
@@ -326,7 +367,12 @@ const labelSlotProps = computed(() => ({
             class="detail-title"
             tabindex="-1"
           >
-            <span data-test="store-name">{{ receipt.store?.name ?? receipt.store_name_raw ?? '店名なし' }}</span>
+            <span data-test="store-name"><RouterLink
+              v-if="receipt.store"
+              class="store-link"
+              :to="{ path: `/stores/${receipt.store.store_id}`, query: linkQuery }"
+            >{{ receipt.store.name }}</RouterLink>
+              <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
             <span
               v-if="receipt.deleted_at"
               class="badge badge-danger"
@@ -341,10 +387,12 @@ const labelSlotProps = computed(() => ({
               v-if="receipt.payment_method"
               class="tag"
             >{{ PAYMENT_LABEL[receipt.payment_method] }}</span>
-            <span
+            <RouterLink
               v-if="receipt.store?.category"
-              class="tag"
-            >{{ receipt.store.category }}</span>
+              class="tag tag-link"
+              :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
+              data-test="store-category"
+            >{{ receipt.store.category }}</RouterLink>
             <span
               v-if="receipt.has_image"
               class="tag"
@@ -541,18 +589,27 @@ const labelSlotProps = computed(() => ({
           >
             <tbody>
               <tr
-                v-for="it in receipt.items"
-                :key="it.item_id"
+                v-for="row in itemRows"
+                :key="row.it.item_id"
               >
                 <td>
-                  {{ it.name }}
-                  <span class="muted small block">{{ it.category ?? '未分類' }}</span>
+                  {{ row.it.name }}
+                  <RouterLink
+                    v-if="row.catTo"
+                    class="cat-link"
+                    :to="row.catTo"
+                    :data-test="`item-cat-${row.it.item_id}`"
+                  >{{ row.it.category }}</RouterLink>
+                  <span
+                    v-else
+                    class="muted small block"
+                  >{{ row.it.category ?? '未分類' }}</span>
                 </td>
                 <td
                   class="num"
-                  :class="{ neg: it.amount_incl < 0 }"
+                  :class="{ neg: row.it.amount_incl < 0 }"
                 >
-                  {{ formatYen(it.amount_incl) }}
+                  {{ formatYen(row.it.amount_incl) }}
                 </td>
               </tr>
             </tbody>

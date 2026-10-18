@@ -11,6 +11,7 @@ import LabelPicker from '../components/LabelPicker.vue'
 import ReceiptPanel from '../components/ReceiptPanel.vue'
 import { useLedger } from '../composables/ledger'
 import { monthEnd, shortDate } from '../composables/period'
+import { usePageReady } from '../composables/usePageReady'
 import {
   contextKeyOf,
   contextToListQuery,
@@ -33,6 +34,9 @@ const router = useRouter()
 // move on arrow keys — the background is inert, but key events from the
 // focused sidebar still reach the window listener
 const drawerModal = inject<Ref<boolean>>('drawer-modal', ref(false))
+// the shell's scroll-restore gate (TASK-74 §4-3): the feed reports its
+// sequence load settled — found, failed or fallen back to the single
+const { markReady } = usePageReady()
 
 const MAX_PAGES = 4
 const WINDOW = 2
@@ -149,6 +153,7 @@ async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): P
         fallbackNote.value = false
         void ensureObserved()
         void initialScroll(anchor, mseq)
+        markReady()
         return
       }
       if (!res.next_cursor) break
@@ -160,12 +165,14 @@ async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): P
       loadError.value = true
       setSingle(anchor, false)
       void ensureObserved()
+      markReady()
     }
     return
   }
   // not found within the look-back limit: this receipt alone
   setSingle(anchor, true)
   void ensureObserved()
+  markReady()
 }
 
 async function maybeLoadMore(): Promise<void> {

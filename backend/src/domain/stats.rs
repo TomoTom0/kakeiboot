@@ -190,6 +190,11 @@ pub struct Filters {
     /// filter" and is normalized to None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_colors: Option<Vec<LabelColor>>,
+    /// Web-only exact store match (the web StatsQuery sets it). `serde(skip)`
+    /// keeps it out of the MCP summarize_spending input (deny_unknown_fields
+    /// still rejects it as an unknown key) and out of the echo.
+    #[serde(skip)]
+    pub store_id: Option<i64>,
 }
 
 impl Filters {
@@ -208,6 +213,7 @@ impl Filters {
             && self.store_category.is_none()
             && self.item_query.is_none()
             && self.label_colors.is_none()
+            && self.store_id.is_none()
     }
 }
 
@@ -252,6 +258,12 @@ pub async fn filter_sql(
             })?;
         sql.push_str(" AND (f.store_category_id = ? OR f.store_category_top_id = ?)");
         binds.push(Bind::I(id));
+        binds.push(Bind::I(id));
+    }
+    // web-only exact match: no existence check (an unknown or other-ledger
+    // store id simply yields an empty result, like the items endpoint)
+    if let Some(id) = f.store_id {
+        sql.push_str(" AND f.store_id = ?");
         binds.push(Bind::I(id));
     }
     if let Some(s) = &f.store {

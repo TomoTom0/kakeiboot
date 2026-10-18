@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { setDataApi, type DataApi } from '@/web/api/data'
+import { mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import { setDataApi, type DataApi, type StatsQuery, type StatsRow } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
+import RankedList from '@/web/components/RankedList.vue'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
 
 let api: DataApi
@@ -62,7 +67,7 @@ async function expectManageLinkInMenu(w: W, items: { test: string; label: string
 }
 
 describe('CategoriesPage (dashboard)', () => {
-  it('[covers:web-categories.dashboard][covers:web-layout.manage-link-in-menu][covers:web-browse.trend-axis-minimal] 期間の合計・カテゴリ別・推移、選択で内訳とレシート、編集操作なし、管理導線は三点メニュー内', async () => {
+  it('[covers:web-categories.dashboard][covers:web-layout.manage-link-in-menu][covers:web-browse.trend-axis-minimal] 期間の合計・カテゴリ別・推移の一覧専用画面（行押下で /categories/:top へ）、編集操作なし、管理導線は三点メニュー内', async () => {
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/categories')
     expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10' })
@@ -79,23 +84,36 @@ describe('CategoriesPage (dashboard)', () => {
       { test: 'add-top-link', label: '大分類を追加', href: '/settings/categories?kind=item&new=top' },
     ])
 
-    await wrapper.find('[data-test="row-食費"]').trigger('click')
-    await settle()
-    const detail = wrapper.find('[data-test="detail"]')
-    expect(detail.find('[data-test="sub-rows"]').text()).toContain('食料品')
-    expect(detail.find('[data-test="sub-rows"]').text()).toContain('外食')
-    expect(wrapper.find('[data-test="trend-card"] h2').text()).toBe('食費の推移')
-    expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10', category: '食費' })
-    const link = detail.find('[data-test="detail-receipts"]').attributes('href')!
-    expect(decodeURIComponent(link)).toBe('/receipts?from=2026-10-01&to=2026-10-31&category=食費')
+    // TASK-74 stage 5 (final): the same-page selection section is gone and
+    // the ranking rows drill into the category detail routes — keys[0] (the
+    // top category id) builds /categories/<topId> with the period carried
+    // over; the 未分類 row links to /categories/uncategorized and その他
+    // stays a non-link span
+    expect(wrapper.find('[data-test="detail"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="clear-selection"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('カテゴリを選ぶと')
+    expect(wrapper.find('[data-test="trend-card"] h2').text()).toBe('支出の推移')
+    const row = wrapper.find('[data-test="row-食費"]')
+    expect(row.element.tagName).toBe('A')
+    expect(linkOf(row.attributes('href'))).toEqual({ path: '/categories/1', query: { month: '2026-10' } })
+    expect(row.find('svg').exists()).toBe(true)
+    expect(linkOf(wrapper.find('[data-test="row-日用品"]').attributes('href'))).toEqual({ path: '/categories/4', query: { month: '2026-10' } })
 
-    // the previous month has no records (the period moves via the topbar's
-    // period chip now; the page's own PeriodBar is gone, TASK-44 §11-5)
+    // the 未分類 aggregate row (keys[0]=null) links to the uncategorized
+    // carve-out, not to a numeric id — the mutation needs a reload, so the
+    // month takes a round trip through the topbar period chip (which also
+    // re-checks the empty previous month along the way)
+    await api.updateReceipt(1, 102, { revision: 1, upsert_items: [{ item_id: 1003, category: null }] })
     await wrapper.find('[data-test="filter-period"]').trigger('click')
     await settle()
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await settle()
+    const unc = wrapper.find('[data-test="row-未分類"]')
+    expect(unc.exists()).toBe(true)
+    expect(linkOf(unc.attributes('href'))).toEqual({ path: '/categories/uncategorized', query: { month: '2026-10' } })
     await router.push('/')
 
     // a viewer gets the manage entries but not the create one (the manage
@@ -109,10 +127,37 @@ describe('CategoriesPage (dashboard)', () => {
     expect(viewer.wrapper.find('[role="menu"] [data-test="manage-link"]').exists()).toBe(true)
     expect(viewer.wrapper.find('[role="menu"] [data-test="add-top-link"]').exists()).toBe(false)
   })
+
+  it('[covers:web-categories.dashboard] 旧 ?category= リンクは catalog で topId に解いて /categories/:top へ replace（未解決は一覧のまま）・missing query は一覧の msg に出す', async () => {
+    // a bookmark-style deep link with the legacy query: the list resolves
+    // the path through the catalog and replaces into the hierarchy route
+    const deep = await mountApp('/categories?category=食費/食料品')
+    expect(deep.router.currentRoute.value.path).toBe('/categories/1')
+    expect(deep.router.currentRoute.value.query.category).toBeUndefined()
+    // the uncategorized path lands on the carve-out route
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const unc = await mountApp('/categories?category=未分類')
+    expect(unc.router.currentRoute.value.path).toBe('/categories/uncategorized')
+    // an unresolvable path stays on the list (no broken redirect)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stuck = await mountApp('/categories?category=存在しない')
+    expect(stuck.router.currentRoute.value.path).toBe('/categories')
+    // the detail page's missing redirect shows the list's message
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const missing = await mountApp('/categories?missing=999')
+    expect(missing.router.currentRoute.value.path).toBe('/categories')
+    const msg = missing.wrapper.find('[data-test="missing"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.text()).toContain('見つかりません')
+  })
 })
 
 describe('StoresPage (dashboard)', () => {
-  it('[covers:web-stores.dashboard][covers:web-layout.manage-link-in-menu] 店別ランキング、選択で推移・買ったもの・レシート、編集操作なし、管理導線は三点メニュー内', async () => {
+  it('[covers:web-stores.dashboard][covers:web-layout.manage-link-in-menu] 店別ランキングと推移の一覧専用画面（行押下で /stores/:id へ）・店カテゴリのチップ行、編集操作なし、管理導線は三点メニュー内', async () => {
+    const stats = vi.spyOn(api, 'getStats')
     const { wrapper } = await mountApp('/stores')
     expect(wrapper.find('[data-test="row-Aマート"]').text()).toContain('400円')
     expectNoEditing(wrapper)
@@ -120,12 +165,51 @@ describe('StoresPage (dashboard)', () => {
       { test: 'manage-link', label: '店を管理', href: '/settings/stores' },
       { test: 'manage-store-categories-link', label: '店カテゴリを管理', href: '/settings/categories?kind=store' },
     ])
-    await wrapper.find('[data-test="row-Aマート"]').trigger('click')
+    // TASK-74 stage 5 (final): the ranking rows drill into /stores/:id with
+    // the period carried over (keys[0] = the store id)
+    expect(wrapper.find('[data-test="detail"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('店を選ぶと')
+    expect(wrapper.find('[data-test="trend-card"] h2').text()).toBe('支出の推移')
+    const row = wrapper.find('[data-test="row-Aマート"]')
+    expect(row.element.tagName).toBe('A')
+    expect(linkOf(row.attributes('href'))).toEqual({ path: '/stores/1', query: { month: '2026-10' } })
+    expect(row.find('svg').exists()).toBe(true)
+
+    // the store-category chip row (D28 §4-2): single select over the
+    // catalog's store categories; the choice rides the URL and reaches
+    // getStats as the store_category filter
+    const chips = wrapper.findAll('[data-test="store-categories"] [data-test="store-category"]')
+    expect(chips.map((c) => c.text())).toEqual(['スーパー', 'コンビニ', 'ドラッグストア'])
+    expect(chips[0]!.attributes('aria-pressed')).toBe('false')
+    await chips[0]!.trigger('click')
     await settle()
-    const detail = wrapper.find('[data-test="detail"]')
-    expect(detail.find('[data-test="store-categories"]').text()).toContain('食費')
-    expect(detail.text()).toContain('スーパー')
-    expect(wrapper.find('[data-test="trend-card"] h2').text()).toBe('Aマートの推移')
+    // the row link keeps the period (the store's own category is fixed on
+    // the detail page, so store_category does not ride the link)
+    expect(linkOf(wrapper.find('[data-test="row-Aマート"]').attributes('href'))).toEqual({ path: '/stores/1', query: { month: '2026-10' } })
+    expect(wrapper.find('[data-test="row-Bコンビニ"]').exists()).toBe(false)
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ report: 'by_store', store_category: 'スーパー' }))
+    expect(wrapper.find('[data-test="store-categories"] [data-test="store-category"]').attributes('aria-pressed')).toBe('true')
+    // pressing the selected chip again clears the filter
+    await wrapper.find('[data-test="store-categories"] [data-test="store-category"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="row-Bコンビニ"]').exists()).toBe(true)
+    expect(stats).toHaveBeenLastCalledWith(1, expect.not.objectContaining({ store_category: 'スーパー' }))
+  })
+
+  it('[covers:web-stores.dashboard] 旧 ?store= リンクは listStores で id に解いて /stores/:id へ replace（未解決は一覧のまま）・missing query は一覧の msg に出す', async () => {
+    const deep = await mountApp('/stores?store=Aマート')
+    expect(deep.router.currentRoute.value.path).toBe('/stores/1')
+    expect(deep.router.currentRoute.value.query.store).toBeUndefined()
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stuck = await mountApp('/stores?store=存在しない店')
+    expect(stuck.router.currentRoute.value.path).toBe('/stores')
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const missing = await mountApp('/stores?missing=999')
+    const msg = missing.wrapper.find('[data-test="missing"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.text()).toContain('見つかりません')
   })
 })
 
@@ -255,42 +339,41 @@ function linkOf(href: string | undefined): { path: string; query: Record<string,
 }
 
 describe('Recent receipt links (TASK-16)', () => {
-  it('[covers:web-receipts.recent-links-carry-context] ホーム・店・カテゴリの最近のレシートは期間と絞り込みを文脈に持つ', async () => {
+  it('[covers:web-receipts.recent-links-carry-context] ホームの最近のレシートは期間と絞り込みを文脈に持つ（店・カテゴリの一覧は選択セクションなし・詳細ページが最近のレシートを持つ）', async () => {
     const PERIOD = { from: '2026-10-01', to: '2026-10-31' }
     const home = await mountApp('/')
     const h = linkOf(home.wrapper.find('[data-test="recent-101"]').attributes('href'))
     expect(h).toEqual({ path: '/receipts/101', query: PERIOD })
+    // TASK-74 final form: the store / category list pages stay list-only (no
+    // selection section); the recent-receipt lists live on the detail pages,
+    // carrying the page's own subject in the context
     cleanup()
-
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const stores = await mountApp('/stores')
-    await stores.wrapper.find('[data-test="row-Aマート"]').trigger('click')
-    await settle()
-    const sLinks = stores.wrapper.findAll('[data-test="detail"] .recent-list a')
-    expect(sLinks.length).toBeGreaterThan(0)
-    for (const a of sLinks) {
-      const l = linkOf(a.attributes('href'))
-      expect(l.path).toMatch(/^\/receipts\/\d+$/)
-      expect(l.query).toEqual({ ...PERIOD, store: 'Aマート' })
-    }
+    expect(stores.wrapper.find('[data-test="detail"]').exists()).toBe(false)
     cleanup()
-
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const cats = await mountApp('/categories')
-    await cats.wrapper.find('[data-test="row-食費"]').trigger('click')
-    await settle()
-    const cLinks = cats.wrapper.findAll('[data-test="detail"] .recent-list a')
-    expect(cLinks.length).toBeGreaterThan(0)
-    for (const a of cLinks) {
-      const l = linkOf(a.attributes('href'))
-      expect(l.path).toMatch(/^\/receipts\/\d+$/)
-      expect(l.query).toEqual({ ...PERIOD, category: '食費' })
-    }
+    expect(cats.wrapper.find('[data-test="detail"]').exists()).toBe(false)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const storeDetail = await mountApp('/stores/1')
+    expect(linkOf(storeDetail.wrapper.find('[data-test="recent-101"]').attributes('href'))).toEqual({
+      path: '/receipts/101',
+      query: { ...PERIOD, store_id: '1' },
+    })
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const catDetail = await mountApp('/categories/1')
+    expect(linkOf(catDetail.wrapper.find('[data-test="recent-101"]').attributes('href'))).toEqual({
+      path: '/receipts/101',
+      query: { ...PERIOD, category: '食費' },
+    })
   })
 })
 
 describe('StoresPage long names (TASK-16)', () => {
-  it('[covers:web-stores.long-name-no-overflow] 長い店名は省略・折返しクラスと title を持ち、推移は .hscroll 内', async () => {
+  it('[covers:web-stores.long-name-no-overflow] 長い店名は省略・折返しクラスと title を持ち、推移は .hscroll 内・店詳細の見出しも ellipsis', async () => {
     const long = 'あ'.repeat(100)
     await api.updateStore(1, 1, { name: long })
     const { wrapper } = await mountApp('/stores')
@@ -304,10 +387,22 @@ describe('StoresPage long names (TASK-16)', () => {
     const kpiName = titled('.kpi-sub')
     expect(kpiName.length).toBeGreaterThan(0)
     expect(kpiName.some((e) => e.classes().some((c) => /clamp/.test(c)))).toBe(true)
-
-    await wrapper.find(`[data-test="row-${long}"]`).trigger('click')
-    await settle()
+    // TASK-74 stage 4: no same-page selection anymore — the list page's own
+    // trend card carries the hscroll
     expect(wrapper.find('[data-test="trend-card"] .hscroll [data-test="trend"]').exists()).toBe(true)
+
+    // stage 5 final form: the detail page's heading carries the long name in
+    // the ellipsizing .page-head-title (no title tooltip there — the CSS
+    // keeps the row width intact with the total at the right end)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const detail = await mountApp('/stores/1')
+    const title = detail.wrapper.find('.page-head-title')
+    expect(title.text()).toBe(long)
+    expect(title.attributes('title')).toBeUndefined()
+    expect(detail.wrapper.find('.page-head-total').exists()).toBe(true)
+    const css = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8')
+    expect(css).toMatch(/\.page-head-title\s*\{[^}]*min-width: 0[^}]*overflow: hidden[^}]*text-overflow: ellipsis[^}]*white-space: nowrap/)
   })
 })
 
@@ -378,5 +473,393 @@ describe('Dashboard label filter (TASK-17/26/44)', () => {
     await openFilter(wrapper)
     expect(wrapper.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('false')
     expect(wrapper.find('[data-test="label-filter-blue"]').attributes('aria-pressed')).toBe('false')
+  })
+})
+
+describe('RankedList row rendering (TASK-74 stage 4)', () => {
+  // Component-level mount with a memory router: the list pages do not wire
+  // `to` until stage 5, so the link branch needs a direct prop here.
+  async function mountList(props: { rows: StatsRow[]; to?: (row: StatsRow) => { path: string } | null }) {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/x/:id', name: 'x', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    return mount(RankedList, { props, global: { plugins: [router] } })
+  }
+
+  it('[covers:web-browse.ranked-row-link] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・選択の prop は無い', async () => {
+    const rows: StatsRow[] = [
+      { keys: [11], labels: ['食費'], value: 550, share: 0.6 },
+      { keys: [null], labels: ['その他'], value: 100, share: 0.1 },
+    ]
+    const to = (r: StatsRow) => (typeof r.keys[0] === 'number' ? { path: `/x/${r.keys[0]}` } : null)
+    const w = await mountList({ rows, to })
+
+    // a row whose `to` resolves: an anchor to the location with the trailing
+    // chevron (aria-hidden svg)
+    const link = w.find('[data-test="row-食費"]')
+    expect(link.element.tagName).toBe('A')
+    expect(link.attributes('href')).toBe('/x/11')
+    expect(link.find('svg[aria-hidden="true"]').exists()).toBe(true)
+
+    // a row whose `to` returns null (その他 / 店不明): a plain span, no
+    // chevron
+    const other = w.find('[data-test="row-その他"]')
+    expect(other.element.tagName).toBe('SPAN')
+    expect(other.attributes('href')).toBeUndefined()
+    expect(other.find('svg').exists()).toBe(false)
+
+    // no `to` prop at all (the payments breakdown): every row is a span
+    const w2 = await mountList({ rows })
+    expect(w2.find('[data-test="row-食費"]').element.tagName).toBe('SPAN')
+    expect(w2.find('[data-test="row-食費"]').find('svg').exists()).toBe(false)
+
+    // the selection-era markup is gone: no buttons, no pressed state
+    for (const ww of [w, w2]) {
+      expect(ww.find('.ranked-row[aria-pressed]').exists()).toBe(false)
+      expect(ww.findAll('button').length).toBe(0)
+    }
+  })
+})
+
+describe('CategoryDetailPage (TASK-74 stage 5)', () => {
+  it('[covers:web-categories.hierarchy-route] 大カテゴリ詳細: 見出し行‹・小カテゴリランキング行は /categories/:top/:sub へ・大直付け行は非リンク・推移・最近のレシート+すべて見る', async () => {
+    const stats = vi.spyOn(api, 'getStats')
+    const list = vi.spyOn(api, 'listReceipts')
+    const { wrapper, router } = await mountApp('/categories/1')
+    // the page queries with the resolved category path: the sub ranking,
+    // the store cross-section, the trend, the KPI and the recent receipts
+    expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10', category: '食費' })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'by_store', month: '2026-10', category: '食費' })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_trend', from: '2025-11-01', to: '2026-10-31', category: '食費' })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', category: '食費' })
+    expect(list).toHaveBeenCalledWith(1, { from: '2026-10-01', to: '2026-10-31', category: '食費', limit: 5 })
+
+    // the heading row: ‹ to the list, the kind, the name and the total
+    const back = wrapper.find('[data-test="page-back"]')
+    expect(back.attributes('aria-label')).toBe('カテゴリ一覧へ戻る')
+    expect(wrapper.find('.page-head-kind').text()).toBe('カテゴリ')
+    expect(wrapper.find('.page-head-title').text()).toBe('食費')
+    expect(wrapper.find('.page-head-total').text()).toBe('550円')
+    expect(wrapper.find('[data-test="total"]').text()).toBe('550円')
+
+    // the sub ranking rows link one level down (keys[0] = the sub id)
+    const sub = wrapper.find('[data-test="subs"] [data-test="row-食費/食料品"]')
+    expect(linkOf(sub.attributes('href'))).toEqual({ path: '/categories/1/2', query: { month: '2026-10' } })
+    expect(linkOf(wrapper.find('[data-test="subs"] [data-test="row-食費/外食"]').attributes('href'))).toEqual({ path: '/categories/1/3', query: { month: '2026-10' } })
+
+    // recent receipts of the category + すべて見る into the receipts list
+    expect(wrapper.find('[data-test="recent-101"]').exists()).toBe(true)
+    expect(linkOf(wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', category: '食費' } })
+
+    // the ‹ pushes the parent list route
+    await back.trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/categories')
+
+    // an item attached to the top itself (品目が大直付け): the sub ranking
+    // keeps the row but it cannot link below (it IS this page)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    await api.updateReceipt(1, 101, { revision: 1, upsert_items: [{ item_id: 1001, category: '食費' }] })
+    const direct = await mountApp('/categories/1')
+    const row = direct.wrapper.find('[data-test="subs"] [data-test="row-食費"]')
+    expect(row.exists()).toBe(true)
+    expect(row.element.tagName).toBe('SPAN')
+    expect(row.attributes('href')).toBeUndefined()
+    expect(linkOf(direct.wrapper.find('[data-test="subs"] [data-test="row-食費/食料品"]').attributes('href'))).toEqual({ path: '/categories/1/2', query: { month: '2026-10' } })
+  })
+
+  it('[covers:web-categories.hierarchy-route] 小カテゴリ詳細: 見出し行に親の名前・品目セクション（searchItems 直近20件・Feed への文脈）・小ランキングなし', async () => {
+    const items = vi.spyOn(api, 'searchItems')
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper, router } = await mountApp('/categories/1/2')
+    expect(items).toHaveBeenCalledWith(1, { category: '食費/食料品', from: '2026-10-01', to: '2026-10-31', limit: 20 })
+    expect(stats).not.toHaveBeenCalledWith(1, expect.objectContaining({ report: 'by_category' }))
+    expect(wrapper.find('[data-test="subs"]').exists()).toBe(false)
+    // the heading shows the parent beside the kind and the ‹ goes to the top
+    expect(wrapper.find('[data-test="page-back"]').attributes('aria-label')).toBe('食費へ戻る')
+    expect(wrapper.find('.page-head-parent').text()).toBe('食費')
+    expect(wrapper.find('.page-head-title').text()).toBe('食料品')
+    // the item section: 2-line rows whose press leads to the feed with the
+    // category context
+    const rows = wrapper.findAll('[data-test="category-item"]')
+    expect(rows).toHaveLength(2)
+    const joined = rows.map((r) => r.text()).join()
+    expect(joined).toContain('牛乳')
+    expect(joined).toContain('パン')
+    expect(linkOf(rows[0]!.attributes('href'))).toEqual({ path: '/receipts/101', query: { from: '2026-10-01', to: '2026-10-31', category: '食費/食料品' } })
+    await wrapper.find('[data-test="page-back"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/categories/1')
+  })
+
+  it('[covers:web-categories.hierarchy-route] 未分類は category=未分類 で照会し小ランキング・品目セクションなし', async () => {
+    await api.updateReceipt(1, 102, { revision: 1, upsert_items: [{ item_id: 1003, category: null }] })
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper } = await mountApp('/categories/uncategorized')
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', category: '未分類' })
+    expect(stats).not.toHaveBeenCalledWith(1, expect.objectContaining({ report: 'by_category' }))
+    expect(wrapper.find('[data-test="subs"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="items"]').exists()).toBe(false)
+    expect(wrapper.find('.page-head-title').text()).toBe('未分類')
+    expect(wrapper.find('[data-test="total"]').text()).toBe('398円')
+    expect(linkOf(wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', category: '未分類' } })
+  })
+
+  it('[covers:web-categories.hierarchy-route] 小id を大として渡すと正しいパスへ replace・catalog に無い id は一覧へ missing 付きで replace', async () => {
+    const swapped = await mountApp('/categories/2')
+    expect(swapped.router.currentRoute.value.path).toBe('/categories/1/2')
+    expect(swapped.wrapper.find('.page-head-title').text()).toBe('食料品')
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const missing = await mountApp('/categories/999')
+    expect(missing.router.currentRoute.value.path).toBe('/categories')
+    expect(missing.router.currentRoute.value.query.missing).toBe('999')
+    expect(missing.wrapper.find('[data-test="missing"]').text()).toContain('見つかりません')
+  })
+
+  it('[covers:web-categories.hierarchy-route] catalog 取得の失敗は msg-error に出す（unhandled rejection・永久skeleton なし）', async () => {
+    // the resolve awaits catalog.load(): a failed fetch must land in the
+    // page's error message, visible over the skeleton branch (view stays
+    // null), never as an unhandled rejection (review M2)
+    vi.spyOn(api, 'getCatalog').mockRejectedValue(new Error('catalog down'))
+    const failed = await mountApp('/categories/1')
+    const msg = failed.wrapper.find('[data-test="error"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.classes()).toContain('msg-error')
+    expect(msg.text()).toContain('エラーが発生しました')
+  })
+
+  it('[covers:web-categories.hierarchy-route] ledger 切替は別bookのcatalogを解決しに行かず /categories へ replace（Feed と同じ方針）', async () => {
+    const { wrapper, router, pinia } = await mountApp('/categories/1')
+    expect(wrapper.find('.page-head-title').text()).toBe('食費')
+    const { useSessionStore } = await import('@/web/stores/session')
+    useSessionStore(pinia).selectedLedgerId = 2
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/categories')
+  })
+})
+
+describe('Category cross-section (TASK-74 stage 5)', () => {
+  it('[covers:web-categories.cross-store] 「このカテゴリを買った店」は category を引き継いで店詳細へ・その他行を除く上位5件・mock の store_id/store_category・数値 keys parity', async () => {
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper } = await mountApp('/categories/1')
+    expect(stats).toHaveBeenCalledWith(1, { report: 'by_store', month: '2026-10', category: '食費' })
+    // the rows cross into the store detail carrying this category
+    const a = wrapper.find('[data-test="by-store"] [data-test="row-Aマート"]')
+    expect(a.element.tagName).toBe('A')
+    expect(linkOf(a.attributes('href'))).toEqual({ path: '/stores/1', query: { category: '食費', month: '2026-10' } })
+    expect(linkOf(wrapper.find('[data-test="by-store"] [data-test="row-Bコンビニ"]').attributes('href'))).toEqual({ path: '/stores/3', query: { category: '食費', month: '2026-10' } })
+
+    // the cap: a 7-row by_store response still renders at most 5 link rows
+    // (the stub goes on after cleanup() — it restores mocks)
+    const orig = api.getStats.bind(api)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    vi.spyOn(api, 'getStats').mockImplementation(async (l: number, q: StatsQuery) => {
+      const res = await orig(l, q)
+      if (q.report === 'by_store') {
+        const extra = [11, 12, 13, 14, 15].map((i) => ({ keys: [i], labels: [`店${i}`], value: i, share: 0.01 }))
+        res.sections[0]!.rows = [...res.sections[0]!.rows, ...extra]
+      }
+      return res
+    })
+    const capped = await mountApp('/categories/1')
+    expect(capped.wrapper.findAll('[data-test="by-store"] .ranked-row')).toHaveLength(5)
+    expect(capped.wrapper.find('[data-test="by-store"] [data-test="row-店5"]').exists()).toBe(false)
+
+    // mock parity (backend ranked_section): numeric row keys, the exact
+    // store_id match and the store_category path filter (orig — the stub
+    // above still decorates api.getStats)
+    const byStore = await orig(1, { report: 'by_store', month: '2026-10' })
+    expect(byStore.sections[0]!.rows.map((r) => r.keys[0])).toEqual([1, 2, 3])
+    const byCat = await orig(1, { report: 'by_category', month: '2026-10' })
+    expect(byCat.sections[0]!.rows.map((r) => r.keys[0])).toEqual([1, 4])
+    expect((await orig(1, { report: 'monthly_overview', month: '2026-10', store_id: 1 })).totals.value).toBe(400)
+    expect((await orig(1, { report: 'monthly_overview', month: '2026-10', store_category: 'スーパー' })).totals.value).toBe(400)
+    expect((await orig(1, { report: 'monthly_overview', month: '2026-10', store_id: 999 })).totals.value).toBe(0)
+  })
+})
+
+describe('Detail context carry (TASK-74 stage 5)', () => {
+  it('[covers:web-browse.context-carry] 掛け合わせ・labels はチップで × は replace で外す・下の階層とすべて見るへ引き継がれ store_category はすべて見るに乗らない', async () => {
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper, router } = await mountApp('/categories/1?store_id=3&month=2026-10')
+    // the KPI carries the cross filter
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', category: '食費', store_id: 3 })
+    // the chip row: the self category (no x) and the store name
+    const chips = wrapper.find('[data-test="page-chips"]')
+    expect(chips.text()).toContain('カテゴリ: 食費')
+    expect(chips.text()).toContain('店: Bコンビニ')
+    expect(wrapper.find('[data-test="chip-x-category"]').exists()).toBe(false)
+    // the context rides the links down a level and into the receipts list
+    // (the store filter narrows the sub ranking to Bコンビニ's 外食 row)
+    expect(linkOf(wrapper.find('[data-test="subs"] [data-test="row-食費/外食"]').attributes('href'))).toEqual({ path: '/categories/1/3', query: { store_id: '3', month: '2026-10' } })
+    expect(linkOf(wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', category: '食費', store_id: '3' } })
+    // the store chip x: replace drops the key and the KPI widens (150 -> 550)
+    expect(wrapper.find('[data-test="total"]').text()).toBe('150円')
+    await wrapper.find('[data-test="chip-x-store"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.query.store_id).toBeUndefined()
+    expect(stats.mock.calls.at(-1)![1]!.store_id).toBeUndefined()
+    expect(wrapper.find('[data-test="total"]').text()).toBe('550円')
+
+    // a label chip x drops the labels key the same way
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const lb = await mountApp('/categories/1?labels=blue&month=2026-10')
+    expect(lb.wrapper.find('[data-test="page-chips"]').text()).toContain('blue')
+    await lb.wrapper.find('[data-test="chip-x-label-blue"]').trigger('click')
+    await settle()
+    expect(lb.router.currentRoute.value.query.labels).toBeUndefined()
+    expect(lb.wrapper.find('[data-test="total"]').text()).toBe('550円')
+
+    // the store_category 掛け合わせ: a chip, a filtered KPI, and never on
+    // the すべて見る link
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const scStats = vi.spyOn(api, 'getStats')
+    const sc = await mountApp('/categories/1?store_category=スーパー')
+    expect(scStats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', category: '食費', store_category: 'スーパー' })
+    expect(sc.wrapper.find('[data-test="page-chips"]').text()).toContain('店カテゴリ: スーパー')
+    expect(linkOf(sc.wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', category: '食費' } })
+    await sc.wrapper.find('[data-test="chip-x-store_category"]').trigger('click')
+    await settle()
+    expect(sc.router.currentRoute.value.query.store_category).toBeUndefined()
+    expect(scStats.mock.calls.at(-1)![1]!.store_category).toBeUndefined()
+  })
+})
+
+describe('StoreDetailPage (TASK-74 stage 5)', () => {
+  it('[covers:web-stores.detail-route] 店詳細: KPI store_id 完全一致・「この店で買ったカテゴリ」のクロス集計（未分類行は uncategorized へ）・店情報は KPI 側・推移・最近のレシート+すべて見る', async () => {
+    // an uncategorized item inside an Aマート receipt exercises the 未分類
+    // cross row
+    await api.updateReceipt(1, 101, { revision: 1, upsert_items: [{ item_id: 1001, category: null }] })
+    const stats = vi.spyOn(api, 'getStats')
+    const list = vi.spyOn(api, 'listReceipts')
+    const storesSpy = vi.spyOn(api, 'listStores')
+    const { wrapper, router } = await mountApp('/stores/1')
+    expect(storesSpy).toHaveBeenCalledWith(1)
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', store_id: 1 })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', month: '2026-10', store_id: 1 })
+    expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ report: 'monthly_trend', store_id: 1 }))
+    expect(list).toHaveBeenCalledWith(1, { from: '2026-10-01', to: '2026-10-31', store_id: 1, limit: 5 })
+
+    // the heading row: ‹ to the list, the store name, its category as sub
+    expect(wrapper.find('[data-test="page-back"]').attributes('aria-label')).toBe('店一覧へ戻る')
+    expect(wrapper.find('.page-head-title').text()).toBe('Aマート')
+    expect(wrapper.find('.page-head-sub').text()).toBe('スーパー')
+    expect(wrapper.find('[data-test="total"]').text()).toBe('400円')
+    // the store info folds into the KPI dl
+    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '累計件数', '最終購入日'])
+    expect(wrapper.find('[data-test="kpi"]').text()).toContain('10/10')
+
+    // the cross rows carry this store into the category detail; the 未分類
+    // row takes the uncategorized carve-out
+    expect(linkOf(wrapper.find('[data-test="by-category"] [data-test="row-食費"]').attributes('href'))).toEqual({ path: '/categories/1', query: { store_id: '1', month: '2026-10' } })
+    expect(linkOf(wrapper.find('[data-test="by-category"] [data-test="row-未分類"]').attributes('href'))).toEqual({ path: '/categories/uncategorized', query: { store_id: '1', month: '2026-10' } })
+
+    // recent receipts + すべて見る
+    expect(wrapper.find('[data-test="recent-101"]').exists()).toBe(true)
+    expect(linkOf(wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', store_id: '1' } })
+    await wrapper.find('[data-test="page-back"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/stores')
+  })
+
+  it('[covers:web-stores.detail-route] catalog に無い store id は /stores?missing= へ replace・クロス集計は5行まで・category 掛け合わせはチップから外せる', async () => {
+    const missing = await mountApp('/stores/999')
+    expect(missing.router.currentRoute.value.path).toBe('/stores')
+    expect(missing.router.currentRoute.value.query.missing).toBe('999')
+    expect(missing.wrapper.find('[data-test="missing"]').text()).toContain('見つかりません')
+
+    // the 5-row cap on the category cross-section (stub after cleanup())
+    const orig = api.getStats.bind(api)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    vi.spyOn(api, 'getStats').mockImplementation(async (l: number, q: StatsQuery) => {
+      const res = await orig(l, q)
+      if (q.report === 'by_category') {
+        const extra = [21, 22, 23, 24, 25].map((i) => ({ keys: [i], labels: [`Cat${i}`], value: i, share: 0.01 }))
+        res.sections[0]!.rows = [...res.sections[0]!.rows, ...extra]
+      }
+      return res
+    })
+    const capped = await mountApp('/stores/1')
+    expect(capped.wrapper.findAll('[data-test="by-category"] .ranked-row')).toHaveLength(5)
+
+    // the category 掛け合わせ (from a category page's cross row): a chip
+    // that removes through replace and re-queries
+    cleanup()
+    vi.restoreAllMocks()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stats = vi.spyOn(api, 'getStats')
+    const withCat = await mountApp('/stores/1?category=食費/食料品&labels=red')
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10', store_id: 1, category: '食費/食料品', label_colors: ['red'] })
+    expect(withCat.wrapper.find('[data-test="page-chips"]').text()).toContain('カテゴリ: 食費/食料品')
+    expect(linkOf(withCat.wrapper.find('[data-test="all-receipts"]').attributes('href'))).toEqual({ path: '/receipts', query: { month: '2026-10', store_id: '1', category: '食費/食料品', labels: 'red' } })
+    await withCat.wrapper.find('[data-test="chip-x-category"]').trigger('click')
+    await settle()
+    expect(withCat.router.currentRoute.value.query.category).toBeUndefined()
+    expect(stats.mock.calls.at(-1)![1]!.category).toBeUndefined()
+  })
+
+  it('[covers:web-stores.detail-route] listStores 取得失敗は msg-error に出す（unhandled rejection・永久skeleton なし）', async () => {
+    // the resolve awaits listStores(): a failed fetch must land in the page's
+    // error message, visible over the skeleton branch (store stays null),
+    // never as an unhandled rejection (review M2)
+    vi.spyOn(api, 'listStores').mockRejectedValue(new Error('stores down'))
+    const failed = await mountApp('/stores/1')
+    const msg = failed.wrapper.find('[data-test="error"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.classes()).toContain('msg-error')
+    expect(msg.text()).toContain('エラーが発生しました')
+  })
+
+  it('[covers:web-stores.detail-route] ledger 切替は旧ledgerの店名・店カテゴリを残さず /stores へ replace（Feed と同じ方針）', async () => {
+    // switching the book on the detail page must not keep showing the old
+    // ledger's resolved store (its name / category may not exist there)
+    const { wrapper, router, pinia } = await mountApp('/stores/1')
+    expect(wrapper.find('.page-head-title').text()).toBe('Aマート')
+    expect(wrapper.find('.page-head-sub').text()).toBe('スーパー')
+    const { useSessionStore } = await import('@/web/stores/session')
+    useSessionStore(pinia).selectedLedgerId = 2
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/stores')
+  })
+})
+
+describe('Detail page resilience (TASK-74 review)', () => {
+  it('[covers:web-stores.dashboard] StoresPage の catalog 取得失敗は msg-error に出す（unhandled rejection なし・ランキングはそのまま）', async () => {
+    // the store-category chip row needs the catalog; a failed fetch surfaces
+    // through the page's error message while the ranking keeps working
+    vi.spyOn(api, 'getCatalog').mockRejectedValue(new Error('catalog down'))
+    const { wrapper } = await mountApp('/stores')
+    const msg = wrapper.find('[data-test="error"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.classes()).toContain('msg-error')
+    expect(wrapper.find('[data-test="row-Aマート"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="store-categories"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-browse.context-carry] 詳細2ページの labels チップは title 定義を優先表示する（色keyの生表示はしない）', async () => {
+    // a defined label title shows on the chip (the ReceiptsPage filter-chip
+    // form); the removal key stays the color (review L4)
+    await api.updateLabelTitle(1, 'blue', { title: '旅行' })
+    const cat = await mountApp('/categories/1?labels=blue&month=2026-10')
+    const catChips = cat.wrapper.find('[data-test="page-chips"]')
+    expect(catChips.text()).toContain('旅行')
+    expect(catChips.text()).not.toContain('blue')
+    expect(cat.wrapper.find('[data-test="chip-x-label-blue"]').exists()).toBe(true)
+
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const store = await mountApp('/stores/1?labels=blue&month=2026-10')
+    const storeChips = store.wrapper.find('[data-test="page-chips"]')
+    expect(storeChips.text()).toContain('旅行')
+    expect(storeChips.text()).not.toContain('blue')
+    expect(store.wrapper.find('[data-test="chip-x-label-blue"]').exists()).toBe(true)
   })
 })

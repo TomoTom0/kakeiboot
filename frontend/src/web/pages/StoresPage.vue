@@ -1,80 +1,117 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import { useDataApi, type ReceiptSummary, type StatsResult, type StoreRow } from '../api/data'
-import AppIcon from '../components/AppIcon.vue'
+import { useDataApi, type CategoryNode, type StatsResult, type StatsRow } from '../api/data'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { shortDate } from '../composables/period'
+import { firstString } from '../composables/receiptContext'
+import { usePageReady } from '../composables/usePageReady'
+import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
 
-// Store dashboard (read-only): spending by store for the period and, for a
-// selected store, its monthly trend, what was bought there (categories) and
-// its latest receipts. Renames / merges live in /settings/stores. The period
-// and label filters moved to the topbar center bar (TASK-44 §11): they ride
-// on the period store (period.query / trendQuery already carry label_colors)
-// and this page re-queries through the watches below.
+// Store list (read-only, TASK-74 §4-7): the period's total, the store
+// ranking (a row press drills into /stores/:id; その他 / 店不明 stay plain
+// rows) and the trend, with the store-category chip row above the ranking
+// (D28 §4-1 案1: the ranking is the primary structure, the classification
+// narrows it — single select over catalog.store_categories, riding the URL
+// as store_category= and reaching getStats through the A1 wiring). A legacy
+// ?store=<name> deep link resolves through listStores and replaces into
+// /stores/<id>. Renames / merges live in /settings/stores. The period and
+// label filters moved to the topbar center bar (TASK-44 §11): they ride on
+// the period store and this page re-queries through the watches below.
 const api = useDataApi()
 const route = useRoute()
+const router = useRouter()
 const period = usePeriodStore()
+const catalog = useCatalogStore()
+const { markReady } = usePageReady()
 period.fromQuery(route.query)
 
-const selected = ref<string | null>(
-  typeof route.query.store === 'string' && route.query.store ? route.query.store : null,
-)
 const overall = ref<StatsResult | null>(null)
 const trend = ref<StatsResult | null>(null)
-const cats = ref<StatsResult | null>(null)
-const recent = ref<ReceiptSummary[]>([])
-const master = ref<StoreRow[]>([])
 const error = ref('')
 const loading = ref(false)
+
+/** The store-category selection of the chip row (single, from the URL). */
+const storeCategory = computed(() => firstString(route.query.store_category))
 
 let seq = 0
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
-  const sel = selected.value
   loading.value = true
   error.value = ''
+  const cat = storeCategory.value ? { store_category: storeCategory.value } : {}
   try {
-    const [f, t] = period.range
-    const [o, tr, c, r, m] = await Promise.all([
-      api.getStats(l, { report: 'by_store', ...period.query() }),
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...(sel ? { store: sel } : {}) }),
-      sel ? api.getStats(l, { report: 'by_category', ...period.query(), store: sel }) : Promise.resolve(null),
-      sel
-        ? api.listReceipts(l, {
-            from: f,
-            to: t,
-            store: sel,
-            limit: 5,
-            ...(period.labelQuery ? { label_colors: period.labelQuery } : {}),
-          })
-        : Promise.resolve(null),
-      sel ? api.listStores(l, sel) : Promise.resolve([]),
+    // the trend query goes first so the primary by_store call (the one
+    // carrying the selected month/year key) is the load's last stats call
+    const [tr, o] = await Promise.all([
+      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...cat }),
+      api.getStats(l, { report: 'by_store', ...period.query(), ...cat }),
     ])
     if (n !== seq) return
     overall.value = o
     trend.value = tr
-    cats.value = c
-    recent.value = r?.receipts ?? []
-    master.value = m
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
-    if (n === seq) loading.value = false
+    if (n === seq) {
+      loading.value = false
+      markReady()
+    }
   }
 }
 
 const ledgerId = useLedger((id) => load(id))
-watch([() => period.range, () => period.labelQuery, selected], () => void load())
+watch([() => period.range, () => period.labelQuery, () => storeCategory.value], () => void load())
+
+// --- the store-category chip row ----------------------------------------------
+void catalog.load().catch((e) => {
+  // the chip row needs the catalog; a failed fetch leaves the ranking itself
+  // working but must surface (the load catch form), not reject unhandled
+  error.value = errorMessage(e)
+})
+/** The catalog's store categories flattened depth-first with their paths. */
+const storeCategories = computed(() => {
+  const flat = (nodes: CategoryNode[], prefix: string): string[] =>
+    nodes.flatMap((n) => {
+      const path = prefix ? `${prefix}/${n.name}` : n.name
+      return [path, ...flat(n.children, path)]
+    })
+  return flat(catalog.trees('store'), '')
+})
+
+function toggleStoreCategory(path: string): void {
+  const rest: LocationQueryRaw = { ...route.query }
+  if (storeCategory.value === path) delete rest.store_category
+  else rest.store_category = path
+  void router.replace({ query: rest })
+}
+
+// --- the legacy ?store= gate (§4-7) -------------------------------------------
+async function redirectLegacyStore(): Promise<void> {
+  const name = firstString(route.query.store)
+  const l = ledgerId.value
+  if (!name || l === null) return
+  try {
+    const hit = (await api.listStores(l)).find((s) => s.name === name)
+    if (!hit) return
+    const rest: LocationQueryRaw = { ...route.query }
+    delete rest.store
+    await router.replace({ path: `/stores/${hit.store_id}`, query: rest })
+  } catch {
+    // a failed lookup leaves the list as-is
+  }
+}
+void redirectLegacyStore()
+
 
 // The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
 // standalone manage link on a read-only dashboard. TASK-40 rev2 §2-4 adds
@@ -87,28 +124,21 @@ const menuItems: PageMenuItem[] = [
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)
-const selectedRow = computed(() => rows.value.find((r) => r.labels[0] === selected.value) ?? null)
-const info = computed(() => master.value.find((s) => s.name === selected.value) ?? null)
 
-function select(label: string): void {
-  selected.value = selected.value === label ? null : label
+/** The context the row links carry down a level (the store's own category is
+ * fixed on the detail page, so store_category does not ride). */
+const listQuery = computed(() => ({
+  ...period.urlQuery,
+  ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
+}))
+
+/** A ranking row's destination: keys[0] (the store id) builds /stores/<id>;
+ * その他 and 店不明 (keys[0]=null) stay non-link rows. */
+function rowTo(row: StatsRow): RouteLocationRaw | null {
+  const id = row.keys[0]
+  if (typeof id !== 'number') return null
+  return { path: `/stores/${id}`, query: { ...listQuery.value } }
 }
-
-function receiptsLink(store: string) {
-  const [from, to] = period.range
-  return { path: '/receipts', query: { from, to, store } }
-}
-
-/** Per-receipt feed links carry this screen's period + filter as context. */
-const recentQuery = computed(() => {
-  const [from, to] = period.range
-  return {
-    from,
-    to,
-    ...(selected.value ? { store: selected.value } : {}),
-    ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
-  }
-})
 
 function diffText(d: number | null | undefined): string {
   if (d === null || d === undefined || d === 0) return '±0円'
@@ -130,6 +160,16 @@ function diffText(d: number | null | undefined): string {
       data-test="error"
     >
       {{ error }}
+    </p>
+
+    <!-- the detail page's unknown-id redirect lands here with ?missing= -->
+    <p
+      v-if="firstString(route.query.missing)"
+      class="msg msg-error"
+      role="alert"
+      data-test="missing"
+    >
+      指定された店は見つかりません
     </p>
 
     <div
@@ -176,7 +216,7 @@ function diffText(d: number | null | undefined): string {
         class="card"
         data-test="trend-card"
       >
-        <h2>{{ selected ? `${selected}の推移` : '支出の推移' }}</h2>
+        <h2>支出の推移</h2>
         <TrendBars
           v-if="trend"
           :rows="trend.sections[0]?.rows ?? []"
@@ -190,6 +230,27 @@ function diffText(d: number | null | undefined): string {
         data-test="ranking"
       >
         <h2>店別</h2>
+        <!-- the store-category chip row (single select, D28 §4-2): narrows
+             the ranking through the A1 store_category wiring -->
+        <div
+          v-if="storeCategories.length"
+          class="store-cats"
+          data-test="store-categories"
+          role="group"
+          aria-label="店カテゴリ"
+        >
+          <button
+            v-for="p in storeCategories"
+            :key="p"
+            type="button"
+            class="filter-chip-btn store-cat"
+            :aria-pressed="storeCategory === p"
+            data-test="store-category"
+            @click="toggleStoreCategory(p)"
+          >
+            {{ p }}
+          </button>
+        </div>
         <p
           v-if="rows.length === 0"
           class="muted empty"
@@ -199,90 +260,9 @@ function diffText(d: number | null | undefined): string {
         <RankedList
           v-else
           :rows="rows"
-          :selected="selected"
           :compare-label="period.compareLabel"
-          :inert="['その他', '店不明']"
-          @select="select"
+          :to="rowTo"
         />
-        <p
-          v-if="rows.length && !selected"
-          class="muted small hint"
-        >
-          店を選ぶと、推移・買ったもの・レシートを表示します。
-        </p>
-      </section>
-
-      <section
-        v-if="selected"
-        class="card wide"
-        data-test="detail"
-      >
-        <div class="card-head">
-          <h2>{{ selected }}</h2>
-          <button
-            class="link-btn"
-            data-test="clear-selection"
-            @click="selected = null"
-          >
-            選択を解除
-          </button>
-        </div>
-        <p class="detail-kpi">
-          <strong
-            v-if="selectedRow"
-            class="amount"
-          >{{ formatYen(selectedRow.value) }}</strong>
-          <span class="muted small">
-            <template v-if="info">{{ info.category ?? '種別なし' }} ・ これまで {{ info.receipt_count }} 件 ・ 最終 {{ info.last_purchased_on ?? '-' }}</template>
-          </span>
-        </p>
-        <template v-if="cats && (cats.sections[0]?.rows.length ?? 0) > 0">
-          <h3>買ったもの</h3>
-          <ul
-            class="sub-rows"
-            data-test="store-categories"
-          >
-            <li
-              v-for="r in cats.sections[0]!.rows"
-              :key="r.labels[0]"
-            >
-              <span class="sub-row">
-                <span>{{ r.labels[0] }}</span>
-                <span class="muted small">{{ Math.round((r.share ?? 0) * 100) }}%</span>
-                <span class="amount">{{ formatYen(r.value) }}</span>
-              </span>
-            </li>
-          </ul>
-        </template>
-        <div class="card-head">
-          <h3>最近のレシート</h3>
-          <RouterLink
-            :to="receiptsLink(selected)"
-            class="more"
-            data-test="detail-receipts"
-          >
-            すべて見る
-          </RouterLink>
-        </div>
-        <ul class="recent-list">
-          <li
-            v-for="r in recent"
-            :key="r.receipt_id"
-          >
-            <RouterLink
-              :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
-              class="recent-row"
-            >
-              <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-              <span class="recent-icon"><AppIcon
-                name="receipt"
-                :size="18"
-              /></span>
-              <span class="recent-main"><span class="recent-store">{{ r.item_count }} 品目</span></span>
-              <span class="amount">{{ formatYen(r.amount) }}</span>
-            </RouterLink>
-          </li>
-        </ul>
       </section>
     </div>
     <DashSkeleton v-else-if="loading" />

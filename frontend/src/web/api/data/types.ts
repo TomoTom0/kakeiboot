@@ -280,6 +280,10 @@ export interface StatsQuery {
   to?: string
   category?: string
   store?: string
+  /** exact store id (web-only, TASK-74 A1: not in the MCP summarize filters) */
+  store_id?: number
+  /** store category path ("大分類" or "大分類/小分類", TASK-74 A1) */
+  store_category?: string
   item_query?: string
   /** label filter: receipts having ANY of these colors (OR, TASK-17) */
   label_colors?: LabelColor[]

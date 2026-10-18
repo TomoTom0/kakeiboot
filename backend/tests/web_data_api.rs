@@ -891,6 +891,121 @@ async fn stats_reports_and_periods() {
 }
 
 #[tokio::test]
+// [covers:web-data-api.stats-store-id]
+async fn stats_store_id_exact_match() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
+    insert_receipt_full(&pool, 102, 1, 2, "2026-10-12", 80).await;
+    insert_receipt_full(&pool, 103, 1, 1, "2026-09-30", 180).await;
+
+    // web-only exact store match narrows the totals, the compare period and
+    // every section row (the same filter_sql the reports share)
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/stats?month=2026-10&store_id=1")
+            .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 220);
+    assert_eq!(v["totals"]["receipts"], 1);
+    assert_eq!(v["totals"]["compare_value"], 180, "prev month store 1 only");
+    let store_total: i64 = v["sections"][1]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["value"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(store_total, 220, "section rows share the filter");
+    // the echo is emitted (is_empty counts store_id) but never carries the
+    // web-only key (serde(skip) keeps it out of the serialization)
+    assert!(v["filters"].is_object(), "store_id-only still echoes");
+    assert!(v["filters"].get("store_id").is_none(), "no store_id key");
+
+    // no existence check: another ledger's store id is an empty result
+    let other: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('other3', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    insert_store(&pool, 98, other, "他所の店", "たしょのみせ").await;
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/stats?month=2026-10&store_id=98")
+            .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 0);
+
+    // without the filter everything is aggregated
+    let v = body_json(c.get(&router, "/api/ledgers/1/stats?month=2026-10").await).await;
+    assert_eq!(v["totals"]["value"], 300);
+}
+
+#[tokio::test]
+// [covers:web-data-api.stats-store-category]
+async fn stats_store_category_path_filter() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    // the default ledger is seeded with the top-level store categories; use
+    // the seeded スーパー and only add the child (no sub categories seeded)
+    let top: i64 = sqlx::query_scalar(
+        "SELECT id FROM store_categories WHERE ledger_id = 1 AND parent_id IS NULL AND name = 'スーパー'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let sub =
+        common::insert_category(&pool, "store_categories", 1, Some(top), "業務スーパー").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B業務", "bぎょうむ").await;
+    for (store, cat) in [(1i64, top), (2, sub)] {
+        sqlx::query("UPDATE stores SET category_id = ? WHERE id = ?")
+            .bind(cat)
+            .bind(store)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
+    insert_receipt_full(&pool, 102, 1, 2, "2026-10-12", 80).await;
+
+    // a top path includes the stores under the child category
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/stats?month=2026-10&store_category=スーパー",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 300, "top includes the child");
+    assert_eq!(v["filters"]["store_category"], "スーパー");
+
+    // "Top/Sub" narrows to the child; both share resolve_path validation
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/stats?month=2026-10&store_category=スーパー/業務スーパー",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 80);
+    assert_eq!(v["filters"]["store_category"], "スーパー/業務スーパー");
+
+    // an unknown path is the same 400 as the MCP filters.store_category
+    let resp = c
+        .get(
+            &router,
+            "/api/ledgers/1/stats?month=2026-10&store_category=無い",
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
 // [covers:web-data-api.receipt-update-conflicts]
 async fn receipt_get_update_conflicts() {
     let (router, pool) = setup().await;

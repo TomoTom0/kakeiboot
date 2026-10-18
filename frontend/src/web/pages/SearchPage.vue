@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
+import { RouterLink, useRoute, useRouter, type LocationQueryRaw, type RouteLocationRaw } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import { formatLabelQuery, parseLabelQuery } from '@/shared/labels'
 import { useDataApi, type ItemSummary, type ReceiptListQuery, type ReceiptSummary } from '../api/data'
@@ -8,6 +8,8 @@ import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { jstToday, shortDate } from '../composables/period'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
+import { usePageReady } from '../composables/usePageReady'
+import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
 
 // /search (TASK-41, design 2-2): the URL is the single source of truth — q /
@@ -22,6 +24,8 @@ const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
+const catalog = useCatalogStore()
+const { markReady } = usePageReady()
 period.fromQuery(route.query)
 // a deep link's labels are adopted into the store so the topbar chip shows
 // the selection the results are actually filtering with (§11-3); with no
@@ -191,6 +195,7 @@ async function load(id?: number): Promise<void> {
     nextCursor.value = null
     error.value = ''
     loading.value = false
+    markReady()
     return
   }
   if (!period.valid) return
@@ -218,7 +223,10 @@ async function load(id?: number): Promise<void> {
     if (n !== seq) return
     error.value = errorMessage(e)
   } finally {
-    if (n === seq) loading.value = false
+    if (n === seq) {
+      loading.value = false
+      markReady()
+    }
   }
 }
 
@@ -261,13 +269,29 @@ function rowDate(d: string | null | undefined): string {
   return y === Number(jstToday().slice(0, 4)) ? shortDate(d) : `${y}/${shortDate(d)}`
 }
 
-/** Category link of an item row: the period (and labels) carry over. */
-function categoryQuery(path: string): Record<string, string> {
+/** Category link of an item row (TASK-74 §4-7): the catalog resolves the
+ * path into the hierarchy route ids; an unresolvable path keeps the list
+ * destination with the legacy category query (the list's own gate tries the
+ * same resolution). The query carries the period only while the scope is
+ * period — a whole-history search has no period to hand down. */
+void catalog.load().catch((e) => {
+  // the category links need the catalog; a failed fetch leaves the results
+  // themselves working but must surface (the load catch form), not reject
+  // unhandled
+  error.value = errorMessage(e)
+})
+function categoryQuery(): Record<string, string> {
   return {
-    ...period.urlQuery,
-    category: path,
+    ...(scope.value === 'period' ? period.urlQuery : {}),
     ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
   }
+}
+function categoryTo(path: string): RouteLocationRaw {
+  const node = catalog.resolve('item', path)
+  if (!node) return { path: '/categories', query: { category: path, ...categoryQuery() } }
+  const parent = catalog.parentIdOf('item', node.id)
+  const target = parent === null ? `/categories/${node.id}` : `/categories/${parent}/${node.id}`
+  return { path: target, query: categoryQuery() }
 }
 </script>
 
@@ -396,7 +420,7 @@ function categoryQuery(path: string): Record<string, string> {
                 v-if="it.category"
                 class="search-item-category"
                 data-test="search-item-category"
-                :to="{ path: '/categories', query: categoryQuery(it.category) }"
+                :to="categoryTo(it.category)"
                 @click.stop
               >
                 {{ it.category }}

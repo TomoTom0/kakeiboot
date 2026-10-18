@@ -457,6 +457,74 @@ async fn summarize_reports_by_category_with_filters_and_validation() {
     assert_eq!(rows[0]["value"], json!(100));
 }
 
+// [covers:mcp-tools.summarize-filters-no-store-id]
+#[tokio::test]
+async fn summarize_filters_store_id_is_web_only() {
+    let (router, pool, token, _grant, _user, owner) = setup().await;
+    common::insert_receipt(&pool, 30, owner).await;
+    common::insert_item(&pool, 1, 30, owner, "Milk").await;
+
+    // filters.store_id stays web-only: deny_unknown_fields rejects it as an
+    // unknown key even though Filters now carries the field (serde(skip))
+    let r = call(
+        &router,
+        &token,
+        1,
+        "summarize_spending",
+        json!({
+            "report": "by_category",
+            "period": { "from": "2026-10-01", "to": "2026-10-31" },
+            "filters": { "store_id": 1 }
+        }),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(true));
+    let text = r["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("store_id"), "{text}");
+
+    // the input schema's filters never lists the web-only key
+    let body = rpc(2, "tools/list", json!({}));
+    let headers = mcp_headers(&token);
+    let mut builder = axum::http::Request::builder().method("POST").uri("/mcp");
+    for (k, v) in &headers {
+        builder = builder.header(*k, v.as_str());
+    }
+    use tower::ServiceExt as _;
+    let resp = router
+        .clone()
+        .oneshot(builder.body(axum::body::Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let tools = v["result"]["tools"].as_array().cloned().unwrap();
+    let filters = &tools
+        .iter()
+        .find(|t| t["name"] == "summarize_spending")
+        .unwrap()["inputSchema"]["properties"]["filters"]["properties"];
+    let mut keys: Vec<&str> = filters
+        .as_object()
+        .expect("filters schema object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "category",
+            "item_query",
+            "label_colors",
+            "store",
+            "store_category"
+        ],
+        "no store_id in the MCP filters schema"
+    );
+}
+
 // [covers:mcp-catalog.labels]
 #[tokio::test]
 async fn get_catalog_includes_label_definitions() {

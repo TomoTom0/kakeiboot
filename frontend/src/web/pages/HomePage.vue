@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type ReceiptSummary, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
@@ -9,6 +10,7 @@ import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { periodDays, shortDate } from '../composables/period'
+import { usePageReady } from '../composables/usePageReady'
 import { usePeriodStore } from '../stores/period'
 
 // Dashboard: the selected period's spending at a glance (GET
@@ -23,6 +25,7 @@ import { usePeriodStore } from '../stores/period'
 // (watch(period.labelQuery)).
 const api = useDataApi()
 const period = usePeriodStore()
+const { markReady } = usePageReady()
 
 const summary = ref<StatsResult | null>(null)
 const trendResult = ref<StatsResult | null>(null)
@@ -55,7 +58,10 @@ async function load(id?: number): Promise<void> {
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
-    if (n === seq) loading.value = false
+    if (n === seq) {
+      loading.value = false
+      markReady()
+    }
   }
 }
 
@@ -88,16 +94,35 @@ const perDay = computed(() => {
 })
 
 // Category donut: top 5 + "その他". Colors are shared by the ring and the
-// legend (same index).
+// legend (same index). TASK-74: each legend row keeps keys[0] (the top
+// category id) so the row links into /categories/:top — the 未分類 label
+// row (keys[0]=null) takes the uncategorized carve-out and その他 stays a
+// plain span.
 const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c-rest)']
 const categories = computed(() => {
   const rows = section('categories')
-  const top = rows.slice(0, 5).map((r) => ({ label: r.labels[0] ?? '未分類', value: r.value }))
+  const top = rows.slice(0, 5).map((r) => ({
+    label: r.labels[0] ?? '未分類',
+    value: r.value,
+    id: typeof r.keys[0] === 'number' ? (r.keys[0] as number) : null,
+  }))
   const rest = rows.slice(5).reduce((a, r) => a + r.value, 0)
-  if (rest > 0) top.push({ label: 'その他', value: rest })
+  if (rest > 0) top.push({ label: 'その他', value: rest, id: null })
   const total = top.reduce((a, r) => a + r.value, 0)
   return top.map((r, i) => ({ ...r, color: PALETTE[i]!, share: total ? r.value / total : 0 }))
 })
+
+/** Legend row destination (TASK-74 §4-7): the top id from the stats row. */
+function categoryTo(c: { label: string; id: number | null }): RouteLocationRaw | null {
+  if (c.label === 'その他') return null
+  const query = {
+    ...period.urlQuery,
+    ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
+  }
+  if (c.label === '未分類') return { path: '/categories/uncategorized', query }
+  if (c.id === null) return null
+  return { path: `/categories/${c.id}`, query }
+}
 const R = 52
 const CIRC = 2 * Math.PI * R
 const arcs = computed(() => {
@@ -113,8 +138,26 @@ const arcs = computed(() => {
 const stores = computed(() => {
   const rows = section('stores')
   const max = Math.max(...rows.map((r) => r.value), 1)
-  return rows.map((r) => ({ label: r.labels[0] ?? '店不明', value: r.value, width: Math.round((r.value / max) * 100) }))
+  return rows.map((r) => ({
+    label: r.labels[0] ?? '店不明',
+    value: r.value,
+    width: Math.round((r.value / max) * 100),
+    id: typeof r.keys[0] === 'number' ? (r.keys[0] as number) : null,
+  }))
 })
+
+/** Store row destination (TASK-74 §4-7): keys[0] is the store id — その他
+ * and 店不明 (null) have no page of their own. */
+function storeTo(s: { id: number | null }): RouteLocationRaw | null {
+  if (s.id === null) return null
+  return {
+    path: `/stores/${s.id}`,
+    query: {
+      ...period.urlQuery,
+      ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
+    },
+  }
+}
 
 /** Per-receipt feed links carry this screen's period + filter as context. */
 const recentQuery = computed(() => {
@@ -256,9 +299,9 @@ const recentQuery = computed(() => {
               :key="c.label"
             >
               <component
-                :is="c.label === 'その他' ? 'span' : RouterLink"
+                :is="categoryTo(c) ? RouterLink : 'span'"
                 class="legend-row"
-                v-bind="c.label === 'その他' ? {} : { to: { path: '/categories', query: { ...period.urlQuery, category: c.label } } }"
+                v-bind="categoryTo(c) ? { to: categoryTo(c)! } : {}"
               >
                 <span
                   class="dot"
@@ -300,16 +343,17 @@ const recentQuery = computed(() => {
             v-for="s in stores"
             :key="s.label"
           >
-            <RouterLink
-              :to="{ path: '/stores', query: { ...period.urlQuery, store: s.label } }"
+            <component
+              :is="storeTo(s) ? RouterLink : 'span'"
               class="rank-link"
+              v-bind="storeTo(s) ? { to: storeTo(s)! } : {}"
             >
               <div class="rank-head">
                 <span>{{ s.label }}</span>
                 <span class="amount">{{ formatYen(s.value) }}</span>
               </div>
               <span class="meter"><span :style="{ width: `${s.width}%` }" /></span>
-            </RouterLink>
+            </component>
           </li>
         </ul>
       </section>

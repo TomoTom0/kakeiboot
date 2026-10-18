@@ -481,7 +481,10 @@ html.drawer-lock { overflow: hidden; }
 .menu-item:hover { background: var(--bb-hover); }
 .menu-item .icon { color: var(--bb-muted); }
 
-.app-main { max-width: 64rem; margin: 0 auto; padding: 1.5rem; }
+/* position + overflow give the slide transitions their stage (TASK-74 §4-3):
+   the leaving page parks absolute inside this box and the entering page's
+   translateX(100%) never widens the document */
+.app-main { position: relative; overflow-x: clip; max-width: 64rem; margin: 0 auto; padding: 1.5rem; }
 .public .app-main, .public { min-height: 100vh; }
 
 .tabbar { display: none; }
@@ -1021,6 +1024,64 @@ a.legend-row:hover { background: var(--bb-hover); }
 }
 .page-menu-trigger:hover, .page-menu-trigger[aria-expanded='true'] { box-shadow: 0 0 0 2px var(--bb-accent-soft); }
 
+/* The detail pages' heading row (PageHead, TASK-74 §4-5): ‹ 44px, the kind
+   label small, the name bold, the total at the right end, then the "..."
+   menu slot — one row plus the sub line. The final density pass is
+   TASK-75's; this is the minimal layout. */
+.page-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
+.page-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  margin-left: -0.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--bb-accent);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.page-back:hover { background: var(--bb-hover); }
+.page-head-kind { margin: 0; flex: none; color: var(--bb-muted); font-size: 0.8rem; }
+.page-head-parent { margin-right: 0.35rem; }
+.page-head-parent::after { content: '・'; color: var(--bb-muted); }
+.page-head-title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.05rem; }
+.page-head-total { margin-left: auto; flex: none; font-weight: 700; }
+.page-head-sub { margin: 0 0 0.75rem; }
+
+/* The condition chip row of the detail pages (FilterChips, TASK-74 §3-4
+   案A): one horizontally scrollable row right under the heading; TASK-75
+   moves it into the one-line toolbar. */
+.page-chips { display: flex; gap: 0.4rem; margin: 0 0 0.75rem; overflow-x: auto; scrollbar-width: none; }
+.page-chips::-webkit-scrollbar { display: none; }
+.page-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: none;
+  padding: 0.15rem 0.3rem 0.15rem 0.7rem;
+  border-radius: 999px;
+  background: var(--bb-accent-soft);
+  color: var(--bb-accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.page-chip .chip-x { position: relative; width: 24px; height: 24px; }
+/* the x keeps its small look but stretches its tap area to the 44px family
+   (§3-4) without growing the chip */
+.page-chip .chip-x::after { content: ''; position: absolute; inset: -10px; }
+
+/* The store-category chip row of the store list (TASK-74 §4-7, D28 §4-2):
+   single select above the ranking. */
+.store-cats { display: flex; gap: 0.4rem; margin: 0 0 0.75rem; overflow-x: auto; scrollbar-width: none; }
+.store-cats::-webkit-scrollbar { display: none; }
+.store-cat { flex: none; white-space: nowrap; }
+
 h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 .card-head h3 { margin-top: 1rem; }
 .hint { margin: 0.75rem 0 0; }
@@ -1051,10 +1112,12 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
   text-align: left;
   text-decoration: none;
 }
-.ranked-row.clickable { cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
-.ranked-row.clickable:hover { background: var(--bb-hover); }
-.ranked-row.selected { background: var(--bb-accent-soft); border-color: color-mix(in srgb, var(--bb-accent) 40%, transparent); }
-.ranked-row:disabled { cursor: default; color: inherit; }
+/* link rows (RankedList `to`, TASK-74 §4-6): same box, plus the affordances;
+   plain rows stay as-is — TASK-75 reworks the row layout on top of this */
+a.ranked-row.is-link { cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
+a.ranked-row.is-link:hover { background: var(--bb-hover); }
+a.ranked-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
+.ranked-chevron { align-self: flex-end; color: var(--bb-muted); flex: none; }
 .ranked-head { display: flex; justify-content: space-between; gap: 0.5rem; }
 .ranked-label { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ranked-sub { display: flex; gap: 0.75rem; }
@@ -1403,6 +1466,16 @@ a.sub-row:hover { background: var(--bb-hover); }
 .receipt-head p { margin: 0.1rem 0; }
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.4rem !important; }
 .tag { padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--bb-surface-2); color: var(--bb-muted); font-size: 0.78rem; font-weight: 600; }
+/* detail links into the hierarchy pages (TASK-74 §4-8): the item category
+ * keeps the small size but widens its tap target past the text box; the
+ * store name keeps the accent link look, the store-category tag its chip
+ * look (muted, no underline until hovered) */
+.cat-link { display: inline-block; padding: 4px 6px; margin: -4px -6px; font-size: 0.85rem; text-decoration: none; }
+.cat-link:hover { text-decoration: underline; }
+.store-link { text-decoration: none; }
+.store-link:hover { text-decoration: underline; }
+.tag-link { text-decoration: none; }
+.tag-link:hover { text-decoration: underline; }
 .receipt-total { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
 .receipt-total strong { font-size: 1.9rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .receipt-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
@@ -1545,6 +1618,22 @@ a.sub-row:hover { background: var(--bb-hover); }
 .page-enter-from { opacity: 0; transform: translateY(8px); }
 .page-leave-to { opacity: 0; transform: translateY(-4px); }
 
+/* hierarchical slide transitions (TASK-74 §4-3): forward enters from the
+   right while the leaving page parks absolute and drifts left — no mode, both
+   pages move at once; back is the mirror. A 'none' direction never applies
+   these (App.vue turns the CSS off) and the reduced-motion block below
+   disables them again as a second guard */
+.slide-forward-enter-from { transform: translateX(100%); }
+.slide-forward-leave-to { transform: translateX(-30%); opacity: 0; }
+.slide-back-enter-from { transform: translateX(-100%); }
+.slide-back-leave-to { transform: translateX(30%); opacity: 0; }
+.slide-forward-enter-active,
+.slide-forward-leave-active,
+.slide-back-enter-active,
+.slide-back-leave-active { transition: transform 220ms cubic-bezier(.2, .7, .2, 1), opacity 220ms; }
+.slide-forward-leave-active,
+.slide-back-leave-active { position: absolute; top: 0; left: 0; width: 100%; }
+
 /* messages (errors / notices / copy confirmations) fade in when inserted */
 @keyframes bb-fade-in {
   from { opacity: 0; }
@@ -1628,6 +1717,16 @@ a.sub-row:hover { background: var(--bb-hover); }
   .page-leave-active { transition-duration: 0s; }
   .page-enter-from,
   .page-leave-to { transform: none; }
+  /* the slide transitions are off as well (TASK-74: the JS side already
+     forces the 'none' direction; this is the second guard) */
+  .slide-forward-enter-active,
+  .slide-forward-leave-active,
+  .slide-back-enter-active,
+  .slide-back-leave-active { transition: none; }
+  .slide-forward-enter-from,
+  .slide-forward-leave-to,
+  .slide-back-enter-from,
+  .slide-back-leave-to { transform: none; }
   .msg, .usage-copy-done, .skeleton .sk { animation: none; }
   .topbar.ledger-scoped { transition: none; }
   .ledger-chip { transition: none; }

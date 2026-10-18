@@ -270,14 +270,18 @@ describe('search page: items tab', () => {
     expect(Object.fromEntries(fu.searchParams)).toEqual({ q: '牛乳' })
 
     // the category is a separate link inside the row: it does not trigger the
-    // row navigation and carries the period (and labels when set)
+    // row navigation. TASK-74: the catalog resolves the path into the
+    // hierarchy route ids (/categories/<top>[/<sub>]); with the scope at all
+    // (the default) no period keys ride the link — the term searched the
+    // whole history, so there is no period to carry
     const cat = wrapper.find('[data-test="search-item-category"]')
     expect(cat.exists()).toBe(true)
     const cu = new URL(cat.attributes('href')!, 'http://localhost')
-    expect(cu.pathname).toBe('/categories')
-    expect(Object.fromEntries(cu.searchParams)).toEqual({ category: '食費/食料品', month: '2026-10' })
+    expect(cu.pathname).toBe('/categories/1/2')
+    expect(Object.fromEntries(cu.searchParams)).toEqual({})
 
-    // the scope chip narrows the item query the same way
+    // the scope chip narrows the item query the same way — and the category
+    // link starts carrying the period in its URL form
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query).toEqual({
@@ -290,6 +294,48 @@ describe('search page: items tab', () => {
       1,
       expect.objectContaining({ q: '牛乳', from: '2026-10-01', to: '2026-10-31' }),
     ])
+    const cu2 = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
+    expect(cu2.pathname).toBe('/categories/1/2')
+    expect(Object.fromEntries(cu2.searchParams)).toEqual({ month: '2026-10' })
+  })
+
+  it('[covers:web-search.items] カテゴリリンクは labels を引き継ぎ・catalog に解けない path は /categories の一覧のまま', async () => {
+    stubSearchItems(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳&tab=items&scope=period&month=2026-10')
+    // a label selection rides the category link like the period does
+    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    const withLabel = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
+    expect(withLabel.pathname).toBe('/categories/1/2')
+    expect(Object.fromEntries(withLabel.searchParams)).toEqual({ month: '2026-10', labels: 'red' })
+
+    // a category path the catalog cannot resolve (a deleted / foreign tree)
+    // keeps the list destination with the legacy category query
+    stubSearchItems(api, [{ ...MILK, category: '存在しない分類' }])
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const unresolved = await mountApp('/search?q=牛乳&tab=items&scope=period&month=2026-10')
+    await settle()
+    const cu = new URL(unresolved.wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
+    expect(cu.pathname).toBe('/categories')
+    expect(Object.fromEntries(cu.searchParams)).toEqual({ category: '存在しない分類', month: '2026-10' })
+  })
+
+  it('[covers:web-search.items] catalog 取得失敗は msg-error に出す（unhandled rejection なし・結果行はそのまま）', async () => {
+    // the category links need the catalog; a failed fetch surfaces through
+    // the page's error message while the rows themselves keep working (the
+    // category links just fall back to the /categories list destination)
+    stubSearchItems(api)
+    vi.spyOn(api, 'getCatalog').mockRejectedValue(new Error('catalog down'))
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳&tab=items')
+    const msg = wrapper.find('[data-test="error"]')
+    expect(msg.exists()).toBe(true)
+    expect(msg.classes()).toContain('msg-error')
+    expect(wrapper.findAll('[data-test="search-item-row"]')).toHaveLength(1)
   })
 
   it('[covers:web-search.items] さらに表示はレシートtab と同型（cursor 付き再取得・append）', async () => {
