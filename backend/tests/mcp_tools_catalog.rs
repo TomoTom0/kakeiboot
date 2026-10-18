@@ -547,3 +547,44 @@ async fn get_catalog_includes_label_definitions() {
     assert_eq!(labels[0]["title"], "旅行");
     assert!(labels[1]["title"].is_null());
 }
+
+// [covers:mcp-tools.query-length]
+#[tokio::test]
+async fn summarize_and_get_catalog_query_length_is_input_error() {
+    let (router, _pool, token, _grant, _user, _owner) = setup().await;
+    // TASK-73: over-cap search strings (max_query_chars = 200) are whole-call
+    // input errors whose message carries the limit
+    let over = "x".repeat(201);
+    // summarize_spending: filters.store / filters.item_query
+    for filters in [json!({ "store": over }), json!({ "item_query": over })] {
+        let r = call(
+            &router,
+            &token,
+            1,
+            "summarize_spending",
+            json!({
+                "report": "by_category",
+                "period": { "from": "2026-10-01", "to": "2026-10-31" },
+                "filters": filters,
+            }),
+        )
+        .await;
+        assert_eq!(r["isError"], json!(true), "filters: {filters}");
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("200"), "the limit is in the message: {text}");
+    }
+    // get_catalog: store_query
+    let r = call(
+        &router,
+        &token,
+        2,
+        "get_catalog",
+        json!({ "store_query": over }),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(true));
+    assert!(
+        r["content"][0]["text"].as_str().unwrap().contains("200"),
+        "the limit is in the message"
+    );
+}

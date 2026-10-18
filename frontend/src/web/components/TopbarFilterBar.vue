@@ -138,6 +138,7 @@ function run(): void {
         <input
           v-model="draft"
           type="search"
+          maxlength="200"
           data-autofocus
           aria-label="検索語"
           data-test="search-dialog-input"

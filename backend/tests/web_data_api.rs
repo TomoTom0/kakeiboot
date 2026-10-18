@@ -1005,6 +1005,65 @@ async fn stats_store_category_path_filter() {
     assert_eq!(resp.status(), 400);
 }
 
+// ---------------------------------------------------------------------------
+// TASK-73: search query length cap (mcp.toml [limits] max_query_chars = 200,
+// chars at the input). Every free-text search param on the 4 endpoints.
+
+#[tokio::test]
+// [covers:web-data-api.query-length]
+async fn search_query_length_cap() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
+
+    // 201 chars: every search-ish param on every endpoint answers with the
+    // existing invalid-input shape (the garbage cursor style) — never a
+    // silent truncation or an ignored param
+    let over = "a".repeat(201);
+    for path in [
+        format!("/api/ledgers/1/stores?query={over}"),
+        format!("/api/ledgers/1/receipts?store={over}"),
+        format!("/api/ledgers/1/receipts?q={over}"),
+        format!("/api/ledgers/1/receipts?item_query={over}"),
+        format!("/api/ledgers/1/items?q={over}"),
+        format!("/api/ledgers/1/stats?month=2026-10&store={over}"),
+        format!("/api/ledgers/1/stats?month=2026-10&item_query={over}"),
+    ] {
+        let resp = c.get(&router, &path).await;
+        assert_eq!(resp.status(), 400, "{path}");
+        assert_eq!(body_json(resp).await["error"], "invalid_request", "{path}");
+    }
+
+    // exactly 200 chars: the boundary passes and searches as before
+    // (0 hits is fine)
+    let at = "a".repeat(200);
+    for path in [
+        format!("/api/ledgers/1/stores?query={at}"),
+        format!("/api/ledgers/1/receipts?store={at}"),
+        format!("/api/ledgers/1/receipts?q={at}"),
+        format!("/api/ledgers/1/receipts?item_query={at}"),
+        format!("/api/ledgers/1/items?q={at}"),
+        format!("/api/ledgers/1/stats?month=2026-10&store={at}"),
+        format!("/api/ledgers/1/stats?month=2026-10&item_query={at}"),
+    ] {
+        let resp = c.get(&router, &path).await;
+        assert_eq!(resp.status(), 200, "{path}");
+    }
+
+    // whitespace-only 201 chars: the trim-empty check wins over the length
+    // check (q=+ is one space in form encoding), keeping the existing
+    // no-filter behavior — the one receipt is still returned
+    for path in [
+        format!("/api/ledgers/1/receipts?q={}", "+".repeat(201)),
+        format!("/api/ledgers/1/receipts?store={}", "+".repeat(201)),
+    ] {
+        let resp = c.get(&router, &path).await;
+        assert_eq!(resp.status(), 200, "{path}");
+        assert_eq!(body_json(resp).await["total_count"], 1, "{path}");
+    }
+}
+
 #[tokio::test]
 // [covers:web-data-api.receipt-update-conflicts]
 async fn receipt_get_update_conflicts() {

@@ -9,6 +9,8 @@ use crate::domain::catalog::{
     self, CatKind, CatalogError, CategoryChange, ManageCategory, StoreChange,
 };
 use crate::domain::labels;
+use crate::domain::search;
+use crate::domain::stats::FilterError;
 use crate::mcp::result::{self, envelope};
 
 fn cat_err(e: CatalogError) -> rmcp::model::CallToolResult {
@@ -83,6 +85,14 @@ pub async fn get(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     }
     // `stores` only with a query (count can be large, spec 7-12).
     if let Some(q) = a.store_query.as_deref().filter(|q| !q.trim().is_empty()) {
+        // TASK-73: search query length cap (spec 3-5). The kind is
+        // store_query on both this and the web /stores query path (design 3).
+        search::check_query_text("store_query", q, c.limits().max_query_chars).map_err(
+            |e| match e {
+                FilterError::Invalid(m) => result::invalid(&[m]),
+                FilterError::Db(e) => result::internal(e),
+            },
+        )?;
         let stores = catalog::search_stores(&mut conn, ledger.id, q, c.limits().catalog_max_stores)
             .await
             .map_err(result::internal)?;

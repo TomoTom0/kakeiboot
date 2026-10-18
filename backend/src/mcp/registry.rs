@@ -931,6 +931,7 @@ mod tests {
             max_note_chars: 1000,
             search_default_limit: 20,
             search_max_limit: 50,
+            max_query_chars: 200,
             stats_max_rows: 200,
             catalog_max_stores: 50,
             widget_refs_max: 20,

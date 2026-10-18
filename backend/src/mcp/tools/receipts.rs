@@ -76,6 +76,20 @@ pub async fn search(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
         .limit
         .unwrap_or(lim.search_default_limit)
         .clamp(1, lim.search_max_limit);
+    // TASK-73: search query length cap (spec 3-5) at the input validation
+    // point, the same decode_cursor pattern; whitespace-only stays Ok.
+    search::check_query_text(
+        "store",
+        a.store.as_deref().unwrap_or(""),
+        lim.max_query_chars,
+    )
+    .map_err(filter_err)?;
+    search::check_query_text(
+        "item_query",
+        a.item_query.as_deref().unwrap_or(""),
+        lim.max_query_chars,
+    )
+    .map_err(filter_err)?;
     let q = SearchQuery {
         store: a.store,
         text: None,

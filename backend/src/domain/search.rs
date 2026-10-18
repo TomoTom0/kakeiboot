@@ -45,6 +45,25 @@ pub fn decode_cursor(c: &str) -> Option<(String, i64)> {
     Some((d.to_string(), id.parse().ok()?))
 }
 
+/// TASK-73: free-text search query length cap (spec_mcp-tools.md 3-5).
+/// `kind` is the param label for the message — "store" / "item_query" / "q"
+/// / "store_query" (the store catalog search is "store_query" on both the
+/// web `query` and MCP `store_query` paths, per design 3). The length is
+/// the input as received (chars, pre-normalize; `max` comes from
+/// mcp.toml `[limits] max_query_chars`). Whitespace-only input is the
+/// existing filter skip and is checked first, so it stays Ok (design 3-3).
+pub fn check_query_text(kind: &str, s: &str, max: usize) -> Result<(), FilterError> {
+    if s.trim().is_empty() {
+        return Ok(());
+    }
+    if s.chars().count() > max {
+        return Err(FilterError::Invalid(format!(
+            "{kind} が長すぎます（上限 {max} 字）"
+        )));
+    }
+    Ok(())
+}
+
 /// Item-level conditions over `receipt_items i` (name / category). `text`
 /// (the /search cross-field query) is folded in as an item-name match only
 /// for the item-level list (`search_items`); the receipts path passes None
@@ -389,5 +408,66 @@ mod tests {
         let c = encode_cursor("2026-10-01", 42);
         assert_eq!(decode_cursor(&c), Some(("2026-10-01".into(), 42)));
         assert_eq!(decode_cursor("garbage!"), None);
+    }
+
+    // TASK-73: the search query length cap helper. Both adapters (web api.rs
+    // and the MCP tools) call it at their input validation points, the same
+    // decode_cursor pattern; the cap itself comes from mcp.toml [limits]
+    // max_query_chars (spec_mcp-tools.md 3-5).
+
+    // [covers:mcp-tools.query-length]
+    #[test]
+    fn check_query_text_char_boundaries() {
+        // 200 chars pass, 201 fail; the cap arrives as an argument so the
+        // configured [limits] value drives it, never a hardcoded constant
+        assert!(check_query_text("q", &"a".repeat(200), 200).is_ok());
+        assert!(check_query_text("item_query", &"a".repeat(201), 200).is_err());
+        assert!(check_query_text("store", &"b".repeat(50), 50).is_ok());
+        assert!(check_query_text("store_query", &"b".repeat(51), 50).is_err());
+        // the length is the input as received (design 2-1: 入力時点・normalize
+        // 前), not the trimmed one: 201 chars of which 200 are content still
+        // exceed the cap
+        let padded = format!("{} ", "a".repeat(200));
+        assert!(check_query_text("q", &padded, 200).is_err());
+    }
+
+    // [covers:mcp-tools.query-length]
+    #[test]
+    fn check_query_text_counts_chars_not_bytes() {
+        // hiragana: 100 chars = 300 UTF-8 bytes must pass (a byte counter
+        // would reject it) and 201 chars (603 bytes) must fail — the cap
+        // counts chars, the same unit as max_name_chars / truncate_chars
+        assert!(check_query_text("q", &"あ".repeat(100), 200).is_ok());
+        assert!(
+            check_query_text("item_query", &"あ".repeat(201), 200).is_err(),
+            "hiragana is counted per char, not per UTF-8 byte"
+        );
+    }
+
+    // [covers:mcp-tools.query-length]
+    #[test]
+    fn check_query_text_error_names_kind_and_limit() {
+        for kind in ["store", "item_query", "q", "store_query"] {
+            let err = check_query_text(kind, &"x".repeat(201), 200).unwrap_err();
+            match err {
+                FilterError::Invalid(msg) => {
+                    assert!(msg.contains(kind), "{kind} is named in: {msg}");
+                    assert!(msg.contains("200"), "the limit is in: {msg}");
+                }
+                other => panic!("expected Invalid, got {other:?}"),
+            }
+        }
+    }
+
+    // [covers:mcp-tools.query-length]
+    #[test]
+    fn check_query_text_trim_empty_wins_over_length() {
+        // 201 whitespace chars satisfy both "trim-empty" (the existing
+        // filter skip) and "over the cap": the trim-empty check is applied
+        // first, so this is not a length error and the existing behavior
+        // is kept (design 3-3 優先順位)
+        assert!(check_query_text("q", &" ".repeat(201), 200).is_ok());
+        assert!(check_query_text("store", &" ".repeat(201), 200).is_ok());
+        assert!(check_query_text("item_query", "", 200).is_ok());
     }
 }

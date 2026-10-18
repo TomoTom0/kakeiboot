@@ -36,6 +36,12 @@ pub struct McpLimits {
     pub max_note_chars: usize,
     pub search_default_limit: i64,
     pub search_max_limit: i64,
+    /// TASK-73: free-text search query cap (spec_mcp-tools.md 3-5) —
+    /// search_receipts store / item_query, summarize_spending filters,
+    /// get_catalog store_query and the web q / store / item_query / stores
+    /// query params. Chars at the input (pre-normalize); over the cap is a
+    /// whole-call input error.
+    pub max_query_chars: usize,
     pub stats_max_rows: usize,
     pub catalog_max_stores: i64,
     pub widget_refs_max: usize,
@@ -90,6 +96,7 @@ pub fn parse_mcp_tools(text: &str) -> Result<McpToolsConfig, ConfigError> {
         || l.max_note_chars == 0
         || l.search_default_limit <= 0
         || l.search_max_limit < l.search_default_limit
+        || l.max_query_chars == 0
         || l.stats_max_rows == 0
         || l.catalog_max_stores <= 0
         || l.widget_refs_max == 0
@@ -750,6 +757,7 @@ max_name_chars = 200
 max_note_chars = 1000
 search_default_limit = 20
 search_max_limit = 50
+max_query_chars = 200
 stats_max_rows = 200
 catalog_max_stores = 50
 widget_refs_max = 20

@@ -313,6 +313,15 @@ pub async fn manage_category(
 // ---------------------------------------------------------------------------
 // stores
 
+/// TASK-73: free-text search params are capped at `max_query_chars` (spec
+/// 3-5); over the cap is the standard invalid-input 400 (the existing
+/// DataError shape, message not extended). `kind` labels the param in the
+/// domain error (dropped here, shown on the MCP path). Whitespace-only
+/// values stay Ok (the existing filter skip wins, design 3-3).
+fn check_query_len(kind: &str, v: Option<&str>, max: usize) -> Result<(), DataError> {
+    search::check_query_text(kind, v.unwrap_or(""), max).map_err(|_| DataError::invalid())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct StoresQuery {
     #[serde(default)]
@@ -327,6 +336,11 @@ pub async fn list_stores(
 ) -> Result<Json<Vec<Value>>, DataError> {
     let s = session(&state, &headers).await?;
     member_ledger(&state.db, ledger_id, s.user_id).await?;
+    check_query_len(
+        "store_query",
+        q.query.as_deref(),
+        state.tools.limits.max_query_chars,
+    )?;
     let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
     let stores = catalog::search_stores(
         &mut conn,
@@ -596,6 +610,9 @@ pub async fn get_stats(
     };
     let range = stats::resolve_period(&period, crate::domain::util::jst_date(now_ms()))
         .map_err(|_| DataError::invalid())?;
+    let max_query_chars = state.tools.limits.max_query_chars;
+    check_query_len("store", q.store.as_deref(), max_query_chars)?;
+    check_query_len("item_query", q.item_query.as_deref(), max_query_chars)?;
     let label_colors = parse_label_colors(q.label_colors.as_deref())?;
     let filters = Filters {
         category: q.category,
@@ -684,6 +701,9 @@ pub async fn list_receipts(
         .limit
         .unwrap_or(lim.search_default_limit)
         .clamp(1, lim.search_max_limit);
+    check_query_len("store", q.store.as_deref(), lim.max_query_chars)?;
+    check_query_len("q", q.q.as_deref(), lim.max_query_chars)?;
+    check_query_len("item_query", q.item_query.as_deref(), lim.max_query_chars)?;
     let query = SearchQuery {
         store: q.store,
         text: q.q,
@@ -762,6 +782,7 @@ pub async fn list_items(
         .limit
         .unwrap_or(lim.search_default_limit)
         .clamp(1, lim.search_max_limit);
+    check_query_len("q", q.q.as_deref(), lim.max_query_chars)?;
     let query = SearchQuery {
         store: None,
         text: None,

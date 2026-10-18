@@ -411,3 +411,29 @@ async fn subject_hash_recorded_even_when_the_tool_fails() {
             .unwrap();
     assert_eq!(recorded, Some(user), "hash recorded despite tool failure");
 }
+
+// [covers:mcp-tools.query-length]
+#[tokio::test]
+async fn search_receipts_query_length_is_input_error() {
+    let (router, _pool, token, _grant, _user, _active) = setup_with_ledger().await;
+    // TASK-73: an over-cap store / item_query (max_query_chars = 200) is a
+    // whole-call input error whose message carries the limit so the model
+    // can retry with a shorter query
+    let over = "x".repeat(201);
+    for args in [json!({ "item_query": over }), json!({ "store": over })] {
+        let v = post_mcp(
+            &router,
+            &token,
+            rpc(
+                1,
+                "tools/call",
+                json!({"name": "search_receipts", "arguments": args}),
+            ),
+        )
+        .await;
+        let r = result_of(&v);
+        assert_eq!(r["isError"], json!(true), "args: {args}");
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("200"), "the limit is in the message: {text}");
+    }
+}

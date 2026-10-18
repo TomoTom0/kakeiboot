@@ -309,12 +309,14 @@ const groups = computed(() => {
             <label class="field"><span>店名</span><input
               v-model="draft.store"
               type="search"
+              maxlength="200"
               data-autofocus
               data-test="store"
             ></label>
             <label class="field"><span>品名</span><input
               v-model="draft.item"
               type="search"
+              maxlength="200"
               data-test="item"
             ></label>
             <label class="field"><span>カテゴリ（例: 食費、食費/外食、未分類）</span><input

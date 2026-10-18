@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{Call, ToolResult, parse};
+use crate::domain::search;
 use crate::domain::stats::{
     self, FilterError, Filters, default_period, parse_period, resolve_period,
 };
@@ -34,6 +35,20 @@ pub async fn summarize(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     let range =
         resolve_period(&period, util::jst_date(c.now)).map_err(|m| result::invalid(&[m]))?;
     let filters = a.filters.unwrap_or_default();
+    // TASK-73: search query length cap (spec 3-5) at the input validation
+    // point; the message carries the limit so the model can retry shorter.
+    let max_query_chars = c.limits().max_query_chars;
+    for (kind, v) in [
+        ("store", filters.store.as_deref()),
+        ("item_query", filters.item_query.as_deref()),
+    ] {
+        if let Err(e) = search::check_query_text(kind, v.unwrap_or(""), max_query_chars) {
+            return Err(match e {
+                FilterError::Invalid(m) => result::invalid(&[m]),
+                FilterError::Db(e) => result::internal(e),
+            });
+        }
+    }
     let mut conn = c.db().acquire().await.map_err(result::internal)?;
     let (res, meta) = stats::summarize(
         &mut conn,

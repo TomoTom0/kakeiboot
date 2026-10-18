@@ -303,6 +303,7 @@ function categoryTo(path: string): RouteLocationRaw {
         type="search"
         class="search-input"
         autofocus
+        maxlength="200"
         aria-label="検索語"
         data-test="search-input"
         @input="commitSoon"

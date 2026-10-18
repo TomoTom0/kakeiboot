@@ -159,6 +159,47 @@ fn mcp_toml_batch_keys_and_startup_validation() {
 }
 
 // ---------------------------------------------------------------------------
+// TASK-73: search query length cap (mcp.toml [limits] max_query_chars)
+
+// [covers:mcp-config.query-length]
+#[test]
+fn mcp_toml_max_query_chars() {
+    // 1. every environment config carries max_query_chars = 200 (the design
+    //    value; the cap lives in the [limits] table like every other size
+    //    limit, spec_mcp-tools.md 3-5, not a hardcoded constant)
+    let tomls = env_mcp_tomls();
+    assert!(!tomls.is_empty());
+    for (env, text) in &tomls {
+        let v: toml::Value = toml::from_str(text).unwrap();
+        let chars = v
+            .get("limits")
+            .and_then(|l| l.get("max_query_chars"))
+            .unwrap_or_else(|| {
+                panic!("configs/{env}/mcp.toml is missing [limits].max_query_chars")
+            });
+        assert_eq!(
+            chars.as_integer().unwrap_or_else(|| {
+                panic!("configs/{env}/mcp.toml max_query_chars is not an integer")
+            }),
+            200,
+            "{env}"
+        );
+    }
+
+    // 2. the repo file with the key parses cleanly (a known field)
+    let dev = &tomls.iter().find(|(e, _)| e == "dev").unwrap().1;
+    budget_book::config::parse_mcp_tools(dev)
+        .unwrap_or_else(|e| panic!("the repo dev mcp.toml must parse: {e}"));
+
+    // 3. startup validation: max_query_chars = 0 is rejected
+    let zero = with_table_keys(dev, &["max_query_chars = 0"], &[]);
+    assert!(
+        budget_book::config::parse_mcp_tools(&zero).is_err(),
+        "max_query_chars = 0 must be a config error"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // TASK-32: register invitation TTL (auth.toml [auth.invitation])
 
 /// Every configs/<env>/auth.toml in the repo as (env, text).

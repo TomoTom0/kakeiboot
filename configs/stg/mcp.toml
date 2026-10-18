@@ -11,6 +11,11 @@ max_note_chars = 1000
 # search_receipts limit: default and upper bound
 search_default_limit = 20
 search_max_limit = 50
+# free-text search query cap (TASK-73): search_receipts store / item_query,
+# summarize_spending filters, get_catalog store_query, and the web q / store /
+# item_query / stores query params. Chars at the input; over the cap is an
+# input error (400 invalid_request / isError).
+max_query_chars = 200
 # summarize_spending rows per section before "その他"
 stats_max_rows = 200
 # get_catalog stores (store_query)
