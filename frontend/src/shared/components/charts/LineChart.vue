@@ -1,8 +1,10 @@
 <script setup lang="ts">
-// Line chart (monthly_trend) and points + line (item_price_history, chart=scatter_line).
-// The path `d` is built only from computed numbers, never from labels (spec §11-6).
+// Points + line for item_price_history (chart=scatter_line). The 'line' kind is
+// part of the spec contract union and routed here too, but no backend report
+// emits it today. The path `d` is built only from computed numbers, never
+// from labels (spec §11-6).
 import { computed } from 'vue'
-import { formatYen, truncateLabel } from '@/shared/format'
+import { formatYen } from '@/shared/format'
 import { type ChartDatum, compactYen, niceMax } from './types'
 
 const props = withDefaults(defineProps<{ data: ChartDatum[]; points?: boolean }>(), { points: false })
@@ -27,14 +29,14 @@ const pts = computed(() =>
       x: Math.round(x * 10) / 10,
       y: Math.round(y * 10) / 10,
       value: d.value,
-      label: truncateLabel(d.label, 5),
+      label: d.label,
       title: `${d.label}${d.sub ? `（${d.sub}）` : ''}: ${formatYen(d.value)}`,
     }
   }),
 )
 const path = computed(() => pts.value.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x} ${p.y}`).join(' '))
 const ticks = computed(() => [0, 0.5, 1].map((t) => ({ y: TOP + plotH - t * plotH, text: compactYen(t * max.value) })))
-const labelEvery = computed(() => Math.max(1, Math.ceil(pts.value.length / 6)))
+const firstLabel = computed(() => pts.value[0]?.label ?? '')
 </script>
 
 <template>
@@ -80,11 +82,18 @@ const labelEvery = computed(() => Math.max(1, Math.ceil(pts.value.length / 6)))
         :data-value="p.value"
       />
       <text
-        v-if="p.key % labelEvery === 0"
+        v-if="p.key === 0"
         class="bb-chart__axis"
-        :x="p.x"
+        :x="LEFT"
         :y="H - 6"
-        text-anchor="middle"
+        text-anchor="start"
+      >{{ p.label }}</text>
+      <text
+        v-else-if="p.key === pts.length - 1 && p.label !== firstLabel"
+        class="bb-chart__axis"
+        :x="W"
+        :y="H - 6"
+        text-anchor="end"
       >{{ p.label }}</text>
     </g>
   </svg>

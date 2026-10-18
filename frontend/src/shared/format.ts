@@ -31,6 +31,16 @@ export function truncateLabel(label: string, max: number): string {
   return `${chars.slice(0, Math.max(1, max - 1)).join('')}…`
 }
 
+/**
+ * Format an ISO date "YYYY-MM-DD" as "YYYY年M月D日" for chart axis labels (spec §11-6).
+ * Returns `raw` unchanged when it does not strictly match the form — no Date parsing,
+ * so timezone shifts and loose formats stay out of scope.
+ */
+export function formatIsoDateJa(raw: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
+  return m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : raw
+}
+
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   cash: '現金',
   credit_card: 'クレジットカード',

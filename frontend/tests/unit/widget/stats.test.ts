@@ -69,6 +69,44 @@ describe('stats dashboard', () => {
     expect(bottomOne[0]!.attributes('text-anchor')).toBe('start')
   })
 
+  it('[covers:widget.stats-scatter-axis-ends] scatter_line labels: axis ends, JA dates, dup/single guards', async () => {
+    const { wrapper } = await mountWidget(fakeHost({ toolOutput: statsEnvelope('item_price_history') }))
+    const bottom = wrapper.findAll('[data-chart="scatter_line"] text.bb-chart__axis').filter((t) => t.attributes('y') === '154')
+    expect(bottom).toHaveLength(2)
+    expect(bottom[0]!.text()).toBe('2026年8月2日')
+    expect(bottom[0]!.attributes('text-anchor')).toBe('start')
+    expect(bottom[0]!.attributes('x')).toBe('36')
+    expect(bottom[1]!.text()).toBe('2026年10月5日')
+    expect(bottom[1]!.attributes('text-anchor')).toBe('end')
+    expect(bottom[1]!.attributes('x')).toBe('320')
+    // each point keeps its title, rebuilt from the converted label
+    const titles = wrapper.findAll('[data-chart="scatter_line"] g title')
+    expect(titles).toHaveLength(3)
+    expect(titles[0]!.text()).toBe('2026年8月2日（スーパーみどり 駅前店）: 238円')
+
+    const dup = statsEnvelope('item_price_history')
+    // 3 points kept; the last row is set to the first's date so the dup guard hides the end label
+    dup.sections[0]!.rows[2]!.labels[0] = '2026-08-02'
+    const dupW = await mountWidget(fakeHost({ toolOutput: dup }))
+    const dupBottom = dupW.wrapper.findAll('[data-chart="scatter_line"] text.bb-chart__axis').filter((t) => t.attributes('y') === '154')
+    expect(dupBottom).toHaveLength(1)
+    expect(dupBottom[0]!.text()).toBe('2026年8月2日')
+    expect(dupBottom[0]!.attributes('text-anchor')).toBe('start')
+
+    const one = statsEnvelope('item_price_history')
+    one.sections[0]!.rows = [one.sections[0]!.rows[0]!]
+    const oneW = await mountWidget(fakeHost({ toolOutput: one }))
+    const oneBottom = oneW.wrapper.findAll('[data-chart="scatter_line"] text.bb-chart__axis').filter((t) => t.attributes('y') === '154')
+    expect(oneBottom).toHaveLength(1)
+    expect(oneBottom[0]!.text()).toBe('2026年8月2日')
+    expect(oneBottom[0]!.attributes('text-anchor')).toBe('start')
+
+    const raw = statsEnvelope('item_price_history')
+    raw.sections[0]!.rows[0]!.labels[0] = '8/2'
+    const rawW = await mountWidget(fakeHost({ toolOutput: raw }))
+    expect(rawW.wrapper.findAll('[data-chart="scatter_line"] text.bb-chart__axis').filter((t) => t.attributes('y') === '154')[0]!.text()).toBe('8/2')
+  })
+
   it('[covers:widget.stats-period-switch] period / report switch re-runs summarize_spending', async () => {
     const host = fakeHost({
       toolOutput: statsEnvelope('monthly_overview'),

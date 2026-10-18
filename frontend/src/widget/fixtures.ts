@@ -386,9 +386,9 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
             dims: ['item'],
             chart: 'scatter_line',
             rows: [
-              { keys: ['2026-08-02', 3], labels: ['8/2', 'スーパーみどり 駅前店'], value: 238 },
-              { keys: ['2026-09-20', 3], labels: ['9/20', 'スーパーみどり 駅前店'], value: 248 },
-              { keys: ['2026-10-05', 4], labels: ['10/5', 'コンビニ北口'], value: 268 },
+              { keys: ['2026-08-02', 3], labels: ['2026-08-02', 'スーパーみどり 駅前店'], value: 238 },
+              { keys: ['2026-09-20', 3], labels: ['2026-09-20', 'スーパーみどり 駅前店'], value: 248 },
+              { keys: ['2026-10-05', 4], labels: ['2026-10-05', 'コンビニ北口'], value: 268 },
             ],
           },
         ],

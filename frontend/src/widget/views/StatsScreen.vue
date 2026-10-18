@@ -14,7 +14,7 @@ import BarVChart from '@/shared/components/charts/BarVChart.vue'
 import LineChart from '@/shared/components/charts/LineChart.vue'
 import ShareBar from '@/shared/components/charts/ShareBar.vue'
 import type { ChartDatum } from '@/shared/components/charts/types'
-import { formatPct } from '@/shared/format'
+import { formatIsoDateJa, formatPct } from '@/shared/format'
 import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import { useWidgetStore } from '../stores/widget'
@@ -74,7 +74,7 @@ const labelFilter = computed(() => {
 
 function rowsToData(section: StatsSection): ChartDatum[] {
   return section.rows.map((r: StatsRow) => {
-    if (section.chart === 'scatter_line') return { label: r.labels[0] ?? '', sub: r.labels[1] ?? null, value: r.value }
+    if (section.chart === 'scatter_line') return { label: formatIsoDateJa(r.labels[0] ?? ''), sub: r.labels[1] ?? null, value: r.value }
     return { label: r.labels.join(' / '), value: r.value, compare: r.compare_value ?? null }
   })
 }

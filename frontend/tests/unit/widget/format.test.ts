@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { formatYen, isSafeImageUrl } from '@/shared/format'
+import { formatIsoDateJa, formatYen, isSafeImageUrl } from '@/shared/format'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import ImageWithBoxes from '@/shared/components/ImageWithBoxes.vue'
 
@@ -48,5 +48,16 @@ describe('image URL validation', () => {
     const good = mount(ImageWithBoxes, { props: { url: 'https://h.example/media/img/tok' } })
     expect(good.find('img').attributes('src')).toBe('https://h.example/media/img/tok')
     expect(good.find('img').attributes('loading')).toBe('lazy')
+  })
+})
+
+describe('ISO date label format', () => {
+  it('[covers:widget.stats-scatter-axis-ends] strict YYYY-MM-DD only, raw fallback', () => {
+    expect(formatIsoDateJa('2026-08-02')).toBe('2026年8月2日')
+    expect(formatIsoDateJa('2026-01-01')).toBe('2026年1月1日')
+    expect(formatIsoDateJa('8/2')).toBe('8/2')
+    expect(formatIsoDateJa('')).toBe('')
+    expect(formatIsoDateJa('2026-8-2')).toBe('2026-8-2')
+    expect(formatIsoDateJa('2026-08-02T00:00:00')).toBe('2026-08-02T00:00:00')
   })
 })

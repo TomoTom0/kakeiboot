@@ -78,9 +78,9 @@
 | `frontend/tests/unit/widget/draftBatch.test.ts` | 単体 | draft_batch 画面（件数と行状態、callTool なしの詳細と初期画像 URL、すべて登録の送信と行別反映・stale 行の描き直し・再承認なし、承認済み map の復元、送信中の行タップ無効） |
 | `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示（receipt ヘッダの LabelChip 列・receipt_list の色ドット・操作なし、stats のラベル絞り込みチップ〔語+LabelChip〕と再 callTool での引継ぎ [TASK-26]） |
 | `frontend/tests/unit/widget/navigation.test.ts` | 単体 | view ルーティング、初期表示と不正 structuredContent、一覧→詳細（get_receipt_drafts / get_receipt の callTool・戻る・widgetState の stack）、下書き一覧の行表示 |
-| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（自作 SVG グラフの値反映: bar_h / bar_v / stacked_bar / line / table / scatter_line、bar_v の軸ラベル両端のみ〔TASK-67〕、合計カードの前期比、期間・report 切替の summarize_spending 呼び出しと ledger_id・filters 引継ぎ、全画面切替） |
+| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（自作 SVG グラフの値反映: bar_h / bar_v / stacked_bar / line / table / scatter_line、bar_v の軸ラベル両端のみ〔TASK-67〕、scatter_line の軸ラベル両端のみ〔TASK-68〕、合計カードの前期比、期間・report 切替の summarize_spending 呼び出しと ledger_id・filters 引継ぎ、全画面切替） |
 | `frontend/tests/unit/widget/host.test.ts` | 単体 | host adapter（window.openai / 開発時モック / null host の選択、callTool 戻り値の正規化）、dark mode（theme と prefers-color-scheme、style.css の配色変数） |
-| `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記（ja-JP・負数の符号と色）、画像 URL の /media/img/ prefix 検証と不正 URL の非描画 |
+| `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記（ja-JP・負数の符号と色）、画像 URL の /media/img/ prefix 検証と不正 URL の非描画、ISO 日付ラベル変換（YYYY年M月D日・raw fallback〔TASK-68〕） |
 | `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget / shared ソースに直接通信・不使用ホスト API（sendFollowUpMessage・getFileDownloadUrl・toolInput）・HTML 挿入 API・絵文字が無いこと |
 | `frontend/tests/unit/web/helpers.ts` | 補助 | web テスト用: "METHOD /path" で応答を返す fetch スタブ（呼び出し記録・順次応答）、memory history での App mount（HTTP hook 設定）、me・WebAuthn の fixture、フィード用スクロール test double（IntersectionObserver 手動発火・scrollIntoView 記録・scrollBy spy・matchMedia stub） |
 | `frontend/tests/unit/web/http.test.ts` | 単体 | fetch ラッパ（同一 origin・credentials・JSON、401 の onUnauthorized と authOptional、reauth_required の step-up 後1回再送とキャンセル時の非再送、403 のコード、204） |
