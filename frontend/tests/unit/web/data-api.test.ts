@@ -71,4 +71,23 @@ describe('web/api/data', () => {
     expect(f.calls[10]!.body).toEqual({ title: '旅行' })
     expect(f.calls[11]!.body).toEqual({ add: ['red'], remove: ['blue'] })
   })
+
+  it('[covers:web-data-api.http-contract] /search 用の契約（TASK-41）: searchItems は GET /items へ q・期間・category・store_id・label_colors・limit・cursor を渡し、listReceipts は q・store_id も渡す', async () => {
+    const reply = { body: {} }
+    const f = mockFetch({
+      'GET /api/ledgers/3/items?q=milk&label_colors=red,blue': reply,
+      'GET /api/ledgers/3/items?q=milk&from=2026-10-01&to=2026-10-31': reply,
+      'GET /api/ledgers/3/receipts?q=milk&store_id=5': reply,
+    })
+    const api = createDataApi()
+    await api.searchItems(3, { q: 'milk', label_colors: ['red', 'blue'] })
+    await api.searchItems(3, { q: 'milk', from: '2026-10-01', to: '2026-10-31' })
+    // the receipts list carries the cross-field q and the exact store_id
+    await api.listReceipts(3, { q: 'milk', store_id: 5 } as never)
+    expect(f.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /api/ledgers/3/items?q=milk&label_colors=red,blue',
+      'GET /api/ledgers/3/items?q=milk&from=2026-10-01&to=2026-10-31',
+      'GET /api/ledgers/3/receipts?q=milk&store_id=5',
+    ])
+  })
 })

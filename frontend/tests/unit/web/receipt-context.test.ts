@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ReceiptListQuery } from '@/web/api/data'
-import { CONTEXT_FIELDS, contextToListQuery, listQueryToContext } from '@/web/composables/receiptContext'
+import { CONTEXT_FIELDS, contextKeyOf, contextToListQuery, listQueryToContext } from '@/web/composables/receiptContext'
 
 const CTX = { from: '2026-10-01', to: '2026-10-31' }
 
@@ -55,5 +55,25 @@ describe('receiptContext (CONTEXT_FIELDS)', () => {
     expect(contextToListQuery({ labels: 'red,orange' })).toEqual({ label_colors: ['red'] })
     expect(contextToListQuery({ labels: 'orange' })).toEqual({ label_colors: [] })
     expect(listQueryToContext({ label_colors: [] })).toEqual({})
+  })
+
+  it('[covers:web-receipts.feed-sequence-from-context] TASK-41 の q・store_id 行: 往復一致し contextKeyOf に反映され、不正な store_id は捨てられる', () => {
+    // TASK-41: the /search rows ride q (and the exact-store store_id) on the
+    // feed links, so the list the feed re-queries and the back link keep the
+    // search term. store_id is a positive integer on the query side.
+    const query = { q: '牛乳', store_id: '3' }
+    const listQuery = { q: '牛乳', store_id: 3 }
+    expect(contextToListQuery(query)).toEqual(listQuery)
+    expect(listQueryToContext(listQuery as never)).toEqual(query)
+    expect(contextToListQuery(listQueryToContext(listQuery as never))).toEqual(listQuery)
+
+    // the context key keeps the term: a q-fed feed and a bare one differ
+    expect(contextKeyOf(query)).toBe(JSON.stringify(query))
+    expect(contextKeyOf({})).toBe('{}')
+
+    // a bogus store_id never reaches listReceipts
+    for (const bad of ['abc', '0', '-2', '1.5', '']) {
+      expect(contextToListQuery({ store_id: bad }), bad).toEqual({})
+    }
   })
 })

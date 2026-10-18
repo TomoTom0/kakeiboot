@@ -18,6 +18,7 @@ import ManageStoresPage from './pages/ManageStoresPage.vue'
 import ReceiptDetailPage from './pages/ReceiptDetailPage.vue'
 import ReceiptsPage from './pages/ReceiptsPage.vue'
 import RegisterPage from './pages/RegisterPage.vue'
+import SearchPage from './pages/SearchPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import StoresPage from './pages/StoresPage.vue'
 import UsageConnectPage from './pages/UsageConnectPage.vue'
@@ -71,6 +72,9 @@ export const routes: RouteRecordRaw[] = [
     meta: { filters: true },
     props: (r) => ({ id: Number(r.params.id) }),
   },
+  // /search (TASK-41): the URL (q / tab / scope + the shared period and
+  // labels keys) restores the results; the topbar search chip leads here
+  { path: '/search', name: 'search', component: SearchPage, meta: { filters: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 

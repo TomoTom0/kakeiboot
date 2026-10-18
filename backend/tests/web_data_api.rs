@@ -504,6 +504,312 @@ async fn receipt_list_filters_and_deleted() {
     assert!(v["next_cursor"].is_null());
 }
 
+// ---------------------------------------------------------------------------
+// TASK-41 /search: the receipts q / store_id cross-field filter and the
+// item-level list endpoint behind /search (spec_mcp-tools.md §12).
+
+/// A receipt without items (the fixture names the items explicitly).
+async fn insert_receipt_bare(pool: &SqlitePool, id: i64, ledger_id: i64, store_id: i64, on: &str) {
+    sqlx::query(
+        "INSERT INTO receipts (id, ledger_id, created_by, source, store_id, purchased_on,
+             tax_mode, revision, created_at, updated_at)
+         VALUES (?, ?, 1, 'manual', ?, ?, 'inclusive', 1, 0, 0)",
+    )
+    .bind(id)
+    .bind(ledger_id)
+    .bind(store_id)
+    .bind(on)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// A named item (the shared insert_receipt_full hardcodes the name "item").
+#[allow(clippy::too_many_arguments)]
+async fn insert_named_item(
+    pool: &SqlitePool,
+    id: i64,
+    receipt_id: i64,
+    ledger_id: i64,
+    line_no: i64,
+    name: &str,
+    norm: &str,
+    amount_incl: i64,
+) {
+    sqlx::query(
+        "INSERT INTO receipt_items (id, receipt_id, ledger_id, line_no, name, name_norm,
+             amount, amount_incl, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+    )
+    .bind(id)
+    .bind(receipt_id)
+    .bind(ledger_id)
+    .bind(line_no)
+    .bind(name)
+    .bind(norm)
+    .bind(amount_incl)
+    .bind(amount_incl)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+// [covers:web-data-api.receipt-list-text-query]
+async fn receipt_list_text_query() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "editor").await;
+    insert_store(&pool, 1, 1, "Aマート", "aマート").await;
+    insert_store(&pool, 2, 1, "B店", "bてん").await;
+    sqlx::query("INSERT INTO store_aliases (ledger_id, alias_norm, store_id, created_at) VALUES (1, 'エーマート', 1, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // 201 (Aマート, 10-10): 牛乳 + 食パン / 202 (Aマート, 09-30): 紅茶
+    // 203 (B店, 10-05): ギュウニュウ / 204 (B店, 10-12): 食パン / 205 (B店, 09-15): 牛乳
+    insert_receipt_bare(&pool, 201, 1, 1, "2026-10-10").await;
+    insert_named_item(&pool, 20101, 201, 1, 1, "牛乳", "牛乳", 250).await;
+    insert_named_item(&pool, 20102, 201, 1, 2, "食パン", "食パン", 150).await;
+    insert_receipt_bare(&pool, 202, 1, 1, "2026-09-30").await;
+    insert_named_item(&pool, 20201, 202, 1, 1, "紅茶", "紅茶", 300).await;
+    insert_receipt_bare(&pool, 203, 1, 2, "2026-10-05").await;
+    insert_named_item(&pool, 20301, 203, 1, 1, "ギュウニュウ", "ギュウニュウ", 200).await;
+    insert_receipt_bare(&pool, 204, 1, 2, "2026-10-12").await;
+    insert_named_item(&pool, 20401, 204, 1, 1, "食パン", "食パン", 180).await;
+    insert_receipt_bare(&pool, 205, 1, 2, "2026-09-15").await;
+    insert_named_item(&pool, 20501, 205, 1, 1, "牛乳", "牛乳", 220).await;
+
+    // q matches item names (LIKE path, <3 chars): 201 and 205 hold 牛乳
+    let v = body_json(c.get(&router, "/api/ledgers/1/receipts?q=牛乳").await).await;
+    assert_eq!(v["total_count"], 2);
+    assert_eq!(
+        v["sum_amount"], 620,
+        "full item sums of the hit receipts (250+150 + 220)"
+    );
+    let rows = v["receipts"].as_array().unwrap();
+    assert_eq!(rows[0]["receipt_id"], 201, "date desc");
+    assert_eq!(rows[0]["matched_items"][0]["name"], "牛乳");
+    assert_eq!(rows[1]["receipt_id"], 205);
+    assert_eq!(rows[1]["matched_items"].as_array().unwrap().len(), 1);
+
+    // q matches store names AND aliases (OR with the item half); a
+    // store-only hit carries matched_items = [] and its full item sums
+    for q in ["Aマート", "エーマート", "えーまーと"] {
+        let v = body_json(
+            c.get(&router, &format!("/api/ledgers/1/receipts?q={q}"))
+                .await,
+        )
+        .await;
+        assert_eq!(v["total_count"], 2, "store/alias hit for {q}");
+        assert_eq!(v["sum_amount"], 700, "all items of the store-hit receipts");
+        for r in v["receipts"].as_array().unwrap() {
+            assert_eq!(
+                r["matched_items"],
+                serde_json::json!([]),
+                "store-only hit has no matched items"
+            );
+        }
+    }
+
+    // normalization + the FTS path (>=3 chars): ぎゅうにゅう -> ギュウニュウ
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/receipts?q=ぎゅうにゅう")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 1);
+    assert_eq!(v["receipts"][0]["receipt_id"], 203);
+
+    // q combines with the existing filters by AND: item_query (204 holds
+    // 食パン but no 牛乳), the period window, the exact store_id
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/receipts?q=牛乳&item_query=食パン")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 1, "q and item_query combine with AND");
+    assert_eq!(v["receipts"][0]["receipt_id"], 201);
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/receipts?q=牛乳&from=2026-10-01&to=2026-10-31",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 1);
+    assert_eq!(v["receipts"][0]["receipt_id"], 201);
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/receipts?q=牛乳&store_id=2")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 1);
+    assert_eq!(v["receipts"][0]["receipt_id"], 205);
+
+    // a whitespace-only q is no filter at all (the caller trims it away)
+    let v = body_json(c.get(&router, "/api/ledgers/1/receipts?q=+").await).await;
+    assert_eq!(v["total_count"], 5);
+
+    // a symbol-only q matches nothing but is not an error (it normalizes to
+    // itself and rides the LIKE path)
+    let v = body_json(c.get(&router, "/api/ledgers/1/receipts?q=!!").await).await;
+    assert_eq!(v["total_count"], 0);
+
+    // another ledger's store_id is not an error: the ledger condition ANDs
+    // the result down to empty
+    let other: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('other', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    insert_store(&pool, 99, other, "他所の店", "たしょのみせ").await;
+    let resp = c.get(&router, "/api/ledgers/1/receipts?store_id=99").await;
+    assert_eq!(resp.status(), 200);
+    let v = body_json(resp).await;
+    assert_eq!(v["total_count"], 0);
+}
+
+#[tokio::test]
+// [covers:web-data-api.items-search]
+async fn items_search_endpoint() {
+    let (router, pool) = setup().await;
+    // any member may read (viewer included)
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aマート").await;
+    insert_store(&pool, 2, 1, "B店", "bてん").await;
+    insert_receipt_bare(&pool, 211, 1, 1, "2026-10-10").await;
+    insert_named_item(&pool, 21101, 211, 1, 1, "牛乳", "牛乳", 250).await;
+    insert_receipt_bare(&pool, 212, 1, 1, "2026-09-30").await;
+    insert_named_item(&pool, 21201, 212, 1, 1, "紅茶", "紅茶", 300).await;
+    insert_receipt_bare(&pool, 213, 1, 2, "2026-10-05").await;
+    insert_named_item(&pool, 21301, 213, 1, 1, "牛乳", "牛乳", 220).await;
+    // 214: 60 items (牛乳01..牛乳60) for the limit clamp and the cursor walk
+    insert_receipt_bare(&pool, 214, 1, 2, "2026-10-12").await;
+    for i in 0..60 {
+        let name = format!("牛乳{:02}", i + 1);
+        insert_named_item(&pool, 21400 + i + 1, 214, 1, i + 1, &name, &name, 10).await;
+    }
+    // 215: a katakana item for the FTS path (>=3 chars after normalizing)
+    insert_receipt_bare(&pool, 215, 1, 1, "2026-10-11").await;
+    insert_named_item(&pool, 21501, 215, 1, 1, "ギュウニュウ", "ギュウニュウ", 300).await;
+
+    // q matches item names only: 牛乳 hits 211/213 plus the 60 牛乳NN rows
+    let v = body_json(c.get(&router, "/api/ledgers/1/items?q=牛乳").await).await;
+    assert_eq!(v["total_count"], 62);
+    assert_eq!(v["sum_amount"], 1070);
+    let rows = v["items"].as_array().unwrap();
+    assert_eq!(rows.len(), 20, "the default limit");
+    assert_eq!(rows[0]["receipt_id"], 214, "date desc");
+    assert_eq!(rows[0]["name"], "牛乳60", "then item id desc");
+    assert_eq!(rows[0]["store_id"], 2);
+    assert_eq!(rows[0]["store_name"], "B店");
+    for key in [
+        "item_id",
+        "receipt_id",
+        "purchased_on",
+        "store_id",
+        "store_name",
+        "name",
+        "quantity",
+        "unit",
+        "unit_price",
+        "amount_incl",
+        "category",
+    ] {
+        assert!(rows[0].get(key).is_some(), "the row DTO carries {key}");
+    }
+    assert!(v["next_cursor"].is_string());
+
+    // the store-name query brings no rows on the item endpoint
+    let v = body_json(c.get(&router, "/api/ledgers/1/items?q=Aマート").await).await;
+    assert_eq!(v["total_count"], 0, "q matches item names only");
+
+    // the FTS path (>=3 chars) with the hiragana -> katakana normalization
+    let v = body_json(c.get(&router, "/api/ledgers/1/items?q=ぎゅうにゅう").await).await;
+    assert_eq!(v["total_count"], 1);
+    assert_eq!(v["items"][0]["receipt_id"], 215);
+    assert_eq!(v["items"][0]["name"], "ギュウニュウ");
+
+    // the category filter resolves (未分類 = items without a category: all 64)
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/items?category=未分類&limit=50")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 64);
+
+    // limit clamps at the max (50) and the cursor walks the remaining 12
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/items?q=牛乳&limit=999")
+            .await,
+    )
+    .await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 50, "clamped to 50");
+    assert_eq!(v["total_count"], 62);
+    let cur = v["next_cursor"].as_str().unwrap().to_string();
+    let v = body_json(
+        c.get(
+            &router,
+            &format!("/api/ledgers/1/items?q=牛乳&limit=999&cursor={cur}"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 12);
+    assert!(v["next_cursor"].is_null());
+
+    // deleted receipts stay out unless asked for
+    sqlx::query("UPDATE receipts SET deleted_at = 500, revision = 2 WHERE id = 213")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v = body_json(c.get(&router, "/api/ledgers/1/items?q=牛乳&limit=50").await).await;
+    assert_eq!(v["total_count"], 61);
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/items?q=牛乳&include_deleted=true&limit=50",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 62);
+
+    // the 400 paths are the receipts endpoint's
+    for path in [
+        "/api/ledgers/1/items?category=存在しない",
+        "/api/ledgers/1/items?from=2026-10-01",
+        "/api/ledgers/1/items?from=2026-13-99&to=2026-12-31",
+        "/api/ledgers/1/items?cursor=zzzz",
+    ] {
+        let resp = c.get(&router, path).await;
+        assert_eq!(resp.status(), 400, "{path}");
+    }
+
+    // another ledger's store_id: empty, not an error
+    let other: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('other2', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    insert_store(&pool, 98, other, "他所の店", "たしょのみせ").await;
+    let resp = c.get(&router, "/api/ledgers/1/items?store_id=98").await;
+    assert_eq!(resp.status(), 200);
+    let v = body_json(resp).await;
+    assert_eq!(v["total_count"], 0);
+
+    // access follows list_receipts: no session 401, another user's ledger 404
+    let (router2, _) = setup().await;
+    let anon = Client::new();
+    let resp = anon.get(&router2, "/api/ledgers/1/items").await;
+    assert_eq!(resp.status(), 401);
+    let resp = c.get(&router, &format!("/api/ledgers/{other}/items")).await;
+    assert_eq!(resp.status(), 404);
+}
+
 #[tokio::test]
 // [covers:web-data-api.stats]
 async fn stats_reports_and_periods() {

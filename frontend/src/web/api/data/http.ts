@@ -10,7 +10,8 @@
 // | PATCH  | /api/ledgers/{l}/stores/{id}                 | manage_store             |
 // | POST   | /api/ledgers/{l}/stores/{id}/merge           | (web only)               |
 // | GET    | /api/ledgers/{l}/stats?report=&month=...     | summarize_spending       |
-// | GET    | /api/ledgers/{l}/receipts?from=&to=&store=   | search_receipts          |
+// | GET    | /api/ledgers/{l}/receipts?from=&to=&store=&q=&store_id= | search_receipts |
+// | GET    | /api/ledgers/{l}/items?q=&from=&to=          | search_receipts(mode=items) |
 // | GET    | /api/ledgers/{l}/receipts/{id}               | get_receipt              |
 // | PATCH  | /api/ledgers/{l}/receipts/{id}               | update_receipt           |
 // | POST   | /api/ledgers/{l}/receipts/{id}/delete        | delete_receipt           |
@@ -20,7 +21,7 @@
 
 import type { LabelColor } from '@/shared/labels'
 import { request } from '../http'
-import type { DataApi, ReceiptListQuery, StatsQuery } from './types'
+import type { DataApi, ItemListQuery, ReceiptListQuery, StatsQuery } from './types'
 
 function query(params: Record<string, string | number | boolean | undefined>): string {
   const q = new URLSearchParams()
@@ -54,6 +55,8 @@ export function createHttpDataApi(): DataApi {
       request('GET', `${base(l)}/stats${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
     listReceipts: (l, q: ReceiptListQuery) =>
       request('GET', `${base(l)}/receipts${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
+    searchItems: (l, q: ItemListQuery) =>
+      request('GET', `${base(l)}/items${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
     getReceipt: (l, id) => request('GET', `${base(l)}/receipts/${id}`),
     updateReceipt: (l, id, input) => request('PATCH', `${base(l)}/receipts/${id}`, input),
     deleteReceipt: (l, id, input) => request('POST', `${base(l)}/receipts/${id}/delete`, input),

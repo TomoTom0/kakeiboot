@@ -172,6 +172,17 @@ describe('Feed context', () => {
     expect(router.currentRoute.value.path).toBe('/receipts')
     expect(router.currentRoute.value.query).toEqual({ ...CTX, labels: 'red,blue' })
   })
+
+  it('[covers:web-receipts.feed-sequence-from-context] q・store_id つき文脈（/search の行リンク）は Feed の一覧取得と「戻る」の両方に引き継がれる', async () => {
+    // TASK-41: /search rows link into the feed with the search term, so the
+    // feed's list query and the back link both carry the same q context
+    const list = vi.spyOn(api, 'listReceipts')
+    const { wrapper } = await mountApp('/receipts/102?q=牛乳&store_id=3')
+    expect(list).toHaveBeenCalledWith(1, expect.objectContaining({ q: '牛乳', store_id: 3 }))
+    const back = wrapper.find('[data-test="feed-back"]')
+    const u = new URL(back.attributes('href')!, 'http://localhost')
+    expect(Object.fromEntries(u.searchParams)).toEqual({ q: '牛乳', store_id: '3' })
+  })
 })
 
 describe('Feed URL sync and navigation', () => {

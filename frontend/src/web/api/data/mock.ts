@@ -9,6 +9,7 @@ import type {
   CategoryKind,
   CategoryNode,
   DataApi,
+  ItemSummary,
   Label,
   ReceiptItem,
   ReceiptSummary,
@@ -522,6 +523,14 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
         .filter((r) => !q.from || (r.purchased_on ?? '') >= q.from)
         .filter((r) => !q.to || (r.purchased_on ?? '') <= q.to)
         .filter((r) => !q.store || (r.store?.name ?? r.store_name_raw ?? '').includes(q.store))
+        // the cross-field q of /search (TASK-41): item name OR store name
+        .filter(
+          (r) =>
+            !q.q ||
+            r.items.some((it) => it.name.includes(q.q!)) ||
+            (r.store?.name ?? r.store_name_raw ?? '').includes(q.q!),
+        )
+        .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
         .filter((r) => !q.item_query || r.items.some((it) => it.name.includes(q.item_query!)))
         .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
         .filter((r) =>
@@ -540,6 +549,57 @@ export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
         total_count: rows.length,
         sum_amount: rows.filter((r) => r.deleted_at === null).reduce((a, r) => a + receiptAmount(r), 0),
         receipts: page.map(summary),
+        next_cursor: null,
+      }
+    },
+
+    // GET /items (TASK-41): the item-level list behind the /search item tab.
+    // The mock keeps the coarse matching of the rest of the file (plain
+    // includes, no normalization): q hits item names only.
+    async searchItems(l, q) {
+      const lg = ledger(l)
+      const rows = lg.receipts
+        .filter((r) => q.include_deleted || r.deleted_at === null)
+        .filter((r) => !q.from || (r.purchased_on ?? '') >= q.from)
+        .filter((r) => !q.to || (r.purchased_on ?? '') <= q.to)
+        .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
+        .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
+        .flatMap((r) =>
+          r.items
+            .filter((it) => !q.q || it.name.includes(q.q!))
+            // the category path match mirrors listReceipts ("未分類" = null,
+            // prefix match on "大分類/小分類") at the item level
+            .filter((it) =>
+              !q.category
+                ? true
+                : q.category === '未分類'
+                  ? it.category === null
+                  : it.category === q.category || (it.category ?? '').startsWith(`${q.category}/`),
+            )
+            .map(
+              (it): ItemSummary => ({
+                item_id: it.item_id,
+                receipt_id: r.receipt_id,
+                purchased_on: r.purchased_on,
+                store_id: r.store?.store_id ?? null,
+                store_name: r.store?.name ?? r.store_name_raw ?? null,
+                name: it.name,
+                quantity: it.quantity,
+                unit: it.unit,
+                unit_price: it.unit_price,
+                amount_incl: it.amount_incl,
+                category: it.category,
+              }),
+            ),
+        )
+        .sort(
+          (a, b) =>
+            (b.purchased_on ?? '').localeCompare(a.purchased_on ?? '') || b.receipt_id - a.receipt_id || b.item_id - a.item_id,
+        )
+      return {
+        total_count: rows.length,
+        sum_amount: rows.reduce((a, r) => a + r.amount_incl, 0),
+        items: rows,
         next_cursor: null,
       }
     },

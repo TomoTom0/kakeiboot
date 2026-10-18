@@ -78,6 +78,8 @@ pub async fn search(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
         .clamp(1, lim.search_max_limit);
     let q = SearchQuery {
         store: a.store,
+        text: None,
+        store_id: None,
         item_query: a.item_query,
         category: a.category,
         payment_method: a.payment_method.map(|p| p.as_str().to_string()),

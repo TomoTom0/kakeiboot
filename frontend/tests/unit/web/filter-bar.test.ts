@@ -1,11 +1,13 @@
-// TASK-44 stage 1a red-first specs (design: tmp/tasks/tm-28/design_browsing.md
-// §11, rev 3): the topbar's center filter bar — the two always-on chips
-// (period / labels, §11-3), their PopoverPanel dialogs (§11-6: PeriodPicker
-// for the period, the label toggle group for labels), and the one-row page
-// toolbar left behind (§11-5). The search chip (filter-search) belongs to
-// stage 1b (TASK-41 /search) and must NOT exist yet. Conditions:
+// TASK-44 stage 1a specs (design: tmp/tasks/tm-28/design_browsing.md
+// §11, rev 3) plus the TASK-41 stage 1b search chip: the topbar's center
+// filter bar — the three always-on chips (period / labels / search,
+// §11-3), their PopoverPanel dialogs (§11-6: PeriodPicker for the period,
+// the label toggle group for labels, the one-line search form for the
+// search chip), and the one-row page toolbar left behind (§11-5). The
+// /search destination itself is covered by search-page.test.ts. Conditions:
 // web-browse.topbar-filter-bar / web-browse.filter-dialogs /
-// web-layout.toolbar-one-row in tests/design/conditions.toml.
+// web-search.topbar-entry / web-layout.toolbar-one-row in
+// tests/design/conditions.toml.
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -61,8 +63,8 @@ function mediaBlock(head: RegExp): string | undefined {
   return undefined
 }
 
-describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a)', () => {
-  it('[covers:web-browse.topbar-filter-bar] 閲覧系topbar中央に時期・ラベルの2チップ常時（表題とtopbar-actionsの間・aria-label・短縮/フル両要素・選択中accent）', async () => {
+describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b)', () => {
+  it('[covers:web-browse.topbar-filter-bar] 閲覧系topbar中央に時期・ラベル・検索の3チップ常時（表題とtopbar-actionsの間・aria-label・短縮/フル両要素・選択中accent）', async () => {
     // a titled label makes the label chip's spoken name visible in the assertions
     await api.updateLabelTitle(1, 'red', { title: '旅行' })
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
@@ -74,13 +76,20 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a)', () => {
     expect(bar.element.previousElementSibling?.classList.contains('topbar-title')).toBe(true)
     expect(bar.element.nextElementSibling?.classList.contains('topbar-actions')).toBe(true)
 
-    // stage 1a: period + labels only; the search chip is stage 1b (TASK-41)
+    // stage 1b (TASK-41): period + labels + the third search chip
     const chip = (id: string) => wrapper.find(`header.topbar .topbar-filters [data-test="${id}"]`)
     expect(chip('filter-period').exists()).toBe(true)
     expect(chip('filter-labels').exists()).toBe(true)
-    expect(chip('filter-search').exists()).toBe(false)
+    expect(chip('filter-search').exists()).toBe(true)
     expect(chip('filter-period').classes()).toContain('filter-chip-btn')
     expect(chip('filter-labels').classes()).toContain('filter-chip-btn')
+    expect(chip('filter-search').classes()).toContain('filter-chip-btn')
+    expect(chip('filter-search').classes()).toContain('filter-chip-search')
+    // off /search the chip is the plain entry: icon only, no active state
+    expect(chip('filter-search').attributes('aria-label')).toBe('検索')
+    expect(chip('filter-search').find('svg').exists()).toBe(true)
+    expect(chip('filter-search').find('.chip-label-q').exists()).toBe(false)
+    expect(chip('filter-search').classes()).not.toContain('active')
 
     // the period chip reads the current period and renders BOTH width labels
     // (labelShort <=899px / full >=900px; the media query picks one)
@@ -101,8 +110,9 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a)', () => {
     expect(chip('filter-labels').attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
     expect(chip('filter-labels').classes()).toContain('active')
 
-    // every browsing route carries the bar (§11-3 route.meta.filters)
-    for (const path of ['/', '/categories', '/stores', '/receipts/101']) {
+    // every browsing route carries the bar (§11-3 route.meta.filters),
+    // /search included once TASK-41 adds the route
+    for (const path of ['/', '/categories', '/stores', '/receipts/101', '/search?q=牛乳']) {
       await router.push(path)
       await settle()
       const onBar = wrapper.find('header.topbar .topbar-filters')
@@ -284,6 +294,128 @@ describe('topbar label dialog', () => {
   })
 })
 
+describe('topbar search chip (TASK-41 1b)', () => {
+  it('[covers:web-search.topbar-entry] チップの表示: /search かつ q ありは「検索: {q}」で語を付き・他ページは素の入口', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/search?q=牛乳')
+    const chip = () => wrapper.find('[data-test="filter-search"]')
+    expect(chip().exists()).toBe(true)
+    expect(chip().attributes('aria-label')).toBe('検索: 牛乳')
+    expect(chip().find('.chip-label-q').exists()).toBe(true)
+    expect(chip().find('.chip-label-q').text()).toBe('牛乳')
+
+    // every other page shows the plain entry
+    await router.push('/receipts')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('検索')
+    expect(chip().find('.chip-label-q').exists()).toBe(false)
+    expect(chip().find('svg').exists()).toBe(true)
+
+    // and /search without a q is the plain entry too
+    await router.push('/search')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('検索')
+    expect(chip().find('.chip-label-q').exists()).toBe(false)
+  })
+
+  it('[covers:web-search.topbar-entry] 他ページからの実行: 現在の期間とラベルを引継いで /search?q= へ遷移し dialog は閉じる', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
+    const { wrapper, router } = await mountApp('/receipts')
+    // 2026-10 (the default) + label red selected through the label dialog
+    await openDialog(wrapper, 'filter-labels')
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+
+    const push = vi.spyOn(router, 'push')
+    const chip = () => wrapper.find('[data-test="filter-search"]')
+    await chip().trigger('click')
+    await settle()
+    // an anchored PopoverPanel with the one-line search form
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-expanded')).toBe('true')
+    const input = wrapper.find('[data-test="search-dialog-input"]')
+    expect(input.attributes('type')).toBe('search')
+    expect((input.element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('[data-test="search-dialog-submit"]').exists()).toBe(true)
+
+    await input.setValue('牛乳')
+    // the run rides the form submit (the button is type="submit"; jsdom does
+    // not synthesize submit from a click, and a @click on the button would
+    // double-fire in real browsers — REVIEW-3 指摘2)
+    const submitBtn = wrapper.find('[data-test="search-dialog-submit"]')
+    expect(submitBtn.attributes('type')).toBe('submit')
+    await wrapper.find('form.search-dialog').trigger('submit')
+    await settle()
+    // the dialog closed and the app moved to /search carrying the period and labels
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(chip().attributes('aria-expanded')).toBe('false')
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(router.currentRoute.value.path).toBe('/search')
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', month: '2026-10', labels: 'red' })
+  })
+
+  it('[covers:web-search.topbar-entry] /search 内の実行は replace で q のみ差し替え・draft は開くたび現在 q で初期化・空実行で q を外す', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/search?q=牛乳')
+    const chip = () => wrapper.find('[data-test="filter-search"]')
+    expect(chip().attributes('aria-label')).toBe('検索: 牛乳')
+    const replace = vi.spyOn(router, 'replace')
+    const push = vi.spyOn(router, 'push')
+
+    // the draft initializes to the current q once per open
+    await chip().trigger('click')
+    await settle()
+    const input = wrapper.find('[data-test="search-dialog-input"]')
+    expect((input.element as HTMLInputElement).value).toBe('牛乳')
+    await input.setValue('牛乳 1L')
+    await wrapper.find('form.search-dialog').trigger('submit')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(push).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳 1L' })
+
+    // reopening re-initializes the draft; an empty run clears q (and the results)
+    await chip().trigger('click')
+    await settle()
+    const again = wrapper.find('[data-test="search-dialog-input"]')
+    expect((again.element as HTMLInputElement).value).toBe('牛乳 1L')
+    await again.setValue('')
+    await wrapper.find('form.search-dialog').trigger('submit')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/search')
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  it('[covers:web-browse.filter-dialogs] 検索dialog: Escape・外側押下で閉じトリガのチップへフォーカスが戻る', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/receipts', { attach: true })
+    const chip = () => wrapper.find('[data-test="filter-search"]')
+
+    await chip().trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    ;(document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(chip().attributes('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(chip().element)
+
+    // an outside pointerdown closes it the same way
+    await chip().trigger('click')
+    await settle()
+    const outside = wrapper.find('.app-main').element
+    for (const type of ['pointerdown', 'mousedown', 'click']) {
+      outside.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    }
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(chip().element)
+  })
+})
+
 describe('one-row page toolbar (TASK-44 §11-5)', () => {
   it('[covers:web-layout.toolbar-one-row] /receipts は絞り込みボタン+条件チップの1行（期間・ラベルUIは本文に無い）、Home・Categories・Stores はページ内ツールバーなし、720px の column 化なし', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
@@ -345,6 +477,16 @@ describe('dialog closes on navigation (TASK-44 review)', () => {
     expect(wrapper.find('header.topbar .topbar-filters').exists()).toBe(true)
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(chip().attributes('aria-expanded')).toBe('false')
+
+    // the search dialog (TASK-41) follows the same rule
+    const search = () => wrapper.find('[data-test="filter-search"]')
+    await search().trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    await router.push('/stores')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(search().attributes('aria-expanded')).toBe('false')
   })
 
   it('[covers:web-browse.filter-dialogs] Feed 内の URL replace（スクロール同期）では閉じない', async () => {

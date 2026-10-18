@@ -174,6 +174,40 @@ describe('topbar filter bar CSS (TASK-44)', () => {
       rulesFor('.filter-chip-btn.active').some((r) => decl(r.body, 'border-color') === 'var(--bb-accent)'),
     ).toBe(true)
   })
+
+  it('[covers:web-browse.topbar-filter-bar] .filter-chip-search は幅 44px・padding 0 のアイコン入口（高さは他チップと同じ 36px）で、検索語の .chip-label-q は max-width + ellipsis に収まる', () => {
+    // TASK-41: the third chip is the icon-only search entry — 44px wide with
+    // no padding (the height rides the shared .filter-chip-btn 36px pill
+    // with the 44px tap area); with a q running the term rides .chip-label-q,
+    // clamped so a long term cannot push the topbar wide
+    const chip = rulesFor('.filter-chip-search')
+    expect(chip.length, '.filter-chip-search rules').toBeGreaterThan(0)
+    expect(chip.some((r) => decl(r.body, 'width') === '44px')).toBe(true)
+    expect(chip.some((r) => decl(r.body, 'min-width') === '44px')).toBe(true)
+    expect(chip.some((r) => decl(r.body, 'padding') === '0')).toBe(true)
+    const q = rulesFor('.chip-label-q')
+    expect(q.length, '.chip-label-q rules').toBeGreaterThan(0)
+    expect(
+      q.some(
+        (r) =>
+          decl(r.body, 'overflow') === 'hidden' &&
+          decl(r.body, 'text-overflow') === 'ellipsis' &&
+          decl(r.body, 'max-width') !== undefined,
+      ),
+    ).toBe(true)
+  })
+
+  it('[covers:web-search.layout-real] /search の2行構成（.search-head・.search-tabs）と品目2行・件数行の規則がある', () => {
+    // the layout facts jsdom cannot measure live in verify.spec.ts
+    // (web-search.layout-real, 360px two rows / no overflow); the stylesheet
+    // side is pinned here: the head row, the tab row, the item rows' two-line
+    // composition and the meta line all have rules
+    for (const sel of ['.search-head', '.search-input', '.search-tabs', '.search-item-main', '.search-item-sub', '.search-meta']) {
+      expect(rulesFor(sel).length, sel).toBeGreaterThan(0)
+    }
+    expect(rulesFor('.search-head').some((r) => decl(r.body, 'display') === 'flex')).toBe(true)
+    expect(rulesFor('.search-item-sub').some((r) => /--bb-muted|color/.test(r.body))).toBe(true)
+  })
 })
 
 describe('shell: topbar over drawer (TASK-27)', () => {
@@ -265,7 +299,7 @@ describe('shell: menu button at every width (real-device review)', () => {
 })
 
 describe('topbar logo switch (520px)', () => {
-  it('[covers:web-shell.topbar-logo-responsive] 520px メディアクエリで full を隠し compact を出す', () => {
+  it('[covers:web-shell.topbar-logo-responsive] 520px メディアクエリで full を隠し compact を出す。360px 以下では compact の語（kb）も隠しマークのみ', () => {
     const narrow = blockAfter(/@media\s*\(max-width:\s*520px\)/)
     expect(narrow).toBeDefined()
     expect(rulesFor('.topbar-logo-full', narrow!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
@@ -274,6 +308,13 @@ describe('topbar logo switch (520px)', () => {
         const d = decl(r.body, 'display')
         return d !== undefined && d !== 'none'
       }),
+    ).toBe(true)
+    // through 360px the band budget counts the mark alone (§11-4): with the
+    // three filter chips the "kb" word overflows the topbar by 9px
+    const n360 = blockAfter(/@media\s*\(max-width:\s*360px\)/)
+    expect(n360, 'max-width: 360px block').toBeDefined()
+    expect(
+      rulesFor('.topbar-logo-compact .logo-word', n360!).some((r) => decl(r.body, 'display') === 'none'),
     ).toBe(true)
   })
 })

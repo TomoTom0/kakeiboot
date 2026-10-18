@@ -47,6 +47,7 @@ pub fn routes(state: AuthApiState) -> Router {
             "/api/ledgers/{ledger_id}/labels/{color}",
             axum::routing::patch(update_label_title),
         )
+        .route("/api/ledgers/{ledger_id}/items", get(list_items))
         .route("/api/ledgers/{ledger_id}/receipts", get(list_receipts))
         .route(
             "/api/ledgers/{ledger_id}/receipts/{receipt_id}/labels",
@@ -630,6 +631,13 @@ pub struct ReceiptListQuery {
     to: Option<String>,
     #[serde(default)]
     store: Option<String>,
+    /// Cross-field search term for the /search receipts tab: item name OR
+    /// store name (spec_mcp-tools.md 12)
+    #[serde(default)]
+    q: Option<String>,
+    /// Exact store filter (web only; `store` stays the partial match)
+    #[serde(default)]
+    store_id: Option<i64>,
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
@@ -672,6 +680,8 @@ pub async fn list_receipts(
         .clamp(1, lim.search_max_limit);
     let query = SearchQuery {
         store: q.store,
+        text: q.q,
+        store_id: q.store_id,
         item_query: q.item_query,
         category: q.category,
         payment_method: None,
@@ -689,6 +699,84 @@ pub async fn list_receipts(
         "total_count": res.total_count,
         "sum_amount": res.sum_amount,
         "receipts": res.rows,
+        "next_cursor": res.next_cursor,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ItemListQuery {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    /// item-name query (the receipts endpoint's q is the cross-field one)
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    store_id: Option<i64>,
+    #[serde(default)]
+    include_deleted: Option<bool>,
+    /// Comma-separated palette keys (OR), e.g. `label_colors=red,blue`
+    #[serde(default)]
+    label_colors: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+/// GET /api/ledgers/{l}/items: the item-level list behind the /search item
+/// tab — the same domain::search::search_items the MCP search_receipts
+/// mode:"items" uses (design_browsing.md 2-3 A3). q matches item names
+/// only. Any ledger member (viewer included) may read.
+pub async fn list_items(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(ledger_id): Path<i64>,
+    Query(q): Query<ItemListQuery>,
+) -> Result<Json<Value>, DataError> {
+    let s = session(&state, &headers).await?;
+    member_ledger(&state.db, ledger_id, s.user_id).await?;
+    let range = match (&q.from, &q.to) {
+        (Some(from), Some(to)) => Some(Range::custom(
+            crate::domain::util::parse_date(from).ok_or_else(DataError::invalid)?,
+            crate::domain::util::parse_date(to).ok_or_else(DataError::invalid)?,
+        )),
+        (None, None) => None,
+        _ => return Err(DataError::invalid()),
+    };
+    let cursor = match &q.cursor {
+        Some(c) => Some(search::decode_cursor(c).ok_or_else(DataError::invalid)?),
+        None => None,
+    };
+    let lim = &state.tools.limits;
+    let limit = q
+        .limit
+        .unwrap_or(lim.search_default_limit)
+        .clamp(1, lim.search_max_limit);
+    let query = SearchQuery {
+        store: None,
+        text: None,
+        store_id: q.store_id,
+        item_query: q.q,
+        category: q.category,
+        payment_method: None,
+        label_colors: parse_label_colors(q.label_colors.as_deref())?,
+        include_deleted: q.include_deleted.unwrap_or(false),
+    };
+    let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
+    let res = search::search_items(&mut conn, ledger_id, range.as_ref(), &query, limit, cursor)
+        .await
+        .map_err(|e| match e {
+            crate::domain::stats::FilterError::Invalid(_) => DataError::invalid(),
+            crate::domain::stats::FilterError::Db(e) => DataError::sqlx(e),
+        })?;
+    Ok(Json(json!({
+        "total_count": res.total_count,
+        "sum_amount": res.sum_amount,
+        "items": res.rows,
         "next_cursor": res.next_cursor,
     })))
 }

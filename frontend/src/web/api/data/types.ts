@@ -74,6 +74,10 @@ export interface ReceiptListQuery {
   from?: string
   to?: string
   store?: string
+  /** cross-field search term: item name OR store name (web /search) */
+  q?: string
+  /** exact store filter (web only; `store` stays the name partial match) */
+  store_id?: number
   /** category path ("食費" includes its children) or "未分類" */
   category?: string
   /** item name (partial match) */
@@ -102,6 +106,41 @@ export interface ReceiptListResult {
   total_count: number
   sum_amount: number
   receipts: ReceiptSummary[]
+  next_cursor: string | null
+}
+
+/** Query of GET /api/ledgers/{l}/items (the /search item tab). q matches item names only. */
+export interface ItemListQuery {
+  from?: string
+  to?: string
+  q?: string
+  category?: string
+  store_id?: number
+  label_colors?: LabelColor[]
+  include_deleted?: boolean
+  limit?: number
+  cursor?: string
+}
+
+/** Row of GET /api/ledgers/{l}/items: one receipt item with its receipt's date / store (spec_mcp-tools.md 7-8 mode:"items"). */
+export interface ItemSummary {
+  item_id: number
+  receipt_id: number
+  purchased_on: string | null
+  store_id: number | null
+  store_name: string | null
+  name: string
+  quantity: number | null
+  unit: string | null
+  unit_price: number | null
+  amount_incl: number
+  category: string | null
+}
+
+export interface ItemsListResult {
+  total_count: number
+  sum_amount: number
+  items: ItemSummary[]
   next_cursor: string | null
 }
 
@@ -290,6 +329,8 @@ export interface DataApi {
   /** Read-only aggregation (dashboard / analysis); same reports as summarize_spending. */
   getStats(ledgerId: number, query: StatsQuery): Promise<StatsResult>
   listReceipts(ledgerId: number, query: ReceiptListQuery): Promise<ReceiptListResult>
+  /** GET /api/ledgers/{l}/items: the item-level list behind the /search item tab (search_items). */
+  searchItems(ledgerId: number, query: ItemListQuery): Promise<ItemsListResult>
   getReceipt(ledgerId: number, receiptId: number): Promise<ReceiptView>
   updateReceipt(ledgerId: number, receiptId: number, input: UpdateReceiptInput): Promise<UpdateReceiptResult>
   deleteReceipt(ledgerId: number, receiptId: number, input: DeleteReceiptInput): Promise<DeleteReceiptResult>

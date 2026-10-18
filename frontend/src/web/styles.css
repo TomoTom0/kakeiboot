@@ -251,6 +251,21 @@ html.drawer-lock { overflow: hidden; }
    while unselected; the 5px dots of a selection replace the icon at 520px
    and below (from 521px both ride along) */
 .topbar-label-chip .label-filter-dot { width: 5px; height: 5px; }
+/* the search chip (TASK-41): the 44px square icon entry; with a running q
+   (on /search) the term rides .chip-label-q next to the icon, clamped so a
+   long term cannot push the topbar wide */
+.filter-chip-search { flex: none; width: 44px; min-width: 44px; padding: 0; }
+.filter-chip-search:has(.chip-label-q) { width: auto; padding: 0 0.7rem; }
+.chip-label-q {
+  min-width: 0;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* the search chip's dialog: one line input + the run button */
+.search-dialog { display: flex; gap: 0.5rem; padding: 0.5rem; min-width: 15rem; }
+.search-dialog input[type='search'] { flex: 1 1 auto; min-width: 0; }
 
 .app-main { min-width: 0; }
 
@@ -912,6 +927,37 @@ a.legend-row:hover { background: var(--bb-hover); }
 }
 .recent-row:hover { background: var(--bb-hover); }
 .recent-date { color: var(--bb-muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+/* --- /search (TASK-41): the two-row head, the flat result rows and the
+   item rows' two-line composition. The receipt rows reuse .recent-row with
+   its icon column dropped (date / store / amount) --- */
+.search-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.search-input { flex: 1 1 auto; min-width: 0; }
+.search-scope { flex: none; white-space: nowrap; }
+/* the tab strip stretches full width like the settings tabs */
+.search-tabs { display: flex; }
+.search-tabs .tab { flex: 1 1 auto; }
+.search-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+.search-item-row { padding: 0.45rem 0.5rem; margin: 0 -0.5rem; border-radius: 8px; }
+.search-item-row:hover { background: var(--bb-hover); }
+.search-item-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.search-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.search-item-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  color: var(--bb-muted);
+  font-size: 0.85rem;
+}
+.search-item-category { color: var(--bb-muted); }
+.search-meta { margin: 0 0 0.5rem; color: var(--bb-muted); font-size: 0.9rem; }
 .recent-icon {
   display: grid;
   place-items: center;
@@ -1562,6 +1608,9 @@ a.sub-row:hover { background: var(--bb-hover); }
 }
 @media (max-width: 360px) {
   .topbar-title { display: none; }
+  /* the band's budget counts the mark alone (28px, §11-4): with the three
+     filter chips the compact logo's "kb" word makes the topbar 9px over */
+  .topbar-logo-compact .logo-word { display: none; }
 }
 
 /* the period chip swaps to the short label within the 56px budget through

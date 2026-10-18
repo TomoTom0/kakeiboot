@@ -476,3 +476,55 @@ test.describe('filter period label 899px (range mode)', () => {
     expect(m.chipW, dump).toBeLessThanOrEqual(57)
   })
 })
+
+// --- TASK-41 /search: the two-row head at 360px and the live search flow ---
+// The unit tests (search-page.test.ts) pin the URL / commit rules against the
+// mock api; here chromium measures what jsdom cannot — the 360px two-row
+// layout without horizontal overflow — and walks the real flow: chip ->
+// dialog -> run -> /search -> result row -> feed -> back with the q context
+// intact (design tmp/tasks/tm-41/design_search-tab.md §2-2 / §4-2).
+
+test.describe('search page (360x780)', () => {
+  test.use({ viewport: { width: 360, height: 780 } })
+
+  test('[covers:web-search.layout-real] /search は 360px で検索欄行+タブ行の2行・横溢れなし。dialog 実行→遷移・行→Feed→戻るで q が保たれる', async ({ page }) => {
+    logPageIssues(page, 'search360')
+    await installApiStub(page)
+
+    // run the first search from the topbar chip on another page
+    await page.goto('/receipts')
+    await expect(page.locator('[data-test="filter-search"]')).toBeVisible()
+    await page.locator('[data-test="filter-search"]').click()
+    const input = page.locator('[data-test="search-dialog-input"]')
+    await expect(input).toBeVisible()
+    await input.fill('牛乳')
+    await page.locator('[data-test="search-dialog-submit"]').click()
+    await expect(page).toHaveURL(/\/search\?q=/)
+    // the route transition is still swapping the view here — wait for the
+    // search page's own head before measuring (same pattern as .topbar above)
+    await expect(page.locator('[data-test="search-input"]')).toBeVisible()
+
+    // the head row (input + scope chip) and the tab row both render, and the
+    // 360px page has no horizontal overflow
+    const m = await page.evaluate(() => ({
+      head: !!document.querySelector('.search-head'),
+      tabs: !!document.querySelector('.search-tabs'),
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }))
+    expect(m.head, '.search-head renders').toBe(true)
+    expect(m.tabs, '.search-tabs renders').toBe(true)
+    expect(m.overflow, 'no horizontal overflow').toBeLessThanOrEqual(1)
+
+    // the committed term renders result rows
+    await expect(page.locator('[data-test="search-row"]').first()).toBeVisible()
+
+    // a row leads to the feed with the q context; back restores the search
+    await page.locator('[data-test="search-row"]').first().click()
+    await expect(page).toHaveURL(/\/receipts\/\d+/)
+    await expect(page.locator('[data-test^="receipt-panel-"]').first()).toBeVisible()
+    await page.goBack()
+    await expect(page).toHaveURL(/\/search\?q=/)
+    await expect(page.locator('[data-test="search-input"]')).toHaveValue('牛乳')
+    await expect(page.locator('[data-test="search-row"]').first()).toBeVisible()
+  })
+})

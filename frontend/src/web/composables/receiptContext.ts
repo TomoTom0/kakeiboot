@@ -2,7 +2,8 @@
 // query and ReceiptListQuery, shared by the receipts list and the receipt
 // feed. CONTEXT_FIELDS is the single field table both directions walk, so
 // the list link, the feed order and the feed's back link stay symmetric.
-// TASK-17 adds one row (labels <-> label_colors) and every link follows.
+// TASK-17 adds one row (labels <-> label_colors) and TASK-41 two more
+// (q / store_id, the /search context) — every link follows.
 import type { ReceiptListQuery } from '../api/data'
 import type { LabelColor } from '@/shared/labels'
 import { formatLabelQuery, parseLabelQuery } from '@/shared/labels'
@@ -34,11 +35,24 @@ export const CONTEXT_FIELDS: readonly ContextField[] = [
     parse: parseLabelQuery,
     format: (v) => formatLabelQuery(Array.isArray(v) ? (v as LabelColor[]) : []),
   },
+  // TASK-41: the /search context — q rides the feed links so the "back" list
+  // keeps the search term; store_id is the exact-store form of `store`.
+  { query: 'q', field: 'q' },
+  {
+    query: 'store_id',
+    field: 'store_id',
+    parse: (v) => {
+      const n = Number(v)
+      return Number.isInteger(n) && n > 0 ? n : undefined
+    },
+    format: (v) => (typeof v === 'number' ? String(v) : undefined),
+  },
 ]
 
 type QuerySource = Record<string, unknown>
 
-function firstString(v: unknown): string | null {
+/** First string of a query value (a bare string or the first of an array). */
+export function firstString(v: unknown): string | null {
   if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : null
   return typeof v === 'string' ? v : null
 }
