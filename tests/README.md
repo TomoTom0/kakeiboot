@@ -115,3 +115,6 @@
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面の png・metrics.json を幅別に出力（390/360/768/1280。TASK-19 で 768 追加） |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（390px。`mise run frontend:usage-shots` が asset へ配置） |
 | `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウトの実測（前後ボタン着地 + 44px タップ領域・上方向展開のスクロール補正〔overflow-anchor:none 注入〕・直リンク初期着地〔深い/浅い・URL 不変〕・狭幅ページ幅・daily-bars 最小幅・trend axis の両端が棒の両端と一致し月ラベル不在〔360px 溢れ・.trend-wrap〕[TASK-42]・ロゴ 520/521・topbar 899/900・表題の 360/390px 帯別出し分け [TASK-44]・時期チップ短縮/フルの 899/900px 境界と 56px 幅 [TASK-44]・/search の 360px 2行〔検索欄+タブ〕と横溢れなし・dialog 実行→遷移→行→Feed→戻るの q 保持 [TASK-41]・360px 帯で検索チップの検索語が折り畳み [TASK-77]。chromium + stub） |
+| `frontend/tests/browser/verify-shell.spec.ts` | 実ブラウザ検証 | shell 系実測（家計簿切替名前併記 899/900・anchored popover の --popover-shift 位置補正〔bareTags seed〕・sheet-narrow の 480/481 ボトムシート切替・drawer overlay 実動作〔終状態・lock・scrim・inert・重なり〕。chromium + stub）[TASK-60] |
+| `frontend/tests/browser/verify-labels.spec.ts` | 実ブラウザ検証 | ラベル系実測（一覧行 LabelDots 挿入で行幅不変・picker popover viewport 内収まり・topbar チップ 44px 正方・選択ドット 5px・管理画面 360px レイアウト・titled chip の WCAG コントラスト light/dark。chromium + richLabels stub）[TASK-60] |
+| `frontend/tests/browser/measure.ts` | 補助 | verify-labels で使用（verify-shell は inline evaluate。WCAG コントラスト比計算・parseColor・rectInViewport の viewport 内判定）[TASK-60] |

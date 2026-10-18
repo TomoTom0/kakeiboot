@@ -155,7 +155,7 @@ describe('topbar title', () => {
 })
 
 describe('topbar filter bar CSS (TASK-44)', () => {
-  it('[covers:web-browse.topbar-filter-bar] .topbar-filters は flex + margin-left auto、.filter-chip-btn は高さ36px・pill・surface-2背景・44px タップ領域、選択中は accent 枠', () => {
+  it('[covers:web-browse.topbar-filter-bar] .topbar-filters は flex + margin-left auto、.filter-chip-btn は高さ36px（時期チップ）・pill・surface-2背景・44px タップ領域、ラベルチップは 44px 正方、選択中は accent 枠', () => {
     // the wrapper takes the margin-left:auto over from topbar-actions (§11-6)
     expect(
       rulesFor('.topbar-filters').some(
@@ -173,17 +173,26 @@ describe('topbar filter bar CSS (TASK-44)', () => {
     expect(
       rulesFor('.filter-chip-btn.active').some((r) => decl(r.body, 'border-color') === 'var(--bb-accent)'),
     ).toBe(true)
+    // TASK-60 §9-2 (a): the topbar label chip is a 44px square — the height
+    // and the zero padding lift off the shared 36px pill (which the period
+    // chip keeps riding); the base min-width 44px is the width floor
+    const labelChip = rulesFor('.topbar-label-chip')
+    expect(labelChip.length, '.topbar-label-chip rules').toBeGreaterThan(0)
+    expect(labelChip.some((r) => decl(r.body, 'height') === '44px')).toBe(true)
+    expect(labelChip.some((r) => decl(r.body, 'padding') === '0')).toBe(true)
   })
 
-  it('[covers:web-browse.topbar-filter-bar] .filter-chip-search は幅 44px・padding 0 のアイコン入口（高さは他チップと同じ 36px）で、検索語の .chip-label-q は max-width + ellipsis に収まる', () => {
+  it('[covers:web-browse.topbar-filter-bar] .filter-chip-search は 44px 正方・padding 0 のアイコン入口で、検索語の .chip-label-q は max-width + ellipsis に収まる', () => {
     // TASK-41: the third chip is the icon-only search entry — 44px wide with
-    // no padding (the height rides the shared .filter-chip-btn 36px pill
-    // with the 44px tap area); with a q running the term rides .chip-label-q,
-    // clamped so a long term cannot push the topbar wide
+    // no padding; TASK-60 §9-2 (a) lifts the height to 44px too (the label
+    // chip's square, off the shared 36px pill the period chip keeps); with a
+    // q running the term rides .chip-label-q, clamped so a long term cannot
+    // push the topbar wide
     const chip = rulesFor('.filter-chip-search')
     expect(chip.length, '.filter-chip-search rules').toBeGreaterThan(0)
     expect(chip.some((r) => decl(r.body, 'width') === '44px')).toBe(true)
     expect(chip.some((r) => decl(r.body, 'min-width') === '44px')).toBe(true)
+    expect(chip.some((r) => decl(r.body, 'height') === '44px')).toBe(true)
     expect(chip.some((r) => decl(r.body, 'padding') === '0')).toBe(true)
     const q = rulesFor('.chip-label-q')
     expect(q.length, '.chip-label-q rules').toBeGreaterThan(0)
@@ -558,10 +567,12 @@ describe('receipts filter popover (TASK-76 §6-3)', () => {
     expect(n720, 'max-width: 720px block').toBeDefined()
     expect(n720!).not.toMatch(/\.filters/)
     // the anchored 絞り込み dialog hangs left-aligned off the row's left-end
-    // trigger (the shared right:0 serves the right-end menus); the sheet
-    // variant below 480px is fixed-position and unaffected
+    // trigger (the shared right:0 serves the right-end menus); :not(.is-narrow)
+    // keeps the rule off the 480px bottom sheet, whose full-width right:0 the
+    // same-specificity right:auto would otherwise clobber (TASK-60 real-browser
+    // catch)
     expect(
-      rulesFor('.filters-popover .popover-dialog').some(
+      rulesFor('.filters-popover .popover-dialog:not(.is-narrow)').some(
         (r) => decl(r.body, 'left') === '0' && decl(r.body, 'right') === 'auto',
       ),
     ).toBe(true)

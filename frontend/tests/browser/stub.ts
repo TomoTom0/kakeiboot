@@ -111,11 +111,18 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
 /**
  * Install the stub on a page. `loggedIn: false` makes /api/auth/me answer 401
  * (login screen). `feed` seeds extra mock receipts (104..112, TASK-19 §2-6)
- * for the feed tests; the default mock data is unchanged.
+ * for the feed tests; `richLabels` titles the five label definitions and puts
+ * all five on receipt 102 (TASK-60 §5); `bareTags` drops receipt 101's tags
+ * row content so the label picker host sits at the row head (TASK-60 §9-1
+ * alt-2, the popover-shift non-vacuous proof). The default mock data is
+ * unchanged, and the options combine freely.
  */
-export async function installApiStub(page: Page, opts: { loggedIn?: boolean; feed?: number } = {}): Promise<void> {
+export async function installApiStub(
+  page: Page,
+  opts: { loggedIn?: boolean; feed?: number; richLabels?: boolean; bareTags?: boolean } = {},
+): Promise<void> {
   const loggedIn = opts.loggedIn ?? true
-  const api = createMockDataApi({ feed: opts.feed })
+  const api = createMockDataApi({ feed: opts.feed, richLabels: opts.richLabels, bareTags: opts.bareTags })
 
   // SPA history fallback for document requests. The dev server itself now
   // retargets clean URLs to web.html (vite.config.ts devSpaFallbackPlugin,

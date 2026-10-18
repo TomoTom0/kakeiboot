@@ -247,14 +247,19 @@ html.drawer-lock { overflow: hidden; }
   white-space: nowrap;
 }
 .filter-chip-period .chip-label-short { display: none; }
-/* the topbar label chip (LabelFilter size="topbar"): 44px square, icon only
+/* the topbar label chip (LabelFilter size="topbar"): 44px square (TASK-60
+   §9-2 (a): the height lifts off the shared 36px pill; the base min-width
+   44px is the width floor, padding 0 keeps the icon-only / dots-only states
+   at the square while the 521px+ icon+dots state grows past it), icon only
    while unselected; the 5px dots of a selection replace the icon at 520px
    and below (from 521px both ride along) */
+.topbar-label-chip { height: 44px; padding: 0; }
 .topbar-label-chip .label-filter-dot { width: 5px; height: 5px; }
-/* the search chip (TASK-41): the 44px square icon entry; with a running q
-   (on /search) the term rides .chip-label-q next to the icon, clamped so a
-   long term cannot push the topbar wide */
-.filter-chip-search { flex: none; width: 44px; min-width: 44px; padding: 0; }
+/* the search chip (TASK-41): the 44px square icon entry (height 44px per
+   TASK-60 §9-2 (a)); with a running q (on /search) the term rides
+   .chip-label-q next to the icon, clamped so a long term cannot push the
+   topbar wide */
+.filter-chip-search { flex: none; width: 44px; min-width: 44px; height: 44px; padding: 0; }
 .filter-chip-search:has(.chip-label-q) { width: auto; padding: 0 0.7rem; }
 .chip-label-q {
   min-width: 0;
@@ -1182,9 +1187,11 @@ a.sub-row:hover { background: var(--bb-hover); }
    anchored dialog usable off its shrink-to-fit trigger host */
 .filters { display: grid; grid-template-columns: 1fr; min-width: 16rem; }
 /* the anchored 絞り込み dialog hangs left-aligned off the row's left-end
-   trigger (the shared right: 0 serves the right-end menus); below 480px the
-   sheet-narrow variant is fixed-position and unaffected */
-.filters-popover .popover-dialog { left: 0; right: auto; }
+   trigger (the shared right: 0 serves the right-end menus); :not(.is-narrow)
+   keeps this rule off the 480px bottom sheet — at the same specificity this
+   later right: auto would clobber the sheet's full-width right: 0 (TASK-60
+   real-browser catch) */
+.filters-popover .popover-dialog:not(.is-narrow) { left: 0; right: auto; }
 /* the receipts list's condition chips moved onto the toolbar row as
    .page-chip (TASK-75): the old wrapping .filter-chips row is gone */
 .chip-x {

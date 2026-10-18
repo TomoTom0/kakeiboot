@@ -42,6 +42,14 @@ interface Ledger {
 
 const PURGE_DAYS = 90
 
+// richLabels (TASK-60 design_browser-extension.md §5): titles for the five
+// seeded label definitions — color-name-free words in the unit-test fixture
+// style (label-chip.test.ts TITLED uses 旅行 for red), mapped in
+// LABEL_COLORS order.
+const RICH_LABEL_TITLES = ['旅行', '仕事', '育児', '急ぎ', '保険'] as const
+
+const titledLabels = (): Label[] => LABEL_COLORS.map((color, i) => ({ color, title: RICH_LABEL_TITLES[i]! }))
+
 function nowIso(): string {
   return new Date().toISOString()
 }
@@ -88,7 +96,7 @@ function item(id: number, line: number, name: string, amount: number, category: 
   }
 }
 
-function seedLedger(opts: { feed?: number } = {}): Ledger {
+function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: boolean } = {}): Ledger {
   let id = 1
   const cats: Cat[] = []
   const add = (kind: CategoryKind, name: string, parentId: number | null, archived = false) => {
@@ -145,11 +153,33 @@ function seedLedger(opts: { feed?: number } = {}): Ledger {
     }
   }
   const receipts = [
-    { ...receipt(101, 1, '2026-10-10', [
-      item(1001, 1, '牛乳', 220, '食費/食料品'),
-      item(1002, 2, 'パン', 180, '食費/食料品'),
-    ]), has_image: true, labels: [{ color: 'red' as const, title: null }], image: { width: 1024, height: 2048, original_filename: 'receipt.jpg', taken_at: null, taken_at_source: null }, image_url: { url: 'https://localhost:40281/media/img/mock-token-101', expires_at: '2099-01-01T00:00:00+09:00', width: 1024, height: 2048 } },
-    receipt(102, 2, '2026-10-08', [item(1003, 1, '洗剤', 398, '日用品')]),
+    // bareTags (TASK-60 design_browser-extension.md §9-1 alt-2): the
+    // popover-shift spec needs the picker host at the tags row's left edge —
+    // at both 390px and 360px the full tags row keeps the host near the
+    // row's end (measured panel left 223 of 390, shift 0px), so this seed
+    // strips 101 down (no tags, no assigned labels) to put a minimal host at
+    // the row head: the panel's preferred minimum then exceeds the host and
+    // crosses the 16px viewport margin. The default keeps the full tags +
+    // image + red-label composition.
+    opts.bareTags
+      ? {
+          ...receipt(101, 1, '2026-10-10', [
+            item(1001, 1, '牛乳', 220, '食費/食料品'),
+            item(1002, 2, 'パン', 180, '食費/食料品'),
+          ]),
+          payment_method: null,
+          store: { store_id: 1, name: 'Aマート', category: null },
+          labels: [],
+        }
+      : { ...receipt(101, 1, '2026-10-10', [
+          item(1001, 1, '牛乳', 220, '食費/食料品'),
+          item(1002, 2, 'パン', 180, '食費/食料品'),
+        ]), has_image: true, labels: [{ color: 'red' as const, title: null }], image: { width: 1024, height: 2048, original_filename: 'receipt.jpg', taken_at: null, taken_at_source: null }, image_url: { url: 'https://localhost:40281/media/img/mock-token-101', expires_at: '2099-01-01T00:00:00+09:00', width: 1024, height: 2048 } },
+    // richLabels (TASK-60 §5): receipt 102 carries all five labels so the
+    // list-row spec has a 5-dot row; the default keeps 102 label-less
+    opts.richLabels
+      ? { ...receipt(102, 2, '2026-10-08', [item(1003, 1, '洗剤', 398, '日用品')]), labels: titledLabels() }
+      : receipt(102, 2, '2026-10-08', [item(1003, 1, '洗剤', 398, '日用品')]),
     { ...receipt(103, 3, '2026-10-05', [item(1004, 1, 'おにぎり', 150, '食費/外食')]), labels: [{ color: 'blue' as const, title: null }] },
   ]
   // feed option (TASK-19 design_browser.md §2-6): extra receipts for the
@@ -177,12 +207,14 @@ function seedLedger(opts: { feed?: number } = {}): Ledger {
       ),
     )
   }
-  // fixed 5-color label definitions, title NULL = color only (TASK-17)
-  const labels: Label[] = LABEL_COLORS.map((color) => ({ color, title: null }))
+  // fixed 5-color label definitions, title NULL = color only (TASK-17);
+  // richLabels (TASK-60 §5) titles all five for the real-browser layout /
+  // contrast specs — the default stays untitled so the unit fixtures hold
+  const labels: Label[] = opts.richLabels ? titledLabels() : LABEL_COLORS.map((color) => ({ color, title: null }))
   return { cats, stores, receipts, labels }
 }
 
-export function createMockDataApi(opts: { feed?: number } = {}): DataApi {
+export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; bareTags?: boolean } = {}): DataApi {
   const ledgers = new Map<number, Ledger>()
   let seq = 5000
 
