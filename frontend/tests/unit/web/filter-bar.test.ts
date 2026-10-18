@@ -3,7 +3,8 @@
 // filter bar — the three always-on chips (period / labels / search,
 // §11-3), their PopoverPanel dialogs (§11-6: PeriodPicker for the period,
 // the label toggle group for labels, the one-line search form for the
-// search chip), and the one-row page toolbar left behind (§11-5). The
+// search chip), and the one-row page toolbar (§11-5; TASK-75 §6-3 merged the
+// filter button and the condition chips into the single row). The
 // /search destination itself is covered by search-page.test.ts. Conditions:
 // web-browse.topbar-filter-bar / web-browse.filter-dialogs /
 // web-search.topbar-entry / web-layout.toolbar-one-row in
@@ -416,16 +417,28 @@ describe('topbar search chip (TASK-41 1b)', () => {
   })
 })
 
-describe('one-row page toolbar (TASK-44 §11-5)', () => {
-  it('[covers:web-layout.toolbar-one-row] /receipts は絞り込みボタン+条件チップの1行（期間・ラベルUIは本文に無い）、Home・Categories・Stores はページ内ツールバーなし、720px の column 化なし', async () => {
+describe('one-row page toolbar (TASK-75 §6-3)', () => {
+  it('[covers:web-layout.toolbar-one-row] /receipts は絞り込みボタン+条件チップが同じ1行（件数バッジ・期間・ラベルUIは本文に無い）、一覧は「…」のみの1行、詳細はチップの1行、Home はツールバーなし、720px の column 化なし', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    // receipts: the filter button and the condition chips; the period UI
-    // (mode tabs / step) and the label button moved to the topbar
+    // receipts: the filter button and the condition chips share the one
+    // toolbar row (TASK-75 merges the old button row + chip row); the period
+    // UI (mode tabs / step) and the label button stay in the topbar
     const { wrapper } = await mountApp('/receipts?item=牛乳')
     const toolbar = wrapper.find('.page-toolbar')
     expect(toolbar.exists()).toBe(true)
-    expect(toolbar.find('[data-test="filters-toggle"]').exists()).toBe(true)
-    expect(wrapper.find('.filter-chips').exists()).toBe(true)
+    const toggle = toolbar.find('[data-test="filters-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.classes()).toContain('toolbar-filter-btn')
+    // through 390px the word folds away and the count badge carries the
+    // active conditions (§6-3): one chip is on
+    expect(toggle.find('.toolbar-filter-count').text()).toBe('1')
+    // the chips live inside the same row — no separate chip row below
+    expect(toolbar.find('[data-test="page-chips"]').exists()).toBe(true)
+    expect(wrapper.find('.view-page > [data-test="page-chips"]').exists()).toBe(false)
+    expect(wrapper.find('.filter-chips').exists()).toBe(false)
+    // review L3: the receipts row passes no "..." menu slot, so the menu cell
+    // renders nothing at all (no empty right-end div)
+    expect(toolbar.find('.page-toolbar-menu').exists()).toBe(false)
     const main = wrapper.find('.app-main')
     for (const sel of [
       '[data-test="mode-month"]',
@@ -439,22 +452,48 @@ describe('one-row page toolbar (TASK-44 §11-5)', () => {
       expect(main.find(sel).exists(), sel).toBe(false)
     }
 
+    // the category / store lists are chip-less: the row carries the "..."
+    // menu alone at its right end (§6-5 — the standalone .page-menu row is
+    // gone) and no period / label UI joins it
+    for (const path of ['/categories', '/stores']) {
+      cleanup()
+      mockFetch({ 'GET /api/auth/me': { body: ME } })
+      const page = await mountApp(path)
+      const bar = page.wrapper.find('.page-toolbar')
+      expect(bar.exists(), `${path} toolbar`).toBe(true)
+      expect(bar.find('[data-test="page-chips"]').exists()).toBe(false)
+      expect(bar.find('.page-toolbar-menu [data-test="page-menu"]').exists()).toBe(true)
+      expect(page.wrapper.find('.page-menu').exists()).toBe(false)
+      for (const sel of ['.period-bar', '[data-test="label-filter-button"]']) {
+        expect(page.wrapper.find(sel).exists(), `${path} ${sel}`).toBe(false)
+      }
+    }
+
+    // the detail pages: the chips row moved into the one-line toolbar right
+    // under the heading (TASK-74's provisional row absorbed, interface as-is)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const detail = await mountApp('/categories/1?store_id=3')
+    const dBar = detail.wrapper.find('.page-toolbar')
+    expect(dBar.exists()).toBe(true)
+    expect(dBar.find('[data-test="page-chips"]').exists()).toBe(true)
+    expect(detail.wrapper.find('.view-page > [data-test="page-chips"]').exists()).toBe(false)
+    // review L3: the chip-only toolbar leaves no empty menu cell either (the
+    // "..." lives in the PageHead row on the detail pages)
+    expect(dBar.find('.page-toolbar-menu').exists()).toBe(false)
+    // a chip-less, menu-less toolbar renders nothing at all (a bare store
+    // detail carries its "..." in the heading row instead)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const bare = await mountApp('/stores/1')
+    expect(bare.wrapper.find('.page-toolbar').exists()).toBe(false)
+
     // Home carries no page toolbar: the month switch moved to the period chip
-    // (the "..." row is TASK-45, not TASK-44)
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const home = await mountApp('/')
     for (const sel of ['.page-toolbar', '[data-test="month-prev"]', '[data-test="month-next"]', '.period-bar', '[data-test="label-filter-button"]']) {
       expect(home.wrapper.find(sel).exists(), sel).toBe(false)
-    }
-    // categories / stores neither
-    for (const path of ['/categories', '/stores']) {
-      cleanup()
-      mockFetch({ 'GET /api/auth/me': { body: ME } })
-      const page = await mountApp(path)
-      for (const sel of ['.page-toolbar', '.period-bar', '[data-test="label-filter-button"]']) {
-        expect(page.wrapper.find(sel).exists(), `${path} ${sel}`).toBe(false)
-      }
     }
 
     // the stylesheet drops the 720px two-row design for the page toolbar

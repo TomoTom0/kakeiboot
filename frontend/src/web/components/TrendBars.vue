@@ -6,7 +6,9 @@ import { axisMonthLabels, monthLabel } from '../composables/period'
 
 // Monthly bars (rows keyed by "YYYY-MM", oldest first). The `current` month
 // is highlighted; clicking a bar emits its month. Per-bar month labels are
-// gone (TASK-42): the axis under the bars carries the window ends only.
+// gone (TASK-42): the axis under the bars carries the window ends only, and
+// the value label rides the selected month's bar alone (TASK-75 §6-4 — with
+// no selection, year / range modes included, no bar carries a label).
 const props = withDefaults(defineProps<{ rows: StatsRow[]; current?: string | null }>(), { current: null })
 const emit = defineEmits<{ select: [month: string] }>()
 
@@ -48,7 +50,10 @@ const average = computed(() => {
           :data-test="`bar-${b.key}`"
           @click="emit('select', b.key)"
         >
-          <span class="bar-val">{{ b.value ? (b.value >= 10000 ? `${Math.round(b.value / 1000)}k` : b.value.toLocaleString('ja-JP')) : '' }}</span>
+          <span
+            v-if="b.current"
+            class="bar-val"
+          >{{ b.value ? (b.value >= 10000 ? `${Math.round(b.value / 1000)}k` : b.value.toLocaleString('ja-JP')) : '' }}</span>
           <span
             class="bar"
             :style="{ height: `${b.height}%` }"

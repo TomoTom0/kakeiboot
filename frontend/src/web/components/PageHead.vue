@@ -54,6 +54,7 @@ function goBack(): void {
     <span
       v-if="total"
       class="page-head-total"
+      data-test="total"
     >{{ total }}</span>
     <slot name="menu" />
   </div>

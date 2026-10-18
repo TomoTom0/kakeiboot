@@ -3,9 +3,12 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import { useDataApi, type ReceiptSummary, type StatsResult } from '../api/data'
+import LabelDots from '@/shared/components/LabelDots.vue'
+import { useDataApi, type ReceiptSummary, type StatsResult, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import DonutChart from '../components/DonutChart.vue'
+import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -93,65 +96,47 @@ const perDay = computed(() => {
   return Math.round(t.value / periodDays(from, to))
 })
 
-// Category donut: top 5 + "その他". Colors are shared by the ring and the
-// legend (same index). TASK-74: each legend row keeps keys[0] (the top
-// category id) so the row links into /categories/:top — the 未分類 label
-// row (keys[0]=null) takes the uncategorized carve-out and その他 stays a
-// plain span.
-const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c-rest)']
-const categories = computed(() => {
+// Category breakdown: the top 5 rows + "その他" feed both the donut ring and
+// the ranked list (same order, same colors — DonutChart and RankedList with
+// `colors` share the palette by index). TASK-74: each row keeps keys[0] (the
+// top category id) so the row links into /categories/:top — the 未分類 row
+// (keys[0]=null) takes the uncategorized carve-out and その他 stays a plain
+// span. TASK-75 §6-4: the legend became this RankedList (one-line rows; at
+// 720px- the wrap stacks the 120px donut over the list).
+const donutRows = computed<StatsRow[]>(() => {
   const rows = section('categories')
-  const top = rows.slice(0, 5).map((r) => ({
-    label: r.labels[0] ?? '未分類',
-    value: r.value,
-    id: typeof r.keys[0] === 'number' ? (r.keys[0] as number) : null,
-  }))
+  const top = rows.slice(0, 5).map((r) => ({ ...r, labels: [r.labels[0] ?? '未分類'] }))
   const rest = rows.slice(5).reduce((a, r) => a + r.value, 0)
-  if (rest > 0) top.push({ label: 'その他', value: rest, id: null })
-  const total = top.reduce((a, r) => a + r.value, 0)
-  return top.map((r, i) => ({ ...r, color: PALETTE[i]!, share: total ? r.value / total : 0 }))
+  if (rest > 0) {
+    // the folded row keeps its share (review M1): top5 + rest is the whole
+    // section, so rest / total matches the backend rows' own shares and the
+    // ranked list shows the % column on every row like the old legend did
+    const total = top.reduce((a, r) => a + r.value, 0) + rest
+    top.push({ keys: [null], labels: ['その他'], value: rest, share: total ? rest / total : 0 })
+  }
+  return top
 })
 
-/** Legend row destination (TASK-74 §4-7): the top id from the stats row. */
-function categoryTo(c: { label: string; id: number | null }): RouteLocationRaw | null {
-  if (c.label === 'その他') return null
+/** Ranked row destination (TASK-74 §4-7): the top id from the stats row. */
+function categoryTo(row: StatsRow): RouteLocationRaw | null {
+  if (row.labels[0] === 'その他') return null
   const query = {
     ...period.urlQuery,
     ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
   }
-  if (c.label === '未分類') return { path: '/categories/uncategorized', query }
-  if (c.id === null) return null
-  return { path: `/categories/${c.id}`, query }
+  if (row.labels[0] === '未分類') return { path: '/categories/uncategorized', query }
+  if (typeof row.keys[0] !== 'number') return null
+  return { path: `/categories/${row.keys[0]}`, query }
 }
-const R = 52
-const CIRC = 2 * Math.PI * R
-const arcs = computed(() => {
-  let offset = 0
-  return categories.value.map((c) => {
-    const len = c.share * CIRC
-    const arc = { color: c.color, dash: `${Math.max(len - 2, 0)} ${CIRC}`, offset: -offset }
-    offset += len
-    return arc
-  })
-})
 
-const stores = computed(() => {
-  const rows = section('stores')
-  const max = Math.max(...rows.map((r) => r.value), 1)
-  return rows.map((r) => ({
-    label: r.labels[0] ?? '店不明',
-    value: r.value,
-    width: Math.round((r.value / max) * 100),
-    id: typeof r.keys[0] === 'number' ? (r.keys[0] as number) : null,
-  }))
-})
+const storeRows = computed(() => section('stores'))
 
 /** Store row destination (TASK-74 §4-7): keys[0] is the store id — その他
  * and 店不明 (null) have no page of their own. */
-function storeTo(s: { id: number | null }): RouteLocationRaw | null {
-  if (s.id === null) return null
+function storeTo(row: StatsRow): RouteLocationRaw | null {
+  if (typeof row.keys[0] !== 'number') return null
   return {
-    path: `/stores/${s.id}`,
+    path: `/stores/${row.keys[0]}`,
     query: {
       ...period.urlQuery,
       ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
@@ -187,33 +172,22 @@ const recentQuery = computed(() => {
         class="card kpi"
         data-test="kpi"
       >
-        <span class="label">{{ period.label }}の支出</span>
-        <strong
-          class="kpi-value"
-          data-test="total"
-        >{{ formatYen(totals.value) }}</strong>
-        <span
-          v-if="diff"
-          class="chip"
-          :class="`chip-${diff.tone}`"
-          data-test="diff"
-        >{{ period.compareLabel }}比 {{ diff.text }}{{ diff.pct }}</span>
-        <dl class="kpi-sub">
-          <div>
-            <dt>レシート</dt>
-            <dd data-test="receipt-count">
-              {{ totals.receipts }} 件
-            </dd>
-          </div>
-          <div>
-            <dt>1日あたり</dt>
-            <dd>{{ formatYen(perDay) }}</dd>
-          </div>
-          <div>
-            <dt>{{ period.compareLabel }}</dt>
-            <dd>{{ formatYen(totals.compare_value) }}</dd>
-          </div>
-        </dl>
+        <p class="kpi-head">
+          <span class="label">{{ period.label }}の支出</span>
+          <strong
+            class="kpi-value"
+            data-test="total"
+          >{{ formatYen(totals.value) }}</strong>
+          <span
+            v-if="diff"
+            class="chip"
+            :class="`chip-${diff.tone}`"
+            data-test="diff"
+          >{{ period.compareLabel }}比 {{ diff.text }}{{ diff.pct }}</span>
+        </p>
+        <p class="kpi-sub">
+          レシート <span data-test="receipt-count">{{ totals.receipts }}件</span> ・ 1日あたり {{ formatYen(perDay) }} ・ {{ period.compareLabel }} {{ formatYen(totals.compare_value) }}
+        </p>
       </section>
 
       <section
@@ -245,7 +219,7 @@ const recentQuery = computed(() => {
           </RouterLink>
         </div>
         <p
-          v-if="categories.length === 0"
+          v-if="donutRows.length === 0"
           class="muted empty"
         >
           この期間の記録はまだありません。
@@ -254,65 +228,16 @@ const recentQuery = computed(() => {
           v-else
           class="donut-wrap"
         >
-          <svg
-            class="donut"
-            viewBox="0 0 140 140"
-            role="img"
-            :aria-label="`支出の内訳 合計${formatYen(totals.value)}`"
-          >
-            <circle
-              cx="70"
-              cy="70"
-              :r="R"
-              class="donut-track"
-            />
-            <circle
-              v-for="(a, i) in arcs"
-              :key="i"
-              cx="70"
-              cy="70"
-              :r="R"
-              fill="none"
-              :stroke="a.color"
-              stroke-width="18"
-              :stroke-dasharray="a.dash"
-              :stroke-dashoffset="a.offset"
-              transform="rotate(-90 70 70)"
-            />
-            <text
-              x="70"
-              y="64"
-              class="donut-caption"
-            >支出</text>
-            <text
-              x="70"
-              y="84"
-              class="donut-total"
-            >{{ totals.value.toLocaleString('ja-JP') }}</text>
-          </svg>
-          <ul
-            class="legend"
-            data-test="categories"
-          >
-            <li
-              v-for="c in categories"
-              :key="c.label"
-            >
-              <component
-                :is="categoryTo(c) ? RouterLink : 'span'"
-                class="legend-row"
-                v-bind="categoryTo(c) ? { to: categoryTo(c)! } : {}"
-              >
-                <span
-                  class="dot"
-                  :style="{ background: c.color }"
-                />
-                <span class="legend-label">{{ c.label }}</span>
-                <span class="legend-share muted">{{ Math.round(c.share * 100) }}%</span>
-                <span class="amount">{{ formatYen(c.value) }}</span>
-              </component>
-            </li>
-          </ul>
+          <DonutChart
+            :rows="donutRows"
+            :total="totals.value"
+            caption="支出"
+          />
+          <RankedList
+            :rows="donutRows"
+            :to="categoryTo"
+            colors
+          />
         </div>
       </section>
 
@@ -330,32 +255,16 @@ const recentQuery = computed(() => {
           </RouterLink>
         </div>
         <p
-          v-if="stores.length === 0"
+          v-if="storeRows.length === 0"
           class="muted empty"
         >
           この期間の記録はまだありません。
         </p>
-        <ul
+        <RankedList
           v-else
-          class="rank"
-        >
-          <li
-            v-for="s in stores"
-            :key="s.label"
-          >
-            <component
-              :is="storeTo(s) ? RouterLink : 'span'"
-              class="rank-link"
-              v-bind="storeTo(s) ? { to: storeTo(s)! } : {}"
-            >
-              <div class="rank-head">
-                <span>{{ s.label }}</span>
-                <span class="amount">{{ formatYen(s.value) }}</span>
-              </div>
-              <span class="meter"><span :style="{ width: `${s.width}%` }" /></span>
-            </component>
-          </li>
-        </ul>
+          :rows="storeRows"
+          :to="storeTo"
+        />
       </section>
 
       <section
@@ -395,14 +304,11 @@ const recentQuery = computed(() => {
               :data-test="`recent-${r.receipt_id}`"
             >
               <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-              <span class="recent-icon"><AppIcon
-                :name="r.has_image ? 'image' : 'receipt'"
-                :size="18"
+              <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
+              <span class="row-labels"><LabelDots
+                :labels="r.labels ?? []"
+                compact
               /></span>
-              <span class="recent-main">
-                <span class="recent-store">{{ r.store_name ?? '店名なし' }}</span>
-                <span class="muted small">{{ r.item_count }} 品目</span>
-              </span>
               <span class="amount">{{ formatYen(r.amount) }}</span>
             </RouterLink>
           </li>

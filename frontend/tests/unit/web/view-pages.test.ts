@@ -35,16 +35,24 @@ function expectNoEditing(w: W): void {
 }
 
 /**
- * TASK-45 + TASK-40 rev2: the manage link is not a standalone toolbar link;
- * it lives in the "..." page menu (PageMenu wrapping PopoverMenu) next to a
- * second create / classification entry. In the closed state no manage-link
- * is in the DOM at all; the trigger opens role=menu holding exactly the
- * given menuitem links (checked for role / label / href) and closes again
- * on re-press.
+ * TASK-45 + TASK-40 rev2 + TASK-75: the manage link is not a standalone
+ * toolbar link; it lives in the "..." page menu (PageMenu wrapping
+ * PopoverMenu) next to a second create / classification entry. The trigger
+ * sits at the right end of the one-row page toolbar (BrowseToolbar's menu
+ * slot, TASK-75 §6-5) — not on a standalone .page-menu row of its own. In
+ * the closed state no manage-link is in the DOM at all; the trigger opens
+ * role=menu holding exactly the given menuitem links (checked for role /
+ * label / href) and closes again on re-press.
  */
 async function expectManageLinkInMenu(w: W, items: { test: string; label: string; href: string }[]): Promise<void> {
   expect(w.find('[data-test="manage-link"]').exists()).toBe(false)
-  const trigger = w.find('[data-test="page-menu"]')
+  // the "..." lives inside the one-row toolbar's menu slot and no standalone
+  // .page-menu row survives the merge
+  const bar = w.find('.page-toolbar')
+  expect(bar.exists()).toBe(true)
+  const trigger = bar.find('.page-toolbar-menu [data-test="page-menu"]')
+  expect(trigger.exists()).toBe(true)
+  expect(w.find('.page-menu').exists()).toBe(false)
   expect(trigger.attributes('aria-haspopup')).toBe('menu')
   expect(trigger.attributes('aria-label')).toBe('その他の操作')
   expect(trigger.classes()).toContain('page-menu-trigger')
@@ -218,11 +226,21 @@ describe('ReceiptsPage (dashboard)', () => {
     const { wrapper, router } = await mountApp('/receipts')
     const summary = wrapper.find('[data-test="summary"]').text()
     expect(summary).toContain('948円')
-    expect(summary).toContain('3 件')
-    expect(summary).toContain('316円')
+    expect(summary).toContain('レシート 3件')
+    expect(summary).toContain('1件あたり 316円')
     expect(wrapper.findAll('[data-test="daily"] .daily-col')).toHaveLength(31)
     expect(wrapper.find('[data-test="payments"]').text()).toContain('現金')
     expect(wrapper.find('[data-test="receipts"]').text()).toContain('10月10日（土）')
+    // TASK-75 §6-4: the receipt rows are one line (date / store / labels /
+    // amount) — no icon column, no sub line
+    const row = wrapper.find('[data-test="receipt-101"] a.recent-row')
+    expect(row.find('.recent-icon').exists()).toBe(false)
+    expect(row.find('.recent-main').exists()).toBe(false)
+    expect(row.find('[data-test="label-dot"]').exists()).toBe(true)
+    expect(row.text()).toContain('10/10')
+    expect(row.text()).toContain('Aマート')
+    expect(row.text()).toContain('400円')
+    expect(row.text()).not.toContain('品目')
     expectNoEditing(wrapper)
 
     await wrapper.find('[data-test="filters-toggle"]').trigger('click')
@@ -230,9 +248,9 @@ describe('ReceiptsPage (dashboard)', () => {
     await wrapper.find('[data-test="filters"]').trigger('submit')
     await settle()
     expect(router.currentRoute.value.query.item).toBe('牛乳')
-    expect(wrapper.find('[data-test="summary"]').text()).toContain('1 件')
+    expect(wrapper.find('[data-test="summary"]').text()).toContain('レシート 1件')
     expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(false)
-    await wrapper.find('[data-test="clear-item"]').trigger('click')
+    await wrapper.find('[data-test="chip-x-item"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
   })
@@ -241,7 +259,7 @@ describe('ReceiptsPage (dashboard)', () => {
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/receipts?from=2026-10-01&to=2026-10-31&category=日用品')
     expect(list).toHaveBeenCalledWith(1, expect.objectContaining({ from: '2026-10-01', to: '2026-10-31', category: '日用品' }))
-    expect(wrapper.find('[data-test="clear-category"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="chip-x-category"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(false)
   })
@@ -383,10 +401,13 @@ describe('StoresPage long names (TASK-16)', () => {
     const rankName = titled('[data-test="ranking"]')
     expect(rankName.length).toBeGreaterThan(0)
     expect(rankName.some((e) => e.classes().some((c) => /ellipsis|truncate/.test(c)))).toBe(true)
-    // kpi "最多": a line-clamp class with the full name as title
-    const kpiName = titled('.kpi-sub')
-    expect(kpiName.length).toBeGreaterThan(0)
-    expect(kpiName.some((e) => e.classes().some((c) => /clamp/.test(c)))).toBe(true)
+    // TASK-75 §6-4 + review L2: the KPI summary is one ellipsized line — the
+    // 最多 store name rides it with the full name as its title (the only way
+    // to read what the ellipsis cut; no clamp class)
+    const css = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8')
+    expect(css).toMatch(/\.kpi-sub\s*\{[^}]*white-space: nowrap[^}]*overflow: hidden[^}]*text-overflow: ellipsis/)
+    expect(wrapper.find('.kpi-sub').classes().some((c) => /clamp/.test(c))).toBe(false)
+    expect(titled('.kpi-sub').length).toBeGreaterThan(0)
     // TASK-74 stage 4: no same-page selection anymore — the list page's own
     // trend card carries the hscroll
     expect(wrapper.find('[data-test="trend-card"] .hscroll [data-test="trend"]').exists()).toBe(true)
@@ -401,7 +422,6 @@ describe('StoresPage long names (TASK-16)', () => {
     expect(title.text()).toBe(long)
     expect(title.attributes('title')).toBeUndefined()
     expect(detail.wrapper.find('.page-head-total').exists()).toBe(true)
-    const css = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8')
     expect(css).toMatch(/\.page-head-title\s*\{[^}]*min-width: 0[^}]*overflow: hidden[^}]*text-overflow: ellipsis[^}]*white-space: nowrap/)
   })
 })
@@ -488,9 +508,9 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     return mount(RankedList, { props, global: { plugins: [router] } })
   }
 
-  it('[covers:web-browse.ranked-row-link] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・選択の prop は無い', async () => {
+  it('[covers:web-browse.ranked-row-link][covers:web-layout.ranked-row-single-line] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・行は1行構成（dot/label/share/diff/amount の細胞を a/span で共有・meter 無し）', async () => {
     const rows: StatsRow[] = [
-      { keys: [11], labels: ['食費'], value: 550, share: 0.6 },
+      { keys: [11], labels: ['食費'], value: 550, share: 0.58, diff: 120 },
       { keys: [null], labels: ['その他'], value: 100, share: 0.1 },
     ]
     const to = (r: StatsRow) => (typeof r.keys[0] === 'number' ? { path: `/x/${r.keys[0]}` } : null)
@@ -503,12 +523,29 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     expect(link.attributes('href')).toBe('/x/11')
     expect(link.find('svg[aria-hidden="true"]').exists()).toBe(true)
 
+    // TASK-75 §6-4 single-line cells: dot / label / share / diff / amount —
+    // no meter element, no compare-label prefix on the diff
+    expect(link.find('.ranked-label').text()).toBe('食費')
+    expect(link.find('.ranked-label').attributes('title')).toBe('食費')
+    expect(link.find('.ranked-share').text()).toBe('58%')
+    expect(link.find('.ranked-diff').classes()).toContain('up')
+    expect(link.find('.ranked-diff').text()).toBe('+120円')
+    expect(link.find('.amount').text()).toBe('550円')
+    expect(link.find('.meter').exists()).toBe(false)
+
     // a row whose `to` returns null (その他 / 店不明): a plain span, no
-    // chevron
+    // chevron — but the very same cell structure (the share column stays,
+    // the diff cell renders empty without a diff)
     const other = w.find('[data-test="row-その他"]')
     expect(other.element.tagName).toBe('SPAN')
     expect(other.attributes('href')).toBeUndefined()
     expect(other.find('svg').exists()).toBe(false)
+    expect(other.find('.ranked-label').text()).toBe('その他')
+    expect(other.find('.ranked-share').text()).toBe('10%')
+    expect(other.find('.ranked-diff').text()).toBe('')
+    expect(other.find('.amount').text()).toBe('100円')
+    expect(other.find('.meter').exists()).toBe(false)
+    expect(other.find('.ranked-dot').exists()).toBe(true)
 
     // no `to` prop at all (the payments breakdown): every row is a span
     const w2 = await mountList({ rows })
@@ -752,8 +789,13 @@ describe('StoreDetailPage (TASK-74 stage 5)', () => {
     expect(wrapper.find('.page-head-title').text()).toBe('Aマート')
     expect(wrapper.find('.page-head-sub').text()).toBe('スーパー')
     expect(wrapper.find('[data-test="total"]').text()).toBe('400円')
-    // the store info folds into the KPI dl
-    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '累計件数', '最終購入日'])
+    // TASK-75 §6-4: the detail KPI is the one-line summary only (the total
+    // lives in the heading row) — the store info folds into that line
+    expect(wrapper.find('[data-test="kpi"] .kpi-value').exists()).toBe(false)
+    const storeSub = wrapper.find('[data-test="kpi"] .kpi-sub').text()
+    expect(storeSub).toContain('レシート ')
+    expect(storeSub).toContain('累計件数')
+    expect(storeSub).toContain('最終購入日')
     expect(wrapper.find('[data-test="kpi"]').text()).toContain('10/10')
 
     // the cross rows carry this store into the category detail; the 未分類

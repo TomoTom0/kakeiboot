@@ -8,9 +8,10 @@ import PopoverMenu from './PopoverMenu.vue'
 // at the right end of the browsing pages' toolbar row (where the standalone
 // .manage-link used to be). Open/close, the outside pointerdown, Escape, the
 // arrow keys and the focus return live in PopoverMenu / usePopover; this
-// component only renders the 44px dots trigger and the link items. The
-// interface stays as-is when TASK-28's BrowseToolbar takes the menu in
-// through its `menu` slot.
+// component only renders the 44px dots trigger and the link items. TASK-75
+// dropped the wrapper's own .page-menu class: the list pages take this in
+// through BrowseToolbar's `menu` slot and the detail pages through PageHead's
+// `menu` slot, each of which owns the row's alignment.
 export interface PageMenuItem {
   to: string
   label: string
@@ -24,10 +25,7 @@ const menuOpen = ref(false)
 </script>
 
 <template>
-  <PopoverMenu
-    v-model:open="menuOpen"
-    class="page-menu"
-  >
+  <PopoverMenu v-model:open="menuOpen">
     <template #trigger="{ open }">
       <button
         type="button"

@@ -31,13 +31,22 @@ describe('HomePage (dashboard)', () => {
     // the KPI drops the "今月" special case (TASK-66 §1-1): {period.label}の支出
     expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月の支出')
     expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
-    expect(wrapper.find('[data-test="receipt-count"]').text()).toContain('3 件')
     expect(wrapper.find('[data-test="diff"]').text()).toContain('+948円')
-    // legend: top category first, same order as the ring
-    const legend = wrapper.find('[data-test="categories"]').findAll('li')
-    expect(legend[0]!.text()).toContain('食費')
-    expect(legend[0]!.text()).toContain('550円')
-    expect(legend[1]!.text()).toContain('日用品')
+    // TASK-75 §6-4: the KPI is two rows — the head row (label + amount + the
+    // diff chip) and one 0.8rem summary line joined with 「・」
+    expect(wrapper.find('[data-test="kpi"] .kpi-head [data-test="total"]').exists()).toBe(true)
+    const sub = wrapper.find('[data-test="kpi"] .kpi-sub')
+    expect(sub.text()).toContain('レシート 3件')
+    expect(sub.text()).toContain('1日あたり 63円')
+    expect(sub.text()).toContain('前月 0円')
+    expect(sub.find('[data-test="receipt-count"]').text()).toBe('3件')
+    // breakdown: the donut + the ranked rows (TASK-75 replaced the legend
+    // with RankedList — same order, same colors, one-line rows)
+    const rows = wrapper.findAll('[data-test="breakdown"] .ranked-row')
+    expect(rows[0]!.text()).toContain('食費')
+    expect(rows[0]!.text()).toContain('550円')
+    expect(rows[1]!.text()).toContain('日用品')
+    expect(wrapper.find('[data-test="breakdown"] .donut').exists()).toBe(true)
     // TASK-66 §1-3 案D: the inline bars are the shared TrendBars now, so the
     // section is trend-card (the .bars inside keeps data-test="trend")
     expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(6)
@@ -46,33 +55,72 @@ describe('HomePage (dashboard)', () => {
     expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['5月', '10月'])
     expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
     expect(wrapper.find('[data-test="bar-2026-10"]').attributes('aria-label')).toBe('2026年10月 948円')
+    // TASK-75 §6-4: the value label rides the selected month's bar only
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-val')).toHaveLength(1)
+    expect(wrapper.find('[data-test="bar-2026-10"] .bar-val').text()).toBe('948')
     // the TrendBars integration brings the shared note along as well
     expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('月平均 948円')
     expect(wrapper.find('[data-test="stores"]').text()).toContain('Aマート')
-    // the link carries the period context (web-receipts.recent-links-carry-context)
-    const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
+    // the link carries the period context (web-receipts.recent-links-carry-context);
+    // TASK-75 §6-4: the row is one line (date / store / labels / amount, no icon)
+    const recentRow = wrapper.find('[data-test="recent-101"]')
+    const recent = new URL(recentRow.attributes('href')!, 'http://localhost')
     expect(recent.pathname).toBe('/receipts/101')
-    // TASK-74: the legend and store rows drill into the hierarchy routes
+    expect(recentRow.find('.recent-icon').exists()).toBe(false)
+    expect(recentRow.text()).toContain('10/10')
+    expect(recentRow.text()).toContain('Aマート')
+    expect(recentRow.text()).toContain('400円')
+    expect(recentRow.text()).not.toContain('品目')
+    expect(recentRow.find('[data-test="label-dot"]').exists()).toBe(true)
+    // TASK-74: the breakdown and store rows drill into the hierarchy routes
     // (keys[0] = the top category / store id), carrying the period
-    const legendLink = new URL(wrapper.find('[data-test="categories"] li a').attributes('href')!, 'http://localhost')
+    const legendLink = new URL(wrapper.find('[data-test="breakdown"] [data-test="row-食費"]').attributes('href')!, 'http://localhost')
     expect(legendLink.pathname).toBe('/categories/1')
     expect(legendLink.searchParams.get('month')).toBe('2026-10')
     expect(legendLink.searchParams.get('category')).toBe(null)
-    const storeRow = new URL(wrapper.find('[data-test="stores"] .rank-link').attributes('href')!, 'http://localhost')
+    const storeRow = new URL(wrapper.find('[data-test="stores"] [data-test="row-Aマート"]').attributes('href')!, 'http://localhost')
     expect(storeRow.pathname).toBe('/stores/1')
     expect(storeRow.searchParams.get('month')).toBe('2026-10')
 
-    // a 未分類 legend row (an item with no category) links to the
-    // uncategorized carve-out; the その他 aggregate stays a non-link span
+    // a 未分類 row (an item with no category) links to the uncategorized
+    // carve-out; the その他 aggregate stays a non-link span
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await api.updateReceipt(1, 102, { revision: 1, upsert_items: [{ item_id: 1003, category: null }] })
     const again = await mountApp('/')
-    const legendRows = again.wrapper.findAll('[data-test="categories"] li')
-    const unc = legendRows.find((li) => li.text().includes('未分類'))!.find('a')
+    const unc = again.wrapper.findAll('[data-test="breakdown"] .ranked-row').find((row) => row.text().includes('未分類'))!
+    expect(unc.element.tagName).toBe('A')
     expect(new URL(unc.attributes('href')!, 'http://localhost').pathname).toBe('/categories/uncategorized')
     // the store rows all carry their store id (mock parity keys)
-    expect(again.wrapper.findAll('[data-test="stores"] .rank-link').every((a) => a.element.tagName === 'A')).toBe(true)
+    expect(again.wrapper.findAll('[data-test="stores"] .ranked-row').every((a) => a.element.tagName === 'A')).toBe(true)
+  })
+
+  it('[covers:web-home.dashboard-month-overview] 内訳は上位5行+その他の折り畳みで、その他行も上位行と同じ形式の割合列を持つ（非リンク）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    // seven top categories in the month (adding five items to receipt 102):
+    // the section's rows past the 5th fold into Home's own その他 aggregate —
+    // 550+398+100+90+80 stay rows, 60+40 fold (review M1: the folded row
+    // keeps a share like every backend row and the old legend did; the
+    // denominator top5+rest is the whole section, matching the other rows)
+    await api.updateReceipt(1, 102, {
+      revision: 1,
+      upsert_items: [
+        { name: 'バス代', amount: 100, category: '交通費' },
+        { name: '雑誌', amount: 90, category: '趣味' },
+        { name: '風邪薬', amount: 80, category: '医療' },
+        { name: '教科書', amount: 60, category: '教育' },
+        { name: '贈り物', amount: 40, category: '交際' },
+      ],
+    })
+    const { wrapper } = await mountApp('/')
+    const rows = wrapper.findAll('[data-test="breakdown"] .ranked-row')
+    expect(rows).toHaveLength(6)
+    // the backend rows' own shares ride along (550 / 1318)
+    expect(wrapper.find('[data-test="breakdown"] [data-test="row-食費"] .ranked-share').text()).toBe('42%')
+    const rest = wrapper.find('[data-test="breakdown"] [data-test="row-その他"]')
+    expect(rest.element.tagName).toBe('SPAN')
+    expect(rest.find('.ranked-share').text()).toBe('8%')
+    expect(rest.text()).toContain('100円')
   })
 
   it('[covers:web-home.dashboard-month-switch] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
@@ -187,20 +235,22 @@ describe('HomePage (dashboard)', () => {
     expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年')
     expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年の支出')
     expect(wrapper.find('[data-test="diff"]').text()).toContain('前年比 +948円')
-    // the compare vocabulary rides the dl term as well (the diff chip alone
-    // could pass while the dt still reads 前月)
-    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '1日あたり', '前年'])
-    // the per-day cell exactly (not a substring of the whole KPI): the dt
-    // order assert above pins .kpi-sub dd[1] as the 1日あたり cell — 948 / 288日
-    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dd')[1]!.text()).toBe('3円')
+    // the compare vocabulary rides the summary line as well (the diff chip
+    // alone could pass while it still reads 前月) — 948 / 288日
+    const sub = wrapper.find('[data-test="kpi"] .kpi-sub').text()
+    expect(sub).toContain('レシート 3件')
+    expect(sub).toContain('1日あたり 3円')
+    expect(sub).toContain('前年 0円')
     // the year rides its own bars: 12 zero-filled months, no current highlight
     expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(12)
     expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['1月', '12月'])
     expect(wrapper.find('.bar-col.current').exists()).toBe(false)
+    // TASK-75 §6-4: with no selected month there is no value label either
+    expect(wrapper.find('[data-test="trend-card"] .bar-val').exists()).toBe(false)
     // links carry the period in its URL form (year=, not from&to); the
-    // legend drills into the category route (TASK-74) instead of the legacy
-    // ?category= selection
-    const legend = new URL(wrapper.find('[data-test="categories"] li a').attributes('href')!, 'http://localhost')
+    // breakdown rows drill into the category route (TASK-74) instead of the
+    // legacy ?category= selection
+    const legend = new URL(wrapper.find('[data-test="breakdown"] [data-test="row-食費"]').attributes('href')!, 'http://localhost')
     expect(legend.pathname).toBe('/categories/1')
     expect(legend.searchParams.get('year')).toBe('2026')
     expect(legend.searchParams.get('category')).toBe(null)
@@ -220,8 +270,8 @@ describe('HomePage (dashboard)', () => {
     expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', from: '2026-10-03', to: '2026-10-15' })
     expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026/10/03 〜 2026/10/15の支出')
     expect(wrapper.find('[data-test="diff"]').text()).toContain('前期間比 +948円')
-    expect(wrapper.findAll('[data-test="kpi"] .kpi-sub dt').map((d) => d.text())).toEqual(['レシート', '1日あたり', '前期間'])
-    expect(wrapper.find('[data-test="kpi"]').text()).toContain('73円') // 948 / 13日
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('1日あたり 73円') // 948 / 13日
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('前期間 0円')
     expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(1)
     expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10月'])
     const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')

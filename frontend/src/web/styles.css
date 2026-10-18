@@ -824,9 +824,16 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .dash-grid .breakdown, .dash-grid .recent, .dash-grid .wide { grid-column: 1 / -1; }
 .dash-grid > * { min-width: 0; }
 
-.kpi { display: flex; flex-direction: column; gap: 0.35rem; }
-.kpi .label { color: var(--bb-muted); font-size: 0.85rem; font-weight: 600; }
-.kpi-value { font-size: 2rem; line-height: 1.2; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+/* The two-row KPI card (TASK-75 §6-4): the head row (0.8rem label, 1.5rem
+   amount, the diff chip pinned right) over one 0.8rem summary line joined
+   with 「・」 and ellipsized — the old 3-column dl grid and its rule line are
+   gone; the detail pages keep only the summary line (their total rides the
+   heading row) */
+.card.kpi { padding: 12px; }
+.kpi { display: flex; flex-direction: column; gap: 0.15rem; }
+.kpi .label { color: var(--bb-muted); font-size: 0.8rem; font-weight: 600; }
+.kpi-head { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; margin: 0; }
+.kpi-value { font-size: 1.5rem; line-height: 1.2; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .chip {
   align-self: flex-start;
   padding: 0.1rem 0.6rem;
@@ -838,16 +845,16 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 }
 .chip-up { background: var(--bb-error-bg); color: var(--bb-danger); }
 .chip-down { background: var(--bb-accent-soft); color: var(--bb-accent); }
+.kpi-head .chip { margin-left: auto; flex: none; align-self: center; }
 .kpi-sub {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin: auto 0 0;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--bb-border);
+  margin: 0;
+  color: var(--bb-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.kpi-sub dt { color: var(--bb-muted); font-size: 0.75rem; }
-.kpi-sub dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .bars {
   display: grid;
@@ -887,41 +894,26 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .trend-wrap { width: fit-content; min-width: 100%; }
 .axis-ends { display: flex; justify-content: space-between; margin-top: 0.4rem; }
 
+/* The donut shares its card with a RankedList (TASK-75 §6-4 replaced the
+   legend rows with the ranked list — the same rows, colors and links); at
+   720px- the wrap stacks the 120px ring over the list */
 .donut-wrap { display: flex; align-items: center; gap: 1.5rem; }
 .donut { flex: none; width: 170px; height: 170px; }
 .donut circle { transition: opacity 0.15s; }
 .donut-track { fill: none; stroke: var(--bb-surface-2); stroke-width: 18; }
 .donut-caption { text-anchor: middle; font-size: 10px; fill: var(--bb-muted); }
 .donut-total { text-anchor: middle; font-size: 17px; font-weight: 700; fill: var(--bb-fg); }
-.legend { flex: 1; list-style: none; margin: 0; padding: 0; min-width: 0; }
-.legend-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.4rem 0.5rem;
-  border-radius: 8px;
-  color: inherit;
-  text-decoration: none;
-  transition: background-color 0.15s;
-}
-a.legend-row:hover { background: var(--bb-hover); }
-.dot { width: 10px; height: 10px; border-radius: 50%; }
-.legend-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.legend-share { font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-
-.rank { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.7rem; }
-.rank-head { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.92rem; }
-.meter { display: block; height: 6px; margin-top: 4px; border-radius: 999px; background: var(--bb-surface-2); overflow: hidden; }
-.meter > span { display: block; height: 100%; border-radius: 999px; background: var(--bb-accent); }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
+/* The one-line receipt row (TASK-75 §6-4): date / store (ellipsis) / labels
+   / amount on a 44px line — the 34px icon column is gone */
 .recent-row {
   display: grid;
-  grid-template-columns: 3rem auto 1fr auto;
+  grid-template-columns: 3.2rem minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.55rem 0.5rem;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 0.5rem;
   margin: 0 -0.5rem;
   border-radius: 8px;
   color: inherit;
@@ -940,6 +932,10 @@ a.legend-row:hover { background: var(--bb-hover); }
 .search-tabs { display: flex; }
 .search-tabs .tab { flex: 1 1 auto; }
 .search-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+/* the search receipt row keeps its two-line composition (store over the
+   label dots) — its .recent-main cell is search-only now that the browsing
+   rows are one line (TASK-75 §6-4) */
+.search-row .recent-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
 .search-item-row { padding: 0.45rem 0.5rem; margin: 0 -0.5rem; border-radius: 8px; }
 .search-item-row:hover { background: var(--bb-hover); }
 .search-item-main {
@@ -961,16 +957,6 @@ a.legend-row:hover { background: var(--bb-hover); }
 }
 .search-item-category { color: var(--bb-muted); }
 .search-meta { margin: 0 0 0.5rem; color: var(--bb-muted); font-size: 0.9rem; }
-.recent-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--bb-accent-soft);
-  color: var(--bb-accent);
-}
-.recent-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
 .recent-store { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 
 .empty { margin: 0.5rem 0 0; }
@@ -987,13 +973,39 @@ a.legend-row:hover { background: var(--bb-hover); }
 
 /* ------------------------------------------------- dashboard-style views */
 
+/* The one-row in-page toolbar (BrowseToolbar, TASK-75 §6-3 after the §11
+   move): the 絞り込み button + the condition chips + the right-end "..."
+   menu on a single row — the chips area takes the rest of the width and
+   scrolls sideways, so the row never wraps at any width (the 720px
+   column-ization of the two-row design is gone; 721px+ keeps the same row) */
 .page-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  min-height: 36px;
+  margin-bottom: 0.75rem;
+}
+/* the chips (FilterChips) fill the space between the button and the menu */
+.page-toolbar .page-chips { flex: 1; min-width: 0; }
+/* the "..." menu slot (PageMenu): pinned to the right end whether or not
+   chips precede it — a chip-less list page renders the menu-only row (§6-5) */
+.page-toolbar-menu { display: flex; align-items: center; flex: none; margin-left: auto; }
+/* the 絞り込み button (§6-3): the word rides from 391px; through 390px the
+   button folds to the 44px icon + count badge (the 360px budget
+   44 + 8 + chips ~232 + 44 = 328px) */
+.toolbar-filter-btn { flex: none; min-height: 36px; gap: 0.3rem; }
+.toolbar-filter-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bb-accent-soft);
+  color: var(--bb-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 /* the period dialog's content (PeriodPicker, TASK-44 §11-6): tabs over the
    step / range form, replacing the old in-page period bar row */
@@ -1002,11 +1014,9 @@ a.legend-row:hover { background: var(--bb-hover); }
 .period-step { display: flex; align-items: center; gap: 0.25rem; }
 .period-step strong { min-width: 7.5rem; text-align: center; }
 .period-range { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
-/* the "..." page menu of the category / store dashboards (PageMenu,
-   TASK-45 §2-4): it takes the old manage-row's spot — the right end of the
-   row above the dashboard cards — so the wrapper carries the alignment and
-   the 44px dots trigger follows the avatar-btn family */
-.page-menu { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+/* the "..." page menu's 44px dots trigger (PageMenu, TASK-45 §2-4): it
+   lives in BrowseToolbar's menu slot on the list pages and in PageHead's
+   menu slot on the detail pages — the host row owns the alignment */
 .page-menu-trigger {
   display: inline-flex;
   align-items: center;
@@ -1053,10 +1063,10 @@ a.legend-row:hover { background: var(--bb-hover); }
 .page-head-total { margin-left: auto; flex: none; font-weight: 700; }
 .page-head-sub { margin: 0 0 0.75rem; }
 
-/* The condition chip row of the detail pages (FilterChips, TASK-74 §3-4
-   案A): one horizontally scrollable row right under the heading; TASK-75
-   moves it into the one-line toolbar. */
-.page-chips { display: flex; gap: 0.4rem; margin: 0 0 0.75rem; overflow-x: auto; scrollbar-width: none; }
+/* The condition chip row (FilterChips, TASK-74 §3-4 案A): one horizontally
+   scrollable row — it rides inside BrowseToolbar's row (TASK-75), so the
+   row above carries the spacing and this stays flush */
+.page-chips { display: flex; gap: 0.4rem; margin: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
 .page-chips::-webkit-scrollbar { display: none; }
 .page-chip {
   display: inline-flex;
@@ -1097,33 +1107,52 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 }
 .link-btn:hover { text-decoration: underline; }
 
+/* The ranked row as one 44px line (TASK-75 §6-4): dot / label / share % /
+   diff / amount / chevron on a six-track grid. The proportional bar rides
+   the row's bottom edge as a 2px gradient (--rank-fill of --rank-color) —
+   no standalone meter element, no gap between rows for it. The row is its
+   own size container: through 340px the diff cell folds away so the label
+   keeps at least ~96px */
 .ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ranked-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid transparent;
+  --rank-fill: 0%;
+  --rank-color: var(--bb-accent);
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto auto 12px;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 0.5rem;
   border-radius: 10px;
-  background: transparent;
+  background-image: linear-gradient(to right, var(--rank-color) var(--rank-fill), transparent var(--rank-fill));
+  /* the bar spans the row's full width including the 0.5rem side paddings
+     (review L1): the default origin is padding-box, whose 100% excludes the
+     padding and leaves the bar inset from the rounded row ends */
+  background-origin: border-box;
+  background-size: 100% 2px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+  container-type: inline-size;
   color: inherit;
   font: inherit;
   text-align: left;
   text-decoration: none;
 }
 /* link rows (RankedList `to`, TASK-74 §4-6): same box, plus the affordances;
-   plain rows stay as-is — TASK-75 reworks the row layout on top of this */
-a.ranked-row.is-link { cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
-a.ranked-row.is-link:hover { background: var(--bb-hover); }
+   the hover paints background-color so the share gradient survives */
+a.ranked-row.is-link { cursor: pointer; transition: background-color 0.15s; }
+a.ranked-row.is-link:hover { background-color: var(--bb-hover); }
 a.ranked-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
-.ranked-chevron { align-self: flex-end; color: var(--bb-muted); flex: none; }
-.ranked-head { display: flex; justify-content: space-between; gap: 0.5rem; }
-.ranked-label { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ranked-sub { display: flex; gap: 0.75rem; }
-.ranked-sub .up { color: var(--bb-danger); }
-.ranked-sub .down { color: var(--bb-accent); }
-.ranked .meter { margin-top: 0; }
+.ranked-dot { width: 10px; height: 10px; border-radius: 50%; }
+.ranked-label { min-width: 0; }
+.ranked-share { color: var(--bb-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.ranked-diff { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.ranked-diff.up { color: var(--bb-danger); }
+.ranked-diff.down { color: var(--bb-accent); }
+.ranked-chevron { color: var(--bb-muted); flex: none; }
+@container (max-width: 340px) {
+  .ranked-diff { display: none; }
+}
 
 .detail-kpi { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; margin: 0 0 0.5rem; }
 .detail-kpi .amount { font-size: 1.5rem; }
@@ -1145,23 +1174,11 @@ a.sub-row:hover { background: var(--bb-hover); }
 
 .bar-btn { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .bar-btn:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: 2px; border-radius: 6px; }
-.rank-link { display: block; color: inherit; text-decoration: none; padding: 0.3rem 0.5rem; margin: -0.3rem -0.5rem; border-radius: 8px; transition: background-color 0.15s; }
-.rank-link:hover { background: var(--bb-hover); }
 
 .filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 1rem; }
 .filters .check, .filters .actions { grid-column: 1 / -1; }
-.filter-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: -0.25rem 0 1rem; }
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.15rem 0.3rem 0.15rem 0.7rem;
-  border-radius: 999px;
-  background: var(--bb-accent-soft);
-  color: var(--bb-accent);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
+/* the receipts list's condition chips moved onto the toolbar row as
+   .page-chip (TASK-75): the old wrapping .filter-chips row is gone */
 .chip-x {
   display: inline-grid;
   place-items: center;
@@ -1182,20 +1199,25 @@ a.sub-row:hover { background: var(--bb-hover); }
 .daily-bar { display: block; width: 100%; border-radius: 3px 3px 1px 1px; background: var(--bb-accent); }
 
 .day-group + .day-group { margin-top: 0.75rem; }
+/* the day-group heading rides a 28px line (TASK-75 §6-4) over the one-line
+   receipt rows */
 .day-head {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 0.35rem 0;
+  min-height: 28px;
+  padding: 0.2rem 0;
   margin-bottom: 0.15rem;
   border-bottom: 1px solid var(--bb-border);
   font-size: 0.85rem;
   font-weight: 700;
 }
-.receipt-row { grid-template-columns: auto 1fr auto; }
 .receipt-row.deleted { opacity: 0.55; }
 .receipt-row.deleted .amount { text-decoration: line-through; }
-/* label dots of a list row (TASK-17) */
-.row-labels { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; margin-left: 0.4rem; vertical-align: middle; }
+/* label dots of a list row (TASK-17): the labels cell of the one-line rows —
+   never wraps (review L5): many dots / the 削除済み badge would grow the row
+   past the 44px line (§6-4), so the overflow clips instead */
+.row-labels { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 0.25rem; overflow: hidden; }
 .more-btn { width: 100%; margin-top: 0.75rem; }
 
 /* ------------------------------------------------------ labels (TASK-17/26) */
@@ -1341,9 +1363,6 @@ a.sub-row:hover { background: var(--bb-hover); }
   cursor: pointer;
 }
 .label-clear-btn:disabled { color: var(--bb-muted); cursor: default; }
-
-/* filter-chip row (ReceiptsPage): the word plus sm LabelChips */
-.label-filter-chips { gap: 0.3rem; }
 
 /* manage screen rows (TASK-26 2-5): a plain list of chips; pressing a row
    turns it alone into the editor */
@@ -1665,12 +1684,15 @@ a.sub-row:hover { background: var(--bb-hover); }
 .skeleton .card { display: flex; flex-direction: column; justify-content: flex-start; }
 
 @media (max-width: 720px) {
-  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  /* the narrow-band density pass (TASK-75 §6-4): tighter card rhythm, the
+     smaller donut over its ranked list, and the shorter trend bars */
+  .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+  .card { padding: 12px; }
   .receipt-body { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr; }
   .donut-wrap { flex-direction: column; align-items: stretch; }
-  .donut { align-self: center; }
-  .kpi-value { font-size: 1.8rem; }
+  .donut { align-self: center; width: 120px; height: 120px; }
+  .bars { height: 96px; }
 }
 
 @media (max-width: 520px) {
@@ -1694,6 +1716,10 @@ a.sub-row:hover { background: var(--bb-hover); }
    page content carry the location instead) */
 @media (max-width: 390px) {
   .topbar-title-text { display: none; }
+  /* the toolbar's 絞り込み button folds to the 44px icon + count badge
+     (TASK-75 §6-3's 360px budget) */
+  .toolbar-filter-word { display: none; }
+  .toolbar-filter-btn { width: 44px; padding: 0; }
 }
 @media (max-width: 360px) {
   .topbar-title { display: none; }

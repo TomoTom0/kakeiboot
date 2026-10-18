@@ -69,7 +69,7 @@ function topLevel(text = css): string {
 }
 
 describe('layout: grid children shrink', () => {
-  it('[covers:web-layout.grid-children-shrinkable] .dash-grid 全メディアクエリで minmax(0、.kpi-sub・.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
+  it('[covers:web-layout.grid-children-shrinkable] .dash-grid 全メディアクエリで minmax(0、.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
     const grids = rulesFor('.dash-grid').filter((r) => decl(r.body, 'grid-template-columns') !== undefined)
     expect(grids.length).toBeGreaterThanOrEqual(2)
     for (const r of grids) {
@@ -79,9 +79,6 @@ describe('layout: grid children shrink', () => {
       expect(v.replace(/minmax\([^()]*\)/g, '')).not.toMatch(/\b1fr\b/)
     }
     expect(rulesFor('.dash-grid > *').some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
-    expect(rulesFor('.kpi-sub').map((r) => decl(r.body, 'grid-template-columns'))).toContain(
-      'repeat(3, minmax(0, 1fr))',
-    )
     expect(rulesFor('.sub-row').map((r) => decl(r.body, 'grid-template-columns'))).toContain(
       'minmax(0, 1fr) auto auto',
     )
@@ -210,6 +207,140 @@ describe('topbar filter bar CSS (TASK-44)', () => {
     }
     expect(rulesFor('.search-head').some((r) => decl(r.body, 'display') === 'flex')).toBe(true)
     expect(rulesFor('.search-item-sub').some((r) => /--bb-muted|color/.test(r.body))).toBe(true)
+  })
+})
+
+describe('one-row page toolbar CSS (TASK-75)', () => {
+  it('[covers:web-layout.toolbar-one-row] .page-toolbar は nowrap の1行・.page-chips が flex:1/min-width:0/横スクロール・menu slot は右端で .page-menu 単独行規則は無く・絞り込みボタンは390px以下で語が消え44pxに畳む', () => {
+    // the toolbar is one row at every width: the chips area takes the rest
+    // and scrolls sideways, so nothing ever wraps (the 720px column-ization
+    // of the two-row design stays deleted)
+    const bars = rulesFor('.page-toolbar')
+    expect(bars.length, '.page-toolbar rules').toBeGreaterThan(0)
+    expect(bars.some((r) => decl(r.body, 'flex-wrap') === 'nowrap')).toBe(true)
+    const chips = rulesFor('.page-toolbar .page-chips')
+    expect(chips.length, '.page-toolbar .page-chips rules').toBeGreaterThan(0)
+    expect(chips.some((r) => decl(r.body, 'flex') === '1' && decl(r.body, 'min-width') === '0')).toBe(true)
+    expect(rulesFor('.page-chips').some((r) => decl(r.body, 'overflow-x') === 'auto')).toBe(true)
+    // the "..." menu slot pins to the right end on the same row — no
+    // standalone .page-menu row rule survives the merge (§6-5)
+    expect(rulesFor('.page-menu')).toHaveLength(0)
+    const menu = rulesFor('.page-toolbar-menu')
+    expect(menu.length, '.page-toolbar-menu rules').toBeGreaterThan(0)
+    expect(menu.some((r) => decl(r.body, 'margin-left') === 'auto' && decl(r.body, 'flex') === 'none')).toBe(true)
+    // the 絞り込み button folds to the 44px icon + count badge through
+    // 390px (§6-3's 360px budget: 44 + 8 + chips ~232 + 44 = 328px)
+    const n390 = blockAfter(/@media\s*\(max-width:\s*390px\)/)
+    expect(n390, 'max-width: 390px block').toBeDefined()
+    expect(rulesFor('.toolbar-filter-word', n390!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+    expect(rulesFor('.toolbar-filter-btn', n390!).some((r) => decl(r.body, 'width') === '44px')).toBe(true)
+    expect(rulesFor('.toolbar-filter-count').length, '.toolbar-filter-count rules').toBeGreaterThan(0)
+    // the 720px column-ization stays gone
+    const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
+    if (n720 !== undefined) expect(n720).not.toMatch(/\.page-toolbar/)
+  })
+})
+
+describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
+  it('[covers:web-home.dashboard-month-overview] KPI カードは padding 12px の2行（1行目 .kpi-head の flex 行・金額 1.5rem / 2行目 .kpi-sub は1行 ellipsis で3列 grid・dt・dd は無い）', () => {
+    // the KPI card itself: 12px padding at every width (§6-4's ~64px card)
+    expect(rulesFor('.card.kpi').some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
+    // the first row: label + amount + the diff chip pinned right (baseline)
+    const head = rulesFor('.kpi-head')
+    expect(head.length, '.kpi-head rules').toBeGreaterThan(0)
+    expect(head.some((r) => decl(r.body, 'display') === 'flex' && decl(r.body, 'min-width') === '0')).toBe(true)
+    expect(rulesFor('.kpi-value').some((r) => decl(r.body, 'font-size') === '1.5rem')).toBe(true)
+    // the second row: one 0.8rem summary line joined with 「・」, ellipsized
+    const sub = rulesFor('.kpi-sub')
+    expect(sub.length, '.kpi-sub rules').toBeGreaterThan(0)
+    expect(
+      sub.some(
+        (r) =>
+          decl(r.body, 'white-space') === 'nowrap' &&
+          decl(r.body, 'overflow') === 'hidden' &&
+          decl(r.body, 'text-overflow') === 'ellipsis' &&
+          decl(r.body, 'display') === undefined &&
+          decl(r.body, 'grid-template-columns') === undefined,
+      ),
+    ).toBe(true)
+    // the 3-column dl grid is gone entirely (no dt/dd rules either)
+    expect(css).not.toMatch(/\.kpi-sub dt/)
+    expect(css).not.toMatch(/\.kpi-sub dd/)
+    expect(rulesFor('.kpi .label').some((r) => decl(r.body, 'font-size') === '0.8rem')).toBe(true)
+  })
+
+  it('[covers:web-home.dashboard-month-overview] 720px 以下は gap 0.75rem・カード padding 12px・ドーナツ 120px・推移 .bars 96px', () => {
+    const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
+    expect(n720, 'max-width: 720px block').toBeDefined()
+    expect(rulesFor('.dash-grid', n720!).some((r) => decl(r.body, 'gap') === '0.75rem')).toBe(true)
+    expect(rulesFor('.card', n720!).some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
+    expect(rulesFor('.donut', n720!).some((r) => decl(r.body, 'width') === '120px' && decl(r.body, 'height') === '120px')).toBe(true)
+    expect(rulesFor('.bars', n720!).some((r) => decl(r.body, 'height') === '96px')).toBe(true)
+    // the base sizes the narrow band shrinks from
+    expect(rulesFor('.donut').some((r) => decl(r.body, 'width') === '170px')).toBe(true)
+    expect(rulesFor('.bars').some((r) => decl(r.body, 'height') === '150px')).toBe(true)
+  })
+
+  it('[covers:web-receipts.dashboard] レシート行は1行 grid（3.2rem minmax(0,1fr) auto auto）で .recent-icon の規則は無く、日ごと見出しは 28px', () => {
+    // the one-line receipt row: date / store (ellipsis) / labels / amount
+    expect(
+      rulesFor('.recent-row').map((r) => decl(r.body, 'grid-template-columns')),
+    ).toContain('3.2rem minmax(0, 1fr) auto auto')
+    // the 34px icon column is gone from the stylesheet entirely
+    expect(rulesFor('.recent-icon')).toHaveLength(0)
+    expect(css).not.toMatch(/\.recent-icon/)
+    expect(rulesFor('.day-head').some((r) => decl(r.body, 'min-height') === '28px')).toBe(true)
+    // review L5: the labels cell never wraps — overflow clips the dots (or
+    // the 削除済み badge row) so the row keeps its one 44px line
+    expect(
+      rulesFor('.row-labels').some(
+        (r) => decl(r.body, 'flex-wrap') === 'nowrap' && decl(r.body, 'overflow') === 'hidden',
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('ranked row single line (TASK-75 §6-4)', () => {
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は 10px minmax(0,1fr) auto auto auto 12px の1行44px・下端2pxの linear-gradient・container query で差額を隠す・.meter 規則は無い', () => {
+    const rows = rulesFor('.ranked-row')
+    expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
+    expect(
+      rows.some(
+        (r) =>
+          decl(r.body, 'grid-template-columns') === '10px minmax(0, 1fr) auto auto auto 12px' &&
+          decl(r.body, 'gap') === '8px' &&
+          decl(r.body, 'min-height') === '44px' &&
+          decl(r.body, 'container-type') === 'inline-size',
+      ),
+    ).toBe(true)
+    // the share bar rides the row's bottom edge as a 2px gradient (no meter);
+    // origin border-box spans the padding too so the bar reaches the row's
+    // rounded ends (review L1 — padding-box 100% stops short of the sides)
+    expect(
+      rows.some(
+        (r) =>
+          /linear-gradient/.test(decl(r.body, 'background-image') ?? '') &&
+          decl(r.body, 'background-origin') === 'border-box' &&
+          decl(r.body, 'background-size') === '100% 2px' &&
+          decl(r.body, 'background-position') === 'bottom',
+      ),
+    ).toBe(true)
+    // the diff column: 0.75rem, danger up / accent down
+    expect(rulesFor('.ranked-diff').some((r) => decl(r.body, 'font-size') === '0.75rem')).toBe(true)
+    expect(rulesFor('.ranked-diff.up').some((r) => decl(r.body, 'color') === 'var(--bb-danger)')).toBe(true)
+    expect(rulesFor('.ranked-diff.down').some((r) => decl(r.body, 'color') === 'var(--bb-accent)')).toBe(true)
+    // through 340px of the row's own container the diff cell folds away
+    const c340 = blockAfter(/@container\s*\(max-width:\s*340px\)/)
+    expect(c340, '@container (max-width: 340px) block').toBeDefined()
+    expect(rulesFor('.ranked-diff', c340!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+    // the standalone meter element is gone from the ranked list (and the
+    // stylesheet — Home's rank rows became RankedList rows too)
+    expect(css).not.toMatch(/\.meter/)
+    // the link hover keeps the gradient: background-color, never the shorthand
+    for (const r of rulesFor('a.ranked-row.is-link:hover')) {
+      expect(decl(r.body, 'background'), 'hover background shorthand').toBeUndefined()
+    }
+    expect(rulesFor('a.ranked-row.is-link:hover').some((r) => decl(r.body, 'background-color') === 'var(--bb-hover)')).toBe(true)
   })
 })
 

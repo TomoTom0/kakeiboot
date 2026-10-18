@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
 import { useDataApi, type CategoryNode, type StatsResult, type StatsRow } from '../api/data'
+import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
@@ -148,10 +149,17 @@ function diffText(d: number | null | undefined): string {
 
 <template>
   <div class="view-page">
-    <PageMenu
-      ariaLabel="その他の操作"
-      :items="menuItems"
-    />
+    <!-- the chip-less one-row toolbar (TASK-75 §6-3/§6-5): the "..." menu
+         alone rides the row's right end — no standalone menu row above the
+         dashboard cards -->
+    <BrowseToolbar>
+      <template #menu>
+        <PageMenu
+          ariaLabel="その他の操作"
+          :items="menuItems"
+        />
+      </template>
+    </BrowseToolbar>
 
     <p
       v-if="error"
@@ -181,35 +189,23 @@ function diffText(d: number | null | undefined): string {
         class="card kpi"
         data-test="kpi"
       >
-        <span class="label">{{ period.label }}の支出</span>
-        <strong
-          class="kpi-value"
-          data-test="total"
-        >{{ formatYen(totals.value) }}</strong>
-        <span
-          v-if="totals.diff !== null"
-          class="chip"
-          :class="totals.diff > 0 ? 'chip-up' : totals.diff < 0 ? 'chip-down' : ''"
-        >{{ period.compareLabel }}比 {{ diffText(totals.diff) }}</span>
-        <dl class="kpi-sub">
-          <div>
-            <dt>利用した店</dt>
-            <dd>{{ rows.length }}</dd>
-          </div>
-          <div>
-            <dt>最多</dt>
-            <dd
-              :class="{ 'clamp-2': !!rows[0]?.labels[0] }"
-              :title="rows[0]?.labels[0] ?? undefined"
-            >
-              {{ rows[0]?.labels[0] ?? '-' }}
-            </dd>
-          </div>
-          <div>
-            <dt>レシート</dt>
-            <dd>{{ totals.receipts }} 件</dd>
-          </div>
-        </dl>
+        <p class="kpi-head">
+          <span class="label">{{ period.label }}の支出</span>
+          <strong
+            class="kpi-value"
+            data-test="total"
+          >{{ formatYen(totals.value) }}</strong>
+          <span
+            v-if="totals.diff !== null"
+            class="chip"
+            :class="totals.diff > 0 ? 'chip-up' : totals.diff < 0 ? 'chip-down' : ''"
+          >{{ period.compareLabel }}比 {{ diffText(totals.diff) }}</span>
+        </p>
+        <!-- the 最多 name keeps the full-text title (review L2): the summary
+             line ellipsizes, the title is the one way to see the whole name -->
+        <p class="kpi-sub">
+          利用した店 {{ rows.length }} ・ 最多 <span :title="rows[0]?.labels[0] ?? undefined">{{ rows[0]?.labels[0] ?? '-' }}</span> ・ レシート {{ totals.receipts }}件
+        </p>
       </section>
 
       <section
@@ -260,7 +256,6 @@ function diffText(d: number | null | undefined): string {
         <RankedList
           v-else
           :rows="rows"
-          :compare-label="period.compareLabel"
           :to="rowTo"
         />
       </section>

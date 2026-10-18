@@ -636,7 +636,7 @@ describe('Receipts', () => {
 
   it('[covers:web-receipts.list-and-detail] 一覧（件数・合計）から文脈付きリンクで詳細の Feed へ', async () => {
     const { wrapper, router } = await mountApp('/receipts?store=Aマート')
-    expect(wrapper.find('[data-test="summary"]').text()).toContain('1 件')
+    expect(wrapper.find('[data-test="summary"]').text()).toContain('レシート 1件')
     expect(wrapper.find('[data-test="summary"]').text()).toContain('400円')
     expect(wrapper.find('[data-test="receipt-101"]').text()).toContain('Aマート')
     // the row link carries the list context (period + filters)
@@ -818,7 +818,7 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     })
   }
 
-  it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] topbar ラベルチップ+dialog の選択は URL labels に同期し label_colors で流れ、チップはラベル+LabelChip、行に LabelDots compact', async () => {
+  it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] topbar ラベルチップ+dialog の選択は URL labels に同期し label_colors で流れ、条件チップは1色1チップ（×はその色だけ外す）、行に LabelDots compact', async () => {
     const list = withRowLabels()
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/receipts')
@@ -845,16 +845,22 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     expect(wrapper.find('[data-test="label-filter-blue"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.find('[data-test="filter-labels"]').classes()).toContain('active')
 
-    // the chip row shows the word + sm LabelChips (no color-name text) and
-    // the x clears the selection
-    const chips = wrapper.findAll('.filter-chip')
-    const labelChip = chips.find((c) => c.text().includes('ラベル'))
-    expect(labelChip).toBeTruthy()
-    const chipChips = labelChip!.findAll('.label-chip')
-    expect(chipChips).toHaveLength(2)
-    expect(chipChips[0]!.classes()).toContain('label-red')
-    expect(labelChip!.text()).not.toMatch(/赤|黄|緑|青|紫/)
-    await labelChip!.find('.chip-x').trigger('click')
+    // the condition chips ride the one-row toolbar (TASK-75): one chip per
+    // selected color in the FilterChips form — the title when the ledger
+    // defined one, the color key otherwise; no color-name text
+    const chips = wrapper.find('[data-test="page-chips"]')
+    expect(chips.exists()).toBe(true)
+    expect(chips.text()).toContain('red')
+    expect(chips.text()).toContain('blue')
+    expect(chips.text()).not.toMatch(/赤|黄|緑|青|紫/)
+    // one chip's x drops that color alone; the other stays filtering
+    await chips.find('[data-test="chip-x-label-red"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.query['labels']).toBe('blue')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['blue'] }))
+    expect(wrapper.find('[data-test="page-chips"]').text()).not.toContain('red')
+    // the last chip's x clears the selection and the topbar chip follows
+    await wrapper.find('[data-test="page-chips"] [data-test="chip-x-label-blue"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query['labels']).toBeUndefined()
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: [] }))

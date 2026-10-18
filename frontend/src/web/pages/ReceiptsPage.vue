@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import LabelChip from '@/shared/components/LabelChip.vue'
 import LabelDots from '@/shared/components/LabelDots.vue'
-import { labelIndexOf, parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
+import { parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import type { FilterChip } from '../components/FilterChips.vue'
 import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { usePageReady } from '../composables/usePageReady'
-import { dayLabel } from '../composables/period'
+import { dayLabel, shortDate } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
@@ -185,12 +186,6 @@ function clearFilter(key: 'store' | 'item' | 'category'): void {
   void load()
 }
 
-function clearLabels(): void {
-  // the watch(period.labelQuery) above adopts the emptied store, syncs the
-  // URL and re-queries
-  period.setLabelColors([])
-}
-
 function syncQuery(): void {
   // keep the period and the filters in the URL: rows link back into the feed
   // with this same context
@@ -206,6 +201,28 @@ const activeFilters = computed(() =>
     ] as const
   ).filter(([, , v]) => v.trim() !== ''),
 )
+
+/** The toolbar's condition chips (TASK-75: the FilterChips form): the text
+ * filters as「店: イオン」style chips and one chip per selected label color
+ * (the title when the ledger defined one, the color key otherwise — the same
+ * form as the detail pages). */
+const chips = computed<FilterChip[]>(() => [
+  ...activeFilters.value.map(([key, label, value]) => ({ key, label: `${label}: ${value}` })),
+  ...filters.labelColors.map((c) => ({ key: `label-${c}`, label: labelDefOf(c).title ?? c })),
+])
+
+/** A chip's x: text filters clear through clearFilter, a label chip drops
+ * just its color (the surviving colors keep filtering through the
+ * watch(period.labelQuery) path). */
+function removeChip(key: string): void {
+  if (key === 'store' || key === 'item' || key === 'category') {
+    clearFilter(key)
+    return
+  }
+  if (key.startsWith('label-')) {
+    period.setLabelColors(filters.labelColors.filter((c) => c !== (key.slice(6) as LabelColor)))
+  }
+}
 
 const average = computed(() => (totalCount.value ? Math.round(sumAmount.value / totalCount.value) : 0))
 
@@ -251,19 +268,13 @@ const groups = computed(() => {
     ref="rootEl"
     class="view-page"
   >
-    <div class="page-toolbar">
-      <button
-        class="btn btn-small"
-        :aria-expanded="filtersOpen"
-        data-test="filters-toggle"
-        @click="filtersOpen = !filtersOpen"
-      >
-        <AppIcon
-          name="search"
-          :size="16"
-        />絞り込み
-      </button>
-    </div>
+    <BrowseToolbar
+      filter-button
+      :filters-open="filtersOpen"
+      :chips="chips"
+      @toggle-filters="filtersOpen = !filtersOpen"
+      @remove="removeChip"
+    />
 
     <form
       v-if="filtersOpen"
@@ -303,44 +314,6 @@ const groups = computed(() => {
     </form>
 
     <p
-      v-if="activeFilters.length || filters.labelColors.length"
-      class="filter-chips"
-    >
-      <span
-        v-for="[key, label, value] in activeFilters"
-        :key="key"
-        class="filter-chip"
-      >{{ label }}: {{ value }}<button
-        class="chip-x"
-        :aria-label="`${label}の条件を外す`"
-        :data-test="`clear-${key}`"
-        @click="clearFilter(key)"
-      ><AppIcon
-        name="close"
-        :size="14"
-      /></button></span>
-      <span
-        v-if="filters.labelColors.length"
-        class="filter-chip label-filter-chips"
-      >ラベル<LabelChip
-        v-for="c in filters.labelColors"
-        :key="c"
-        class="chip-label"
-        :label="labelDefOf(c)"
-        :index="labelIndexOf(c)"
-        size="sm"
-      /><button
-        class="chip-x"
-        aria-label="ラベルの条件を外す"
-        data-test="clear-labels"
-        @click="clearLabels"
-      ><AppIcon
-        name="close"
-        :size="14"
-      /></button></span>
-    </p>
-
-    <p
       v-if="error"
       class="msg msg-error"
       role="alert"
@@ -359,22 +332,13 @@ const groups = computed(() => {
         class="card kpi"
         data-test="summary"
       >
-        <span class="label">{{ period.label }}</span>
-        <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
-        <dl class="kpi-sub">
-          <div>
-            <dt>レシート</dt>
-            <dd>{{ totalCount }} 件</dd>
-          </div>
-          <div>
-            <dt>1件あたり</dt>
-            <dd>{{ formatYen(average) }}</dd>
-          </div>
-          <div>
-            <dt>{{ period.compareLabel }}</dt>
-            <dd>{{ formatYen(overview?.totals.compare_value ?? null) }}</dd>
-          </div>
-        </dl>
+        <p class="kpi-head">
+          <span class="label">{{ period.label }}</span>
+          <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
+        </p>
+        <p class="kpi-sub">
+          レシート {{ totalCount }}件 ・ 1件あたり {{ formatYen(average) }} ・ {{ period.compareLabel }} {{ formatYen(overview?.totals.compare_value ?? null) }}
+        </p>
       </section>
 
       <section
@@ -385,7 +349,6 @@ const groups = computed(() => {
         <RankedList
           v-if="(payments?.sections[0]?.rows.length ?? 0) > 0"
           :rows="payments!.sections[0]!.rows"
-          :compare-label="period.compareLabel"
           colors
         />
         <p
@@ -461,26 +424,21 @@ const groups = computed(() => {
                 class="recent-row receipt-row"
                 :class="{ deleted: r.deleted_at }"
               >
-                <span class="recent-icon"><AppIcon
-                  :name="r.has_image ? 'image' : 'receipt'"
-                  :size="18"
+                <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
+                <span
+                  class="recent-store truncate"
+                  data-test="store-name"
+                >{{ r.store_name ?? '店名なし' }}</span>
+                <span
+                  class="row-labels"
+                  data-test="row-labels"
+                ><span
+                  v-if="r.deleted_at"
+                  class="badge badge-danger"
+                >削除済み</span><LabelDots
+                  :labels="r.labels ?? []"
+                  compact
                 /></span>
-                <span class="recent-main">
-                  <span
-                    class="recent-store"
-                    data-test="store-name"
-                  >{{ r.store_name ?? '店名なし' }}</span>
-                  <span class="muted small">{{ r.purchased_time ?? '' }} {{ r.item_count }} 品目<span
-                    v-if="r.deleted_at"
-                    class="badge badge-danger"
-                  >削除済み</span><span
-                    class="row-labels"
-                    data-test="row-labels"
-                  ><LabelDots
-                    :labels="r.labels ?? []"
-                    compact
-                  /></span></span>
-                </span>
                 <span class="amount">{{ formatYen(r.amount) }}</span>
               </RouterLink>
             </li>

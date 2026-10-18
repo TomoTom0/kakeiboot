@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery, parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
+import LabelDots from '@/shared/components/LabelDots.vue'
 import {
   useDataApi,
   type ItemSummary,
@@ -12,7 +13,8 @@ import {
   type StatsRow,
 } from '../api/data'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import FilterChips, { type FilterChip } from '../components/FilterChips.vue'
+import BrowseToolbar from '../components/BrowseToolbar.vue'
+import type { FilterChip } from '../components/FilterChips.vue'
 import PageHead from '../components/PageHead.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
@@ -366,11 +368,6 @@ const parentTo = computed<RouteLocationRaw>(() =>
     : { path: `/categories/${view.value.topId}`, query: { ...route.query } },
 )
 const backLabel = computed(() => view.value?.parentName ?? 'カテゴリ一覧')
-
-function diffText(d: number | null | undefined): string {
-  if (d === null || d === undefined || d === 0) return '±0円'
-  return `${d > 0 ? '+' : '−'}${formatYen(Math.abs(d))}`
-}
 </script>
 
 <template>
@@ -401,7 +398,9 @@ function diffText(d: number | null | undefined): string {
           />
         </template>
       </PageHead>
-      <FilterChips
+      <!-- the chips ride the one-row toolbar under the heading (TASK-75:
+           the TASK-74 provisional placement swapped, interface unchanged) -->
+      <BrowseToolbar
         :chips="chips"
         @remove="removeChip"
       />
@@ -415,31 +414,9 @@ function diffText(d: number | null | undefined): string {
           class="card kpi"
           data-test="kpi"
         >
-          <span class="label">{{ period.label }}の支出</span>
-          <strong
-            class="kpi-value"
-            data-test="total"
-          >{{ formatYen(totals.value) }}</strong>
-          <span
-            v-if="totals.diff !== null"
-            class="chip"
-            :class="totals.diff > 0 ? 'chip-up' : totals.diff < 0 ? 'chip-down' : ''"
-          >{{ period.compareLabel }}比 {{ diffText(totals.diff) }}</span>
-          <dl class="kpi-sub">
-            <div>
-              <dt>レシート</dt>
-              <dd>{{ totals.receipts }} 件</dd>
-            </div>
-            <div>
-              <dt>最多の店</dt>
-              <dd
-                :class="{ 'clamp-2': !!topStore }"
-                :title="topStore"
-              >
-                {{ topStore }}
-              </dd>
-            </div>
-          </dl>
+          <p class="kpi-sub">
+            レシート {{ totals.receipts }}件 ・ 最多の店 {{ topStore }}
+          </p>
         </section>
 
         <section
@@ -457,7 +434,6 @@ function diffText(d: number | null | undefined): string {
           <RankedList
             v-else
             :rows="subRows"
-            :compare-label="period.compareLabel"
             :to="subTo"
           />
         </section>
@@ -476,7 +452,6 @@ function diffText(d: number | null | undefined): string {
           <RankedList
             v-else
             :rows="storeRows"
-            :compare-label="period.compareLabel"
             :to="storeTo"
           />
         </section>
@@ -557,10 +532,11 @@ function diffText(d: number | null | undefined): string {
                 :data-test="`recent-${r.receipt_id}`"
               >
                 <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-                <span class="recent-main">
-                  <span class="recent-store">{{ r.store_name ?? '店名なし' }}</span>
-                  <span class="muted small">{{ r.item_count }} 品目</span>
-                </span>
+                <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
+                <span class="row-labels"><LabelDots
+                  :labels="r.labels ?? []"
+                  compact
+                /></span>
                 <span class="amount">{{ formatYen(r.amount) }}</span>
               </RouterLink>
             </li>
