@@ -541,3 +541,29 @@ describe('ledger palette CSS', () => {
     expect(rulesFor('.ledger-chip', rm!).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
   })
 })
+
+describe('receipts filter popover (TASK-76 §6-3)', () => {
+  it('[covers:web-receipts.filter-popover] .filters は dialog 内1列（旧3列 grid・720px 1列化は削除）・左端トリガの dialog は左寄せ', () => {
+    // the form lives inside the toolbar button's PopoverPanel now: one
+    // column of fields at every width (the three-across card grid and its
+    // 720px fold are gone), with a floor so the anchored dialog keeps a
+    // usable width off its shrink-to-fit host
+    expect(
+      rulesFor('.filters').some(
+        (r) => decl(r.body, 'grid-template-columns') === '1fr' && decl(r.body, 'min-width') === '16rem',
+      ),
+    ).toBe(true)
+    expect(css).not.toMatch(/\.filters[^{]*\{[^}]*repeat\(3/)
+    const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
+    expect(n720, 'max-width: 720px block').toBeDefined()
+    expect(n720!).not.toMatch(/\.filters/)
+    // the anchored 絞り込み dialog hangs left-aligned off the row's left-end
+    // trigger (the shared right:0 serves the right-end menus); the sheet
+    // variant below 480px is fixed-position and unaffected
+    expect(
+      rulesFor('.filters-popover .popover-dialog').some(
+        (r) => decl(r.body, 'left') === '0' && decl(r.body, 'right') === 'auto',
+      ),
+    ).toBe(true)
+  })
+})

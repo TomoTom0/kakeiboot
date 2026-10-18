@@ -6,7 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { setDataApi, type DataApi, type StatsQuery, type StatsRow } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import RankedList from '@/web/components/RankedList.vue'
-import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
+import { ME, cleanup, mockFetch, mountApp, setMediaMatches, settle } from './helpers'
 
 let api: DataApi
 
@@ -903,5 +903,80 @@ describe('Detail page resilience (TASK-74 review)', () => {
     expect(storeChips.text()).toContain('旅行')
     expect(storeChips.text()).not.toContain('blue')
     expect(store.wrapper.find('[data-test="chip-x-label-blue"]').exists()).toBe(true)
+  })
+})
+
+describe('ReceiptsPage 絞り込み popover (TASK-76 §6-3)', () => {
+  it('[covers:web-receipts.filter-popover] フォームは本文のインライン折りたたみでなくツールバー絞り込みボタンの PopoverPanel（role=dialog）: 開いても本文を消費せず、適用で閉じ URL 同期、Escape・外側押下・480px 以下の scrim で閉じトリガへ', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/receipts', { attach: true })
+    const toggle = () => wrapper.find('[data-test="filters-toggle"]')
+    // closed: neither the dialog nor the form is in the DOM — the old inline
+    // fold used to put data-test=filters in the page body only while open,
+    // and even then it consumed body lines; both are gone
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="filters"]').exists()).toBe(false)
+    expect(toggle().attributes('aria-expanded')).toBe('false')
+    expect(toggle().classes()).toContain('toolbar-filter-btn')
+
+    // opening grows only the dialog: the form lives inside it, hosted on the
+    // toolbar row's popover, so nothing is added below the toolbar
+    await toggle().trigger('click')
+    await settle()
+    const dialog = wrapper.find('[role="dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(toggle().attributes('aria-expanded')).toBe('true')
+    expect(toggle().attributes('aria-controls')).toBe(dialog.attributes('id'))
+    expect(dialog.find('[data-test="filters"]').exists()).toBe(true)
+    expect(dialog.find('[data-test="store"]').exists()).toBe(true)
+    expect(dialog.find('[data-test="item"]').exists()).toBe(true)
+    expect(dialog.find('[data-test="category"]').exists()).toBe(true)
+    expect(dialog.find('[data-test="include-deleted"]').exists()).toBe(true)
+    expect(wrapper.find('.page-toolbar [role="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('.view-page > [data-test="filters"]').exists()).toBe(false)
+
+    // apply: the dialog closes and the same URL sync + re-query narrow the
+    // list (the filter behavior itself is unchanged)
+    await dialog.find('[data-test="item"]').setValue('牛乳')
+    await dialog.find('[data-test="filters"]').trigger('submit')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(router.currentRoute.value.query.item).toBe('牛乳')
+    expect(wrapper.find('[data-test="summary"]').text()).toContain('レシート 1件')
+    expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(false)
+
+    // Escape closes and returns the focus to the trigger (usePopover)
+    await toggle().trigger('click')
+    await settle()
+    ;(document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(toggle().element)
+
+    // a pointer press outside the popover closes it too
+    await toggle().trigger('click')
+    await settle()
+    for (const type of ['pointerdown', 'mousedown', 'click']) {
+      document.body.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    }
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+
+    // through 480px the sheet-narrow variant shows the scrim; its click
+    // closes the dialog the same way
+    cleanup()
+    setMediaMatches('(max-width: 480px)', true)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const narrow = await mountApp('/receipts', { attach: true })
+    await narrow.wrapper.find('[data-test="filters-toggle"]').trigger('click')
+    await settle()
+    const scrim = narrow.wrapper.find('.popover-scrim')
+    expect(scrim.exists()).toBe(true)
+    await scrim.trigger('click')
+    await settle()
+    expect(narrow.wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(narrow.wrapper.find('.popover-scrim').exists()).toBe(false)
   })
 })

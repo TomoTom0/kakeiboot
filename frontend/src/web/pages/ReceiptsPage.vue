@@ -8,6 +8,7 @@ import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
+import PopoverPanel from '../components/PopoverPanel.vue'
 import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -269,49 +270,76 @@ const groups = computed(() => {
     class="view-page"
   >
     <BrowseToolbar
-      filter-button
-      :filters-open="filtersOpen"
       :chips="chips"
-      @toggle-filters="filtersOpen = !filtersOpen"
       @remove="removeChip"
-    />
-
-    <form
-      v-if="filtersOpen"
-      class="card filters"
-      data-test="filters"
-      @submit.prevent="applyFilters"
     >
-      <label class="field"><span>店名</span><input
-        v-model="draft.store"
-        type="search"
-        data-test="store"
-      ></label>
-      <label class="field"><span>品名</span><input
-        v-model="draft.item"
-        type="search"
-        data-test="item"
-      ></label>
-      <label class="field"><span>カテゴリ（例: 食費、食費/外食、未分類）</span><input
-        v-model="draft.category"
-        type="search"
-        data-test="category"
-      ></label>
-      <label class="check"><input
-        v-model="draft.includeDeleted"
-        type="checkbox"
-        data-test="include-deleted"
-      > 削除済みも一覧に表示</label>
-      <div class="actions">
-        <button
-          class="btn btn-primary"
-          type="submit"
-          data-test="search"
+      <template #filter>
+        <!-- TASK-76 (§6-3): the 絞り込み form opens in the button's
+             PopoverPanel instead of folding inline, so the page body below
+             the toolbar never grows — the sheet-narrow variant turns it into
+             a bottom sheet with a scrim through 480px -->
+        <PopoverPanel
+          v-model:open="filtersOpen"
+          class="filters-popover"
+          variant="sheet-narrow"
+          label="レシートを絞り込み"
         >
-          適用
-        </button>
-      </div>
-    </form>
+          <template #trigger="{ 'aria-expanded': expanded, 'aria-controls': controls }">
+            <button
+              type="button"
+              class="btn btn-small toolbar-filter-btn"
+              :aria-expanded="expanded"
+              :aria-controls="controls"
+              data-test="filters-toggle"
+            >
+              <AppIcon
+                name="search"
+                :size="16"
+              /><span class="toolbar-filter-word">絞り込み</span><span
+                v-if="chips.length > 0"
+                class="toolbar-filter-count"
+              >{{ chips.length }}</span>
+            </button>
+          </template>
+          <form
+            class="filters"
+            data-test="filters"
+            @submit.prevent="applyFilters"
+          >
+            <label class="field"><span>店名</span><input
+              v-model="draft.store"
+              type="search"
+              data-autofocus
+              data-test="store"
+            ></label>
+            <label class="field"><span>品名</span><input
+              v-model="draft.item"
+              type="search"
+              data-test="item"
+            ></label>
+            <label class="field"><span>カテゴリ（例: 食費、食費/外食、未分類）</span><input
+              v-model="draft.category"
+              type="search"
+              data-test="category"
+            ></label>
+            <label class="check"><input
+              v-model="draft.includeDeleted"
+              type="checkbox"
+              data-test="include-deleted"
+            > 削除済みも一覧に表示</label>
+            <div class="actions">
+              <button
+                class="btn btn-primary"
+                type="submit"
+                data-test="search"
+              >
+                適用
+              </button>
+            </div>
+          </form>
+        </PopoverPanel>
+      </template>
+    </BrowseToolbar>
 
     <p
       v-if="error"
