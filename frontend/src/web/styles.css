@@ -1726,6 +1726,13 @@ a.sub-row:hover { background: var(--bb-hover); }
   /* the band's budget counts the mark alone (28px, §11-4): with the three
      filter chips the compact logo's "kb" word makes the topbar 9px over */
   .topbar-logo-compact .logo-word { display: none; }
+  /* /search is ledger-scoped since TASK-74, so the band carries the ledger
+     chip too: the q word on the search chip (18px over the 44px icon entry)
+     made the topbar 13px over. The word folds away here — the same recipe
+     as the logo's "kb" — leaving the icon entry (aria-label keeps the term
+     and the page's own input shows it in full) */
+  .filter-chip-search:has(.chip-label-q) { width: 44px; padding: 0; }
+  .chip-label-q { display: none; }
 }
 
 /* the period chip swaps to the short label within the 56px budget through

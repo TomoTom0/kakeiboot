@@ -509,10 +509,17 @@ test.describe('search page (360x780)', () => {
     const m = await page.evaluate(() => ({
       head: !!document.querySelector('.search-head'),
       tabs: !!document.querySelector('.search-tabs'),
+      // TASK-77: /search carries the ledger chip since TASK-74, so at 360px
+      // the search chip's q word folds away (icon-only entry)
+      qFold:
+        document.querySelector('.chip-label-q') === null
+          ? 'missing'
+          : getComputedStyle(document.querySelector('.chip-label-q')!).display,
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     }))
     expect(m.head, '.search-head renders').toBe(true)
     expect(m.tabs, '.search-tabs renders').toBe(true)
+    expect(m.qFold, 'the search chip q word folds away at 360px').toBe('none')
     expect(m.overflow, 'no horizontal overflow').toBeLessThanOrEqual(1)
 
     // the committed term renders result rows

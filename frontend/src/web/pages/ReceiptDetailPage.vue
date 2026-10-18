@@ -267,6 +267,17 @@ function moreCurrent(a: IntersectionObserverEntry, b: IntersectionObserverEntry)
   return Math.abs(a.boundingClientRect.top - line) <= Math.abs(b.boundingClientRect.top - line) ? a : b
 }
 
+/** The panel's live viewport share in px — the part visible below the sticky
+ * feed nav (anything higher sits behind the topbar / nav). -1 when the
+ * layout is unmeasurable (jsdom rects are all zero): the caller then trusts
+ * the delivery's entries instead. */
+function visibleShare(el: Element): number {
+  const r = el.getBoundingClientRect()
+  if (r.height === 0) return -1
+  const line = feedEl.value?.querySelector('.feed-nav')?.getBoundingClientRect().bottom ?? 0
+  return Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, line))
+}
+
 function onIntersect(entries: IntersectionObserverEntry[]): void {
   // While an upward-expansion compensation is pending, the layout above the
   // visible panel is transient (panels growing from the placeholder height).
@@ -294,6 +305,18 @@ function onIntersect(entries: IntersectionObserverEntry[]): void {
   if (!m) return
   const id = Number(m[1])
   if (editing.value || id === currentId.value) return
+  // A partial delivery names only the targets whose intersection changed:
+  // the panel below the landed one peeking at the viewport bottom (ratio
+  // ~0.1) arrives alone while its content settles, without the dominant
+  // current panel taking part. Re-currenting on it rewrote the URL one
+  // panel ahead, so the next button move skipped a panel (TASK-77). The
+  // candidate must dominate the live viewport — more visible than the
+  // current panel below the sticky nav — before it can take over.
+  // Unmeasurable rects (jsdom) keep trusting the entries.
+  const curEl = currentId.value === null ? null : panelEl(currentId.value)
+  const candShare = visibleShare(best.target)
+  const curShare = curEl === null ? -1 : visibleShare(curEl)
+  if (candShare >= 0 && curShare >= 0 && candShare <= curShare) return
   if (id !== lastReplacedId) {
     lastReplacedId = id
     void router.replace({ name: 'receipt', params: { id }, query: contextQuery.value })

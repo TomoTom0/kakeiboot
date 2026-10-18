@@ -195,6 +195,18 @@ describe('topbar filter bar CSS (TASK-44)', () => {
           decl(r.body, 'max-width') !== undefined,
       ),
     ).toBe(true)
+    // TASK-77: /search is ledger-scoped since TASK-74, so the 360px band
+    // carries the ledger chip too and the q word folds away there (the same
+    // word-hiding recipe as the logo's "kb") — the chip returns to the 44px
+    // icon entry; aria-label keeps the term and the page's own input shows it
+    const n360 = blockAfter(/@media\s*\(max-width:\s*360px\)/)
+    expect(n360, 'max-width: 360px block').toBeDefined()
+    expect(rulesFor('.chip-label-q', n360!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
+    expect(
+      rulesFor('.filter-chip-search:has(.chip-label-q)', n360!).some(
+        (r) => decl(r.body, 'width') === '44px' && decl(r.body, 'padding') === '0',
+      ),
+    ).toBe(true)
   })
 
   it('[covers:web-search.layout-real] /search の2行構成（.search-head・.search-tabs）と品目2行・件数行の規則がある', () => {

@@ -13,7 +13,7 @@ import {
 } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { useSessionStore } from '@/web/stores/session'
-import { ME, cleanup, intersect, mockFetch, mountApp, scrollMocks, setReducedMotion, settle } from './helpers'
+import { ME, cleanup, intersect, mockFetch, mountApp, MockIntersectionObserver, scrollMocks, setReducedMotion, settle } from './helpers'
 
 let api: DataApi
 
@@ -614,5 +614,73 @@ describe('Feed direct link initial scroll', () => {
     expect(panelIds(wrapper)).toEqual(range(101, 112))
     // … but its initial scroll aborted on the stale generation: no landing
     expect(scrollMocks().intoView).toHaveLength(0)
+  })
+})
+
+// TASK-77: a partial IO delivery — only the panel below the landed one,
+// peeking at the viewport bottom while its content settles — must not steal
+// current. It once rewrote the URL one panel ahead, so the next button move
+// skipped a panel (browser-observed on the TASK-74 panel heights: the feed
+// walk's landing poll failed at |top - expected| = one panel height).
+describe('Feed current dominance (TASK-77)', () => {
+  /** A one-entry delivery for `el` — a partial one: the current panel, whose
+   * intersection did not change, is not part of it. */
+  function deliverOne(el: Element, ratio: number): void {
+    for (const o of MockIntersectionObserver.instances) {
+      if (![...o.targets].includes(el)) continue
+      const rect = el.getBoundingClientRect()
+      o.callback(
+        [
+          {
+            target: el,
+            isIntersecting: true,
+            intersectionRatio: ratio,
+            boundingClientRect: rect,
+            intersectionRect: rect,
+            rootBounds: null,
+            time: 0,
+          },
+        ] as unknown as IntersectionObserverEntry[],
+        o as unknown as IntersectionObserver,
+      )
+    }
+  }
+
+  const rectAt = (top: number, height: number) =>
+    ({ top, bottom: top + height, left: 0, right: 390, width: 390, height, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+
+  it('[covers:web-receipts.feed-current-dominance] 表示中パネルより見えている範囲が狭い候補は current を奪えず URL も位置も不変・次ボタンは隣へ着地', async () => {
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([[101, 102, 103]]))
+    const { wrapper, router } = await mountApp(`/receipts/101?${CTX_QS}`)
+    const replace = vi.spyOn(router, 'replace')
+    // the landed 101 spans 120..720 of the 768px jsdom viewport; 102 peeks
+    // at 720..768 (48px) the way the real feed's below panel does
+    panel(wrapper, 101).element.getBoundingClientRect = () => rectAt(120, 600)
+    panel(wrapper, 102).element.getBoundingClientRect = () => rectAt(720, 600)
+    deliverOne(panel(wrapper, 102).element, 0.08)
+    await settle()
+    expect(replace).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.path).toBe('/receipts/101')
+    expect(wrapper.find('[data-test="feed-position"]').text()).toContain('1 / 3')
+    // the next button move lands the adjacent 102, not a skip to 103
+    scrollMocks().intoView.length = 0
+    await wrapper.find('[data-test="feed-next"]').trigger('click')
+    await settle()
+    expect(scrolledTo(102)).toBe(true)
+    expect(router.currentRoute.value.path).toBe('/receipts/102')
+  })
+
+  it('[covers:web-receipts.feed-current-dominance] スクロールで実際に支配的になった候補は従来どおり current を奪う', async () => {
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([[101, 102, 103]]))
+    const { wrapper, router } = await mountApp(`/receipts/101?${CTX_QS}`)
+    // scrolled down: 101 is mostly out (bottom at 200), 102 dominates 200..768
+    panel(wrapper, 101).element.getBoundingClientRect = () => rectAt(-400, 600)
+    panel(wrapper, 102).element.getBoundingClientRect = () => rectAt(200, 600)
+    const replace = vi.spyOn(router, 'replace')
+    deliverOne(panel(wrapper, 102).element, 0.9)
+    await settle()
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(router.currentRoute.value.path).toBe('/receipts/102')
+    expect(wrapper.find('[data-test="feed-position"]').text()).toContain('2 / 3')
   })
 })
