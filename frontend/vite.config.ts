@@ -3,6 +3,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import { parse } from 'smol-toml'
+import type { Plugin } from 'vite'
 
 // Single source of truth for ports: configs/dev/app.toml (local development).
 const appConfig = parse(
@@ -13,9 +14,36 @@ const appConfig = parse(
 // (configs/dev/app.toml [server].port), so cookies and Origin stay first-party.
 const backend = `http://127.0.0.1:${appConfig.server.port}`
 
+// Dev SPA fallback (TASK-29): with the default appType 'spa' Vite's html
+// fallback rewrites unmatched navigations to /index.html, which does not
+// exist in this multi-entry build — so clean URLs like / or /receipts/101
+// 404 in dev while the production backend serves web.html for every
+// non-API path (backend/src/web/static_files.rs spa_fallback). Vite 8 no
+// longer consumes a server.rewrites option, so the fallback is retargeted
+// by a post hook: returning a function from configureServer registers it
+// after Vite's own html fallback (which already excludes assets,
+// /favicon.ico and non-HTML requests) and before the html middleware, so
+// only its /index.html outcome needs rewriting. Proxied paths
+// (/api,/oauth,/.well-known,/mcp) are answered by the proxy middleware
+// long before the fallback runs; /web.html and /widget.html requests are
+// served as file-backed html and never reach it either.
+const devSpaFallbackPlugin: Plugin = {
+  name: 'dev-spa-fallback-web-html',
+  configureServer(server) {
+    return () => {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url?.startsWith('/index.html')) {
+          req.url = req.url.replace('/index.html', '/web.html')
+        }
+        next()
+      })
+    }
+  },
+}
+
 // Multi-entry build: `web` (regular SPA) and `widget` (MCP widget HTML).
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), devSpaFallbackPlugin],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

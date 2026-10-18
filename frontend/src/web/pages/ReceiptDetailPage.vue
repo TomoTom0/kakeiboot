@@ -149,7 +149,11 @@ async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): P
         sequence.value = all
         total.value = res.total_count
         nextCursor.value = res.next_cursor
-        currentId.value = anchor
+        // TASK-61: another path (goTo / route watch / IO's handleCurrent)
+        // may have taken currentId while the list was in flight — the
+        // anchor must not clobber it (the moveSeq capture-at-bump the
+        // initial scroll uses gates this assignment too; last writer wins)
+        if (mseq === moveSeq) currentId.value = anchor
         fallbackNote.value = false
         void ensureObserved()
         void initialScroll(anchor, mseq)

@@ -78,10 +78,10 @@ description = "Run the dev backend server (reads configs/dev/*.toml)"
 run = "cargo run -p budget-book -- --config-dir configs/dev"
 
 [tasks."dev:frontend"]
-description = "Run the Vite dev server"
+description = "Run the Vite dev server (--strictPort: fixed dev port from configs/dev/app.toml, fail when occupied)"
 dir = "{{config_root}}/frontend"
 depends = ["frontend:install"]
-run = "pnpm dev"
+run = "pnpm dev --strictPort"
 
 [tasks.dev]
 description = "Run backend and frontend dev servers in parallel"

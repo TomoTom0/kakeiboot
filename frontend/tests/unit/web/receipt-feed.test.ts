@@ -684,3 +684,99 @@ describe('Feed current dominance (TASK-77)', () => {
     expect(wrapper.find('[data-test="feed-position"]').text()).toContain('2 / 3')
   })
 })
+
+// TASK-61: while loadSequence awaits api.listReceipts, another path (a button
+// move, or an IO delivery on the still-displayed old sequence) can take
+// currentId. The completing load must not clobber it back to its anchor —
+// the same moveSeq generation the initial scroll already captures
+// (TASK-49 capture-at-bump) also gates the anchor branch's currentId
+// assignment: the last writer wins, URL and position stay consistent.
+describe('Feed loadSequence generation guard (TASK-61)', () => {
+  /** October list at once; the September list stays gated until release().
+   * The September ids overlap the October ones so the mid-await move's
+   * winner stays addressable in the landing sequence. */
+  function gateSeptember(september: number[]): { release: () => void } {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const oct = pagedList([range(201, 212)])
+    vi.spyOn(api, 'listReceipts').mockImplementation(async (_l, q) => {
+      if (q.from !== '2026-09-01') return oct(_l, q)
+      await gate
+      return {
+        total_count: september.length,
+        sum_amount: 0,
+        receipts: september.map((id) => summary(id)),
+        next_cursor: null,
+      }
+    })
+    return { release }
+  }
+
+  it('[covers:web-receipts.feed-loadsequence-generation] listReceipts 待ちの IO 配信が current を変えたら完了時も anchor へ上書きしない', async () => {
+    await anyReceipt()
+    const sep = gateSeptember(range(205, 216)) // anchor 210 (idx 5); 207 is in it too
+    const { wrapper, router } = await mountApp('/receipts/209')
+    // a context change push: the September loadSequence is gated mid-await
+    await router.push('/receipts/210?from=2026-09-01&to=2026-09-30')
+    // an IO delivery on the still-displayed October sequence takes current
+    // (handleCurrent bumps moveSeq and rewrites the URL to 207)
+    intersect(panel(wrapper, 207))
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/receipts/207')
+    sep.release()
+    await settle()
+    // the September sequence landed, but its anchor (210) must not clobber
+    // the mid-await winner: 207 stays current, in the window, in the URL
+    expect(panelIds(wrapper)).toEqual(range(205, 216))
+    expect(wrapper.find('[data-test="feed-position"]').text()).toContain('3 / 12')
+    expect(router.currentRoute.value.path).toBe('/receipts/207')
+    expect(panel(wrapper, 207).find('[data-test="total"]').exists()).toBe(true)
+  })
+
+  it('[covers:web-receipts.feed-loadsequence-generation] listReceipts 待ちの前後ボタン移動が current を変えた場合も上書きしない', async () => {
+    await anyReceipt()
+    const sep = gateSeptember(range(205, 216)) // anchor 216 at the tail (idx 11)
+    const { wrapper, router } = await mountApp(`/receipts/209?${CTX_QS}`)
+    await router.push('/receipts/216?from=2026-09-01&to=2026-09-30')
+    // the next button moves within the still-displayed October sequence
+    // (goTo bumps moveSeq, sets currentId 210 and rewrites the URL)
+    await wrapper.find('[data-test="feed-next"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/receipts/210')
+    sep.release()
+    await settle()
+    // the landing anchor (216) must not yank current back from 210
+    expect(panelIds(wrapper)).toEqual(range(205, 216))
+    expect(wrapper.find('[data-test="feed-position"]').text()).toContain('6 / 12')
+    expect(router.currentRoute.value.path).toBe('/receipts/210')
+    expect(wrapper.find('[data-test="feed-next"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('[covers:web-receipts.feed-loadsequence-generation] 勝者idが着地sequenceに含まれない場合はplaceholderのままIOがcurrentを挙げ直す（自己修復）', async () => {
+    await anyReceipt()
+    const sep = gateSeptember(range(205, 216))
+    const { wrapper, router } = await mountApp('/receipts/209')
+    await router.push('/receipts/210?from=2026-09-01&to=2026-09-30')
+    // the mid-await winner 203 is NOT in the September list (205..216)
+    intersect(panel(wrapper, 203))
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/receipts/203')
+    sep.release()
+    await settle()
+    // the September sequence landed; the anchor (210) did not clobber the
+    // winner and 203 matches no panel: the render window is empty, every
+    // article shows its placeholder, the position reads '-' and both nav
+    // buttons are disabled — yet the placeholder articles still deliver
+    // for the IO, which raises a real panel back to current (self-heal)
+    expect(panelIds(wrapper)).toEqual(range(205, 216))
+    expect(panel(wrapper, 205).find('[data-test="total"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="feed-position"]').text()).toBe('-')
+    expect(wrapper.find('[data-test="feed-prev"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="feed-next"]').attributes('disabled')).toBeDefined()
+    intersect(panel(wrapper, 205))
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/receipts/205')
+    expect(wrapper.find('[data-test="feed-position"]').text()).toContain('1 / 12')
+    expect(wrapper.find('[data-test="feed-next"]').attributes('disabled')).toBeUndefined()
+  })
+})

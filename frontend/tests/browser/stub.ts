@@ -117,9 +117,10 @@ export async function installApiStub(page: Page, opts: { loggedIn?: boolean; fee
   const loggedIn = opts.loggedIn ?? true
   const api = createMockDataApi({ feed: opts.feed })
 
-  // SPA history fallback: the Vite dev server has no index.html (the web entry
-  // is web.html) and answers 404 for /receipts/101 etc., so document requests
-  // for app routes are served the web.html shell.
+  // SPA history fallback for document requests. The dev server itself now
+  // retargets clean URLs to web.html (vite.config.ts devSpaFallbackPlugin,
+  // TASK-29); serving the shell here too keeps the browser tests independent
+  // of that plugin's registration order inside Vite's middleware chain.
   await page.route(
     (url) => !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/media/') && !/\.[a-z0-9]+$/i.test(url.pathname),
     async (route) => {

@@ -2110,10 +2110,28 @@ expect_return = "undefined"
 id = "web-http.dev-proxy"
 target_function = "vite.config.ts server.proxy"
 source = "TASK-11 統合作業 8（dev proxy: /api,/oauth,/.well-known,/mcp を backend へ。port は configs/dev/app.toml 参照）"
-source_lines = "frontend/tests/unit/web/vite-proxy.test.ts:5, frontend/tests/unit/web/vite-proxy.test.ts:12"
+source_lines = "frontend/tests/unit/web/vite-proxy.test.ts:12, frontend/tests/unit/web/vite-proxy.test.ts:23"
 description = "Vite dev server は同一 origin パスを backend（configs/dev/app.toml の [server].port）へ proxy する。port の直書きなし"
 given = "vite.config.ts の内容"
 expect_return_shape = "proxy 対象に /api,/oauth,/.well-known,/mcp を含み、target は appConfig.server.port から組み立てる（数値の直書きなし）"
+
+[[condition]]
+id = "web-http.dev-spa-fallback"
+target_function = "vite.config.ts devSpaFallbackPlugin configureServer"
+source = "TASK-29（Vite dev のみ spa_fallback 欠落: 既定 appType spa の html fallback は /index.html 決め打ちだが本構成は index.html 不在のため / や /receipts/101 が404。本番 backend〔backend/src/web/static_files.rs spa_fallback・INDEX_FILE=web.html〕と同じ導線を dev でも担保する。Vite 8.3.4 は server.rewrites option を消費しないため configureServer post-hook で /index.html を /web.html へ書換える）"
+source_lines = "frontend/tests/unit/web/vite-proxy.test.ts:33, frontend/tests/unit/web/vite-proxy.test.ts:43, frontend/tests/unit/web/vite-proxy.test.ts:78"
+description = "Vite dev server は静的 asset・html 以外の clean URL（/ ・/receipts/101 等）を web shell（web.html）へ導く。/widget.html・/@vite/client・proxy 対象パス（/api,/oauth,/.well-known,/mcp）は書換えない"
+given = "vite.config.ts の内容（html fallback の後に動く dev spa fallback plugin）"
+expect_return_shape = "Vite の html fallback が決め打ちで向ける /index.html を /web.html へ書換える configureServer post-hook（devSpaFallbackPlugin）が plugins に組み込まれ、消費されない server.rewrites option を使わない"
+
+[[condition]]
+id = "web-http.dev-strict-port"
+target_function = "mise.toml tasks.\"dev:frontend\" run"
+source = "TASK-29 副次改善（configs/dev/app.toml [frontend].dev_port=40281 は固定割当: 占用時に知らぬ間に別 port で立ち上がる事故防止。frontend/playwright.config.ts の webServer command と同一パターン）"
+source_lines = "frontend/tests/unit/web/vite-proxy.test.ts:18, frontend/tests/unit/web/vite-proxy.test.ts:92"
+description = "mise の dev:frontend タスクは --strictPort 付きで Vite を起動し、40281 が占有されていたら別 port へ移動せず失敗する"
+given = "mise.toml の dev:frontend タスク定義"
+expect_return_shape = "run が \"pnpm dev --strictPort\" である"
 
 [[condition]]
 id = "web-webauthn.creation-options-decoded"
@@ -5363,3 +5381,22 @@ source_lines = "frontend/tests/unit/web/styles.test.ts:546, frontend/tests/unit/
 description = "レシート一覧の絞り込みフォーム（店名・品名・カテゴリ・削除済み+適用）はページ本文のインライン折りたたみ（card フォーム）ではなく、ツールバー1行の絞り込みボタン（filters-toggle・.toolbar-filter-btn のまま）から開く PopoverPanel（role=dialog・variant=sheet-narrow。部品自身の期待は web-shell.popover-panel）の中に出る。閉じているとき data-test=filters は DOM に存在せず、開いても本文（KPI・支払方法・日別・レシート一覧のカード類）は一切増えない（フォームは .page-toolbar 内の popover-host から浮く dialog の中で、.view-page 直下には増えない）。適用（submit）で dialog を閉じ、従来どおり filters へ反映し syncQuery による URL 同期と再取得が走る（draft の保持・×チップで外した条件の draft 同期消しも従来どおり）。Escape・外側押下（480px 以下の sheet では scrim 押下）で閉じトリガボタンへフォーカスが戻る（usePopover 既存）。dialog の中身は .filters の1列（旧3列 grid と 720px 1列化は削除）で、 anchored 時の dialog は左端トリガに左寄せ（共有の right:0 は右端メニュー用）"
 given = "/receipts を開き絞り込みボタンを押す / 品名を入れて適用する / 開いたまま Escape・外側押下・480px 以下で scrim 押下 / styles.css を読む"
 expect_return_shape = "閉状態で [role=dialog] と [data-test=filters] が存在しない / 押下で filters-toggle の aria-expanded=true・aria-controls が dialog の id と一致し [role=dialog] 内に data-test=filters（store/item/category/include-deleted/search）がある / dialog が .page-toolbar 内の popover-host に乗り .view-page の直下要素にフォームは増えない / 適用で dialog が閉じ URL に item= が載り一覧が再取得される / Escape・外側押下・scrim 押下で閉じ filters-toggle へフォーカスが戻る / styles.css に .filters の grid-template-columns: 1fr（repeat(3, は無い）と .filters-popover .popover-dialog の left: 0・right: auto が定義され 720px block に .filters は無い"
+
+# ---------------------------------------------------------------------------
+# TASK-61 loadSequence 完了時の currentId clobber 保証（tm-61）。TASK-49 設計レビュー
+# 指摘（tmp/tasks/tm-49/design_direct-link.md レビュー観点1）: loadSequence の await
+# api.listReceipts の待ちの中で goTo・route watch・IO 配信（handleCurrent）が currentId を
+# 変えると、完了時の anchor 分支の currentId 設定がそれを上書きしていた（同窓 clobber。
+# URL は別経路の replace で新 id を指すのに表示中は anchor へ戻る不整合）。TASK-49 の
+# capture-at-bump（mseq）は初期スクロール側のみ守り、currentId 自体の上書きは残っていた。
+# 対応は moveSeq 世代と同様のガード: anchor 分支も自分の世代でなければ currentId を設定
+# しない（後勝ち）。sequence・total・nextCursor の更新と markReady は従来どおり行う。
+
+[[condition]]
+id = "web-receipts.feed-loadsequence-generation"
+target_function = "web/pages/ReceiptDetailPage.vue（loadSequence の anchor 分支における currentId 設定の世代ガード）"
+source = "TASK-61 body（正本。TASK-49 設計レビュー tmp/tasks/tm-49/design_direct-link.md レビュー観点1 の指摘: await api.listReceipts 中に別経路〔goTo・route watch・IO の handleCurrent〕が currentId を変えると loadSequence 完了時の currentId 設定がそれを上書きする。moveSeq 世代と同様のガード——開始時に自分の世代を capture し、完了時に自分の世代でなければ currentId を設定しない——で解消可能）"
+source_lines = "frontend/tests/unit/web/receipt-feed.test.ts:715, frontend/tests/unit/web/receipt-feed.test.ts:736, frontend/tests/unit/web/receipt-feed.test.ts:755"
+description = "loadSequence は await api.listReceipts の待ちの間に別経路（goTo・route watch・IO 配信の handleCurrent）が currentId を変更していた場合、anchor が見つかった分支の完了時に currentId を anchor へ上書きしない（自分の moveSeq 世代でなければ設定しない。後勝ち）。自分の世代のままなら従来どおり anchor を設定する。上書き回避に限らず、sequence・total・nextCursor の更新・ensureObserved・markReady は従来どおり行う。勝者idが着地 sequence に含まれない場合も同じ後勝ちで扱い、その場合の着地状態と自己修復を仕様として明示する: currentId はどのパネルにも当てはまらない（currentIdx -1・描画窓は空・feed-position は '-'・前後ボタンは両方 disabled）が、パネル article は placeholder（18rem・日付+店名）付きで全件描画され observe 対象のままなので、IO 配信が sequence 内の支配的パネルを current へ挙げ直し URL もその id へ置き換わる（自己修復。窓が空でも panelEl(勝者) が null になるため優越判定は妨げない。着地が上方向補正の待ち〔compPending〕と重なった場合はその間の配信が呑まれ、次の交差変化の配信で修復する）"
+given = "文脈A（10月）の sequence 表示中に文脈B（9月）へ push し、文脈B の listReceipts を gate で遅延させている間に、旧 sequence への IO 配信または前後ボタンで currentId を文脈B のリストにも含まれる id へ変更してから gate を開く / 同様に文脈B のリストに含まれない id（文脈A 側にしか無い id）へ変更してから gate を開き、着地後に IO 配信を1回行う / 待ち中に currentId を変える経路が無い通常の読み込み"
+expect_return_shape = "gate 解放後も currentId は別経路が設定した id のまま（feed-position はその id の位置・URL もその id を指し、loadSequence の anchor へ引き戻されない） / 勝者idが着地 sequence に含まれない場合は窓空（ReceiptPanel 本体はどの article にも無い）・feed-position は '-'・前後ボタン両方 disabled で article は placeholder 表示、IO 配信1回でその id が current になり URL が置き換わり feed-position が 'n / total' に復帰する / 通常の読み込みでは従来どおり anchor が current になる（既存の直リンク・文脈読み込み条件で担保）"
