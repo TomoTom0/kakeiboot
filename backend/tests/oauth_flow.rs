@@ -412,7 +412,34 @@ async fn consent_info_payload_shape() {
     // auto-created personal ledger to the shared "default book"
     let ledger_name = body["ledger_name"].as_str().expect("ledger_name");
     assert_eq!(ledger_name, "default book");
+    // TASK-20: the initial ledger also reports the user's palette color
+    // (ledger_members.color; registration assigns the first palette key)
+    assert_eq!(body["ledger_color"], "teal");
     assert_eq!(body["user_display_name"], "Flow User");
+
+    // with no selectable ledger (default cleared, no prior grant) both the
+    // name and the color are null
+    sqlx::query("UPDATE users SET default_ledger_id = NULL WHERE display_name = 'Flow User'")
+        .execute(&_pool)
+        .await
+        .unwrap();
+    let (_, challenge2) = pkce_pair();
+    let req2 = oauth::authorize(
+        &router,
+        &client,
+        &mock,
+        &challenge2,
+        Some("ledger.read"),
+        None,
+    )
+    .await;
+    let resp = client
+        .get(&router, &format!("/api/oauth/requests/{req2}"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = body_json(resp).await;
+    assert!(body["ledger_name"].is_null(), "no selectable ledger");
+    assert!(body["ledger_color"].is_null(), "no color without a ledger");
 }
 
 // [covers:auth-oauth.decision-allow]

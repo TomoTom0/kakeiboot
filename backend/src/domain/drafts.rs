@@ -772,6 +772,7 @@ mod tests {
         McpLimits {
             max_items: 3,
             max_name_chars: 5,
+            max_ledger_name_chars: 100,
             max_note_chars: 10,
             search_default_limit: 20,
             search_max_limit: 50,

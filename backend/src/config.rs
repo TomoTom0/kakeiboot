@@ -33,6 +33,10 @@ pub struct McpToolsConfig {
 pub struct McpLimits {
     pub max_items: usize,
     pub max_name_chars: usize,
+    /// TASK-20: ledger display-name cap (spec_mcp-tools.md 3-5) —
+    /// rename_ledger (MCP) and PATCH /api/ledgers/{l} (web). Chars after
+    /// trim; over the cap is an input error (isError / 400).
+    pub max_ledger_name_chars: usize,
     pub max_note_chars: usize,
     pub search_default_limit: i64,
     pub search_max_limit: i64,
@@ -93,6 +97,7 @@ pub fn parse_mcp_tools(text: &str) -> Result<McpToolsConfig, ConfigError> {
     let l = &cfg.limits;
     if l.max_items == 0
         || l.max_name_chars == 0
+        || l.max_ledger_name_chars == 0
         || l.max_note_chars == 0
         || l.search_default_limit <= 0
         || l.search_max_limit < l.search_default_limit
@@ -754,6 +759,7 @@ pub(crate) const MCP_VALID_TOML: &str = r#"
 [limits]
 max_items = 200
 max_name_chars = 200
+max_ledger_name_chars = 100
 max_note_chars = 1000
 search_default_limit = 20
 search_max_limit = 50

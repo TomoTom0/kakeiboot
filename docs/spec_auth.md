@@ -201,11 +201,11 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | メソッド・パス | 入力 | 成功 | 主なエラー |
 |---|---|---|---|
 | `GET /oauth/authorize` | query: `response_type=code`, `client_id`, `redirect_uri`（必須）, `state`, `code_challenge`, `code_challenge_method=S256`, `scope`（任意）, `resource`（必須） | 302 → `/oauth/consent?req=R`（ログイン済み）または `/login?req=R`。`/oauth/consent` は SPA の同意画面で、backend は予約パス `/oauth` 配下のうちこのパスだけ SPA shell を返す（他の `/oauth/*` 未定義パスは JSON 404） | client / redirect_uri 不正: 400 エラー画面（redirect しない）。以降: redirect に `error`（`invalid_request` / `unsupported_response_type` / `invalid_scope` / `invalid_target`）+ `state` + `iss` |
-| `GET /api/oauth/requests/{R}` | session | 200 `{client_display, client_id, scopes:[{name, description}], ledger_name, user_display_name}`。R に user_id を設定 | 404（期限切れ・他 user） |
+| `GET /api/oauth/requests/{R}` | session | 200 `{client_display, client_id, scopes:[{name, description}], ledger_name, ledger_color, user_display_name}`（`ledger_color` は表示色 palette key \| null）。R に user_id を設定 | 404（期限切れ・他 user） |
 | `POST /oauth/authorize/decision` | JSON `{req, decision: "allow" \| "deny"}`、session、Origin | 200 `{redirect_to}`（`code`・`state`・`iss` 付き。frontend が遷移） | deny: `redirect_to` に `error=access_denied`。req 不正: 400 |
 | `POST /oauth/token` | form: grant 別パラメータ + client 認証 | 200 `{access_token, token_type: "Bearer", expires_in, refresh_token, scope}`、`Cache-Control: no-store`、`Pragma: no-cache` | 400 `invalid_request` / `invalid_grant` / `unsupported_grant_type` / `invalid_scope` / `invalid_target`、401 `invalid_client` |
 | `POST /oauth/revoke` | form: `token`, `token_type_hint`（任意）+ client 認証 | 200（未知 token も 200） | 401 `invalid_client` |
-| `GET /api/oauth/grants` | session | 200 `[{id, client_display, scope, active_ledger_name, created_at, last_used_at}]` | — |
+| `GET /api/oauth/grants` | session | 200 `[{id, client_display, scope, active_ledger_id, active_ledger_name, active_ledger_color, created_at, last_used_at}]`（`active_ledger_id` / `active_ledger_name` / `active_ledger_color` は未選択・所属喪失で null。color は表示色 palette key） | — |
 | `DELETE /api/oauth/grants/{id}` | session、Origin | 204 | 404 |
 
 - 認可レスポンス（成功・エラーとも、redirect する場合）には常に `iss=https://<host>` を付ける。
@@ -244,7 +244,7 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 4-6 同意
 
 - 同意画面は毎回表示する（既存 grant があっても省略しない）。
-- 表示: client 名は allowlist 済み host から決めた固定名（「ChatGPT」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名（6-1 の初期値。接続後に ChatGPT から切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
+- 表示: client 名は allowlist 済み host から決めた固定名（「ChatGPT」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名とその表示色の chip（6-1 の初期値。接続後に ChatGPT から切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
 - 同意 POST（allow）では authorization request を削除し、認可コード行（user_id・client_id・redirect_uri・code_challenge・scope・resource、`grant_id` は NULL）だけを作る。grant は作らない。
 - 同意画面・ログイン画面には `Content-Security-Policy: frame-ancestors 'none'` と `X-Frame-Options: DENY` を付ける。
 
@@ -303,7 +303,7 @@ rotation では grant が変わらないので、選択中 ledger（`active_ledg
 
 - client 起点の操作（認可コード交換での grant 作成、`/oauth/revoke` による失効）の audit は `actor_kind=client` で記録し、client_id を after_json に含める。
 
-- ユーザー: web 画面「接続中のアプリ」で grant 一覧（client、scope、選択中 ledger 名、作成日時、最終利用日時）と個別失効（`revoked_reason='user'`）。配下の access / refresh token は grant JOIN で即無効になる。
+- ユーザー: web 画面「接続中のアプリ」で grant 一覧（client、scope、選択中 ledger（名前・表示色）、作成日時、最終利用日時）と個別失効（`revoked_reason='user'`）。配下の access / refresh token は grant JOIN で即無効になる。
 - client: `POST /oauth/revoke`（RFC 7009）。refresh token・access token のどちらを渡されても grant ごと失効させる。
 - 運用者: CLI の `admin grant revoke`（`revoked_reason='admin'`）。
 - ユーザー無効化: 同 tx で全 grant と全 web session を失効させる。この grant 失効の `revoked_reason` は `'admin'`（運用者操作）とする。
@@ -417,7 +417,7 @@ MCP の対象 ledger は grant 単位の選択状態 `oauth_grants.active_ledger
 | `switch_ledger` | `ledger.read` | `BEGIN IMMEDIATE` で所属を確認 → `active_ledger_id` を更新 → audit（`actor_kind=mcp`、`entity_type=oauth_grant`、`action=switch_ledger`、before / after の ledger_id）。所属なし・存在しない ID は区別しない同じ isError |
 
 - `switch_ledger` は接続の表示先を変えるだけで家計簿データを変更しないため `ledger.read` で可。
-- ledger の作成・招待・メンバー管理は web 画面のみ（MCP tool は持たない）。
+- ledger の作成・招待・メンバー管理は web 画面のみ（MCP tool は持たない）。名前の変更は例外として web 画面と MCP tool（`rename_ledger`。`spec_mcp-tools.md` §7-24）の両方でできる（editor 以上）。
 
 ### 6-3 一時指定（任意引数 `ledger_id`）
 

@@ -232,20 +232,34 @@ describe('ConsentPage', () => {
       { name: 'ledger.write', description: '家計簿の記録・編集' },
     ],
     ledger_name: '家計',
+    ledger_color: 'teal' as const,
     user_display_name: '太郎',
   }
 
-  it('[covers:web-consent.shows-request] 要求内容を表示する', async () => {
+  it('[covers:web-consent.shows-request] 要求内容を表示する（最初の接続先の家計簿は色 chip 付き・null は chip 無し）', async () => {
     mockFetch({ 'GET /api/oauth/requests/R': { body: INFO } })
     const { wrapper } = await mountApp('/oauth/consent?req=R')
     expect(wrapper.find('[data-test="client-display"]').text()).toBe('ChatGPT')
     expect(wrapper.find('[data-test="client-id"]').text()).toBe('https://chatgpt.com/x')
     expect(wrapper.find('[data-test="scopes"]').text()).toContain('家計簿の記録・編集')
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家計')
+    // TASK-20 §7-5: the first-connection ledger carries its display-color
+    // chip next to the name
+    const chip = wrapper.find('[data-test="ledger-name"] .ledger-chip')
+    expect(chip.exists()).toBe(true)
+    expect(chip.attributes('style')).toContain('var(--ledger-teal)')
     expect(wrapper.find('[data-test="ledger-note"]').text()).toContain('切り替えられます')
     expect(wrapper.find('[data-test="user-display-name"]').text()).toBe('太郎')
     expect(wrapper.find('[data-test="allow"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="deny"]').exists()).toBe(true)
+
+    // a request with no initial ledger (ledger_color null) shows the name
+    // without a chip
+    cleanup()
+    mockFetch({ 'GET /api/oauth/requests/R': { body: { ...INFO, ledger_color: null } } })
+    const b = await mountApp('/oauth/consent?req=R')
+    expect(b.wrapper.find('[data-test="ledger-name"] .ledger-chip').exists()).toBe(false)
+    expect(b.wrapper.find('[data-test="ledger-name"]').text()).toBe('家計')
   })
 
   it('[covers:web-consent.decision-redirects] 許可・拒否とも decision を送り redirect_to へ遷移', async () => {

@@ -460,6 +460,7 @@ async fn batch_tool_descriptors_mounted() {
         "whoami",
         "list_ledgers",
         "switch_ledger",
+        "rename_ledger",
         "label_receipts",
         "create_receipt_drafts",
         "approve_receipt_drafts",
@@ -467,7 +468,7 @@ async fn batch_tool_descriptors_mounted() {
     ]
     .to_vec();
     expected.sort_unstable();
-    assert_eq!(names, expected, "21 model tools + W1 + ping");
+    assert_eq!(names, expected, "22 model tools + W1 + ping");
     let by = |n: &str| tools.iter().find(|t| t["name"] == n).unwrap();
     // fileParams: #1 keeps the single key, #20 carries the array key
     assert_eq!(

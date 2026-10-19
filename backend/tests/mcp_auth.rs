@@ -614,17 +614,25 @@ async fn grants_web_api_list_revoke_switch() {
     )
     .await;
 
-    // list shows both with the active ledger name
+    // list shows both with the active ledger name and the TASK-20 palette
+    // color of the membership (null for both while nothing is selected)
     let resp = client.get(&router, "/api/oauth/grants").await;
     assert_eq!(resp.status(), 200);
     let list = body_json(resp).await;
     let arr = list.as_array().unwrap();
     assert_eq!(arr.len(), 2);
+    let g1 = arr
+        .iter()
+        .find(|g| g["id"].as_i64() == Some(grant1))
+        .expect("grant1 listed");
+    assert!(g1["active_ledger_name"].is_null(), "unselected: no name");
+    assert!(g1["active_ledger_color"].is_null(), "unselected: no color");
     let g2 = arr
         .iter()
         .find(|g| g["id"].as_i64() == Some(grant2))
         .expect("grant2 listed");
     assert_eq!(g2["active_ledger_name"], "Shared");
+    assert_eq!(g2["active_ledger_color"], "teal");
     assert_eq!(g2["scope"], "ledger.read");
 
     // switch via the API

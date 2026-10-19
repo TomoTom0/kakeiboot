@@ -200,6 +200,49 @@ fn mcp_toml_max_query_chars() {
 }
 
 // ---------------------------------------------------------------------------
+// TASK-20: ledger display-name cap (mcp.toml [limits] max_ledger_name_chars)
+
+// [covers:mcp-config.ledger-name-chars]
+#[test]
+fn mcp_toml_max_ledger_name_chars() {
+    // 1. every environment config carries max_ledger_name_chars = 100 (the
+    //    display-name cap of spec_auth.md 3-2; rename_ledger (MCP) and
+    //    PATCH /api/ledgers/{l} (web) both read this value — spec 3-5, not a
+    //    hardcoded constant. The registry.rs / drafts.rs test McpLimits
+    //    literals carry the same 100)
+    let tomls = env_mcp_tomls();
+    assert!(!tomls.is_empty());
+    for (env, text) in &tomls {
+        let v: toml::Value = toml::from_str(text).unwrap();
+        let chars = v
+            .get("limits")
+            .and_then(|l| l.get("max_ledger_name_chars"))
+            .unwrap_or_else(|| {
+                panic!("configs/{env}/mcp.toml is missing [limits].max_ledger_name_chars")
+            });
+        assert_eq!(
+            chars.as_integer().unwrap_or_else(|| {
+                panic!("configs/{env}/mcp.toml max_ledger_name_chars is not an integer")
+            }),
+            100,
+            "{env}"
+        );
+    }
+
+    // 2. the repo file with the key parses cleanly (a known field)
+    let dev = &tomls.iter().find(|(e, _)| e == "dev").unwrap().1;
+    budget_book::config::parse_mcp_tools(dev)
+        .unwrap_or_else(|e| panic!("the repo dev mcp.toml must parse: {e}"));
+
+    // 3. startup validation: max_ledger_name_chars = 0 is rejected
+    let zero = with_table_keys(dev, &["max_ledger_name_chars = 0"], &[]);
+    assert!(
+        budget_book::config::parse_mcp_tools(&zero).is_err(),
+        "max_ledger_name_chars = 0 must be a config error"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // TASK-32: register invitation TTL (auth.toml [auth.invitation])
 
 /// Every configs/<env>/auth.toml in the repo as (env, text).

@@ -53,6 +53,8 @@ export interface ConsentInfo {
   client_id: string
   scopes: { name: string; description: string }[]
   ledger_name: string | null
+  /** Display color of the first-connection ledger (null when unselected, TASK-20 6-2). */
+  ledger_color: LedgerColor | null
   user_display_name: string
 }
 
@@ -63,6 +65,8 @@ export interface Grant {
   scope: string
   active_ledger_id: number | null
   active_ledger_name: string | null
+  /** The grant user's display color for the active ledger (null when unselected / no longer a member, TASK-20 6-1). */
+  active_ledger_color: LedgerColor | null
   created_at: number
   last_used_at: number | null
 }

@@ -18,6 +18,7 @@
 // | GET    | /api/ledgers/{l}/labels                      | get_catalog(labels)      |
 // | PATCH  | /api/ledgers/{l}/labels/{color}              | (web only, TASK-17)      |
 // | POST   | /api/ledgers/{l}/receipts/{id}/labels        | label_receipts           |
+// | PATCH  | /api/ledgers/{l}                             | rename_ledger            |
 
 import type { LabelColor } from '@/shared/labels'
 import { request } from '../http'
@@ -63,5 +64,6 @@ export function createHttpDataApi(): DataApi {
     listLabels: (l) => request('GET', `${base(l)}/labels`),
     updateLabelTitle: (l, color, input) => request('PATCH', `${base(l)}/labels/${color}`, input),
     setReceiptLabels: (l, r, input) => request('POST', `${base(l)}/receipts/${r}/labels`, input),
+    renameLedger: (l, input) => request('PATCH', base(l), input),
   }
 }

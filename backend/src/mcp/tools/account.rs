@@ -1,11 +1,13 @@
-//! Account tools #15-#17 (spec_mcp-tools.md 7-16 .. 7-18): whoami,
-//! list_ledgers, switch_ledger. None of them takes the optional `ledger_id`
-//! argument; the envelope `ledger` is null (spec 3-2).
+//! Account tools #15-#17 and #22 (spec_mcp-tools.md 7-16 .. 7-18, 7-24):
+//! whoami, list_ledgers, switch_ledger, rename_ledger. Only rename_ledger
+//! takes the optional `ledger_id` argument; the envelope `ledger` is null
+//! for the other three (spec 3-2).
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{Call, ToolResult, parse};
+use crate::auth::ledger::RenameLedgerError;
 use crate::auth::ledger::SwitchError;
 use crate::mcp::result::{self, envelope};
 
@@ -171,6 +173,77 @@ pub async fn switch_ledger(c: &Call<'_>, args: &Map<String, Value>) -> ToolResul
         // The grant was live when the Bearer was validated; if it vanished
         // mid-call that is a server-side inconsistency.
         Err(e @ (SwitchError::GrantNotFound | SwitchError::Db(_))) => Err(result::internal(e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #22 rename_ledger (TASK-20)
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameArgs {
+    name: String,
+    #[serde(default)]
+    ledger_id: Option<i64>,
+}
+
+pub async fn rename_ledger(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
+    let a: RenameArgs = parse(args)?;
+    // unselected & no ledger_id = pick-again isError / viewer / non-member
+    // are all handled by the shared target resolution
+    let l = c.target_writer(a.ledger_id).await?;
+    let actor =
+        crate::domain::actor::Actor::mcp(c.auth.user_id, &c.auth.client_id, c.auth.grant_id);
+    let out = crate::auth::ledger::rename_ledger(
+        c.db(),
+        c.auth.user_id,
+        l.id,
+        &a.name,
+        &actor,
+        c.limits().max_ledger_name_chars,
+        c.now,
+    )
+    .await;
+    match out {
+        Ok(o) => {
+            // `l` still carries the pre-rename old name; the envelope and
+            // the text must show a LedgerInfo rebuilt with the new one
+            let mut nl = l.clone();
+            nl.name = o.after_name.clone();
+            let no_op = o.before_name == o.after_name;
+            let text = if no_op {
+                format!(
+                    "家計簿「{}」の名前はすでに「{}」です。{}",
+                    nl.name,
+                    nl.name,
+                    nl.text_suffix()
+                )
+            } else {
+                format!(
+                    "家計簿名を「{}」から「{}」に変更しました。{}",
+                    o.before_name,
+                    nl.name,
+                    nl.text_suffix()
+                )
+            };
+            Ok(result::ok(
+                text,
+                envelope(
+                    "ledger_renamed",
+                    Some(&nl),
+                    &[],
+                    json!({ "before_name": o.before_name }),
+                ),
+                None,
+            ))
+        }
+        Err(RenameLedgerError::NotFound) => Err(result::not_found()),
+        Err(RenameLedgerError::Forbidden) => Err(result::viewer_only()),
+        Err(RenameLedgerError::Invalid(msg)) => Err(result::invalid(&[msg])),
+        Err(RenameLedgerError::Conflict) => Err(result::err(
+            "同じ名前の家計簿に既に所属しています。別の名前を指定してください。",
+        )),
+        Err(e @ RenameLedgerError::Db(_)) => Err(result::internal(e)),
     }
 }
 

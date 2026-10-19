@@ -818,6 +818,12 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
       // labels never bump receipts.revision / updated_at (TASK-17 A8)
       return { receipt_id: target.receipt_id, labels: clone(target.labels) }
     },
+
+    // the mock holds no ledger registry (the session me drives the names),
+    // so the rename echoes the contract: the trimmed name back (TASK-20 7-1)
+    async renameLedger(l, input) {
+      return { id: l, name: input.name.trim() }
+    },
   }
   return api
 }

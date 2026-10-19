@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as webauthn from '@/web/api/webauthn'
+import { ApiError } from '@/web/api/http'
 import { setDataApi, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { ASSERTION, ATTESTATION, CCR, ME, RCR, cleanup, mockFetch, mountApp, settle, type Handler } from './helpers'
@@ -48,6 +49,93 @@ describe('SettingsPage', () => {
     expect(ledgers.text()).toContain('オーナー')
     expect(ledgers.html()).toContain('var(--ledger-teal)')
     expect(wrapper.find('[role="radiogroup"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-settings.ledger-rename] editor以上の行は⋯の行内editorで改名（Enter保存・Escapeやめる・maxlength=100）し Me.ledgers を更新、400は行内alert・viewer行は⋯なし（TASK-20）', async () => {
+    // the injected DataApi answers renameLedger with the request echo (the
+    // unit layer verifies the panel flow, not the HTTP contract)
+    const api = createMockDataApi()
+    const renameLedger = vi.fn(async (l: number, input: { name: string }) => ({ id: l, name: input.name }))
+    Object.assign(api, { renameLedger })
+    setDataApi(api)
+    const me = {
+      ...ME,
+      ledgers: [...ME.ledgers, { id: 3, name: '見るだけ', role: 'viewer' as const, color: 'pink' as const }],
+    }
+    mockFetch({ 'GET /api/auth/me': { body: me }, 'GET /api/passkeys': { body: PASSKEYS } })
+    const { wrapper, router } = await mountApp('/settings/general')
+    const rows = () => wrapper.findAll('[data-test="ledgers"] .ledger-color-row')
+    // rows follow me.ledgers order: 1 家計(owner) / 2 実家(editor) / 3 見るだけ(viewer)
+
+    // owner and editor rows carry the trailing "..." — the viewer row stays
+    // display-only with no menu at all (TASK-20 §7-2)
+    expect(wrapper.find('[data-test="ledgers"] [data-test="row-menu-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledgers"] [data-test="row-menu-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledgers"] [data-test="row-menu-3"]').exists()).toBe(false)
+
+    // editor row: "..." -> 名前を変更 turns the row into the inline editor,
+    // seeded with the current name and capped at 100 chars
+    await wrapper.find('[data-test="row-menu-2"]').trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    await settle()
+    const input = wrapper.find('[data-test="edit-name"]')
+    expect(input.exists()).toBe(true)
+    expect((input.element as HTMLInputElement).value).toBe('実家')
+    expect(input.attributes('maxlength')).toBe('100')
+
+    // Escape gives up the edit without a call
+    await input.setValue('実家の家計')
+    await input.trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect(wrapper.find('[data-test="edit-name"]').exists()).toBe(false)
+    expect(rows()[1]!.text()).toContain('実家')
+    expect(renameLedger).not.toHaveBeenCalled()
+
+    // 保存 calls PATCH via renameLedger, rewrites the row and reports the
+    // save in the row's role="status"
+    await wrapper.find('[data-test="row-menu-2"]').trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="edit-name"]').setValue('実家の家計')
+    await wrapper.find('[data-test="edit-save"]').trigger('click')
+    await settle()
+    expect(renameLedger).toHaveBeenCalledWith(2, { name: '実家の家計' })
+    expect(wrapper.find('[data-test="edit-name"]').exists()).toBe(false)
+    expect(rows()[1]!.text()).toContain('実家の家計')
+    expect(rows()[1]!.find('[role="status"]').text()).toContain('保存しました')
+
+    // a 400 lands as the row-local alert with the shared copy (the backend
+    // does not separate empty / too long / duplicate); the editor stays up
+    // and the row keeps the old name until a save succeeds
+    renameLedger.mockRejectedValueOnce(new ApiError(400, 'invalid_request'))
+    await wrapper.find('[data-test="row-menu-1"]').trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="edit-name"]').setValue('我が家')
+    await wrapper.find('[data-test="edit-name"]').trigger('keydown', { key: 'Enter' })
+    await settle()
+    expect(rows()[0]!.find('[role="alert"]').text()).toContain(
+      '名前が空・100字を超える・または同じ名前の家計簿が既にあります',
+    )
+    expect(rows()[0]!.text()).toContain('家計')
+
+    // the retried save goes through and the store update reaches the
+    // LedgerSwitcher on a ledgerScoped screen (/settings/general is not one)
+    await wrapper.find('[data-test="edit-save"]').trigger('click')
+    await settle()
+    expect(renameLedger).toHaveBeenLastCalledWith(1, { name: '我が家' })
+    expect(rows()[0]!.text()).toContain('我が家')
+    await router.push('/settings/labels')
+    await settle()
+    expect(wrapper.find('[data-test="ledger-switch"]').attributes('aria-label')).toBe('家計簿: 我が家（切り替え）')
+    await wrapper.find('[data-test="ledger-switch"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="ledger-option-1"]').text()).toContain('我が家')
+    expect(wrapper.find('[data-test="ledger-option-2"]').text()).toContain('実家の家計')
+    setDataApi(null)
   })
 
   it('[covers:web-settings.shows-passkeys] 認証tabにパスキー一覧（同期済み/端末内）と追加フォーム', async () => {
@@ -261,6 +349,7 @@ describe('AppsPage', () => {
       scope: 'ledger.read ledger.write',
       active_ledger_id: 1,
       active_ledger_name: '家計',
+      active_ledger_color: 'teal' as const,
       created_at: Date.UTC(2026, 9, 1, 0, 0),
       last_used_at: null,
     },
@@ -271,6 +360,7 @@ describe('AppsPage', () => {
       scope: 'ledger.read',
       active_ledger_id: null,
       active_ledger_name: null,
+      active_ledger_color: null,
       created_at: Date.UTC(2026, 9, 2, 0, 0),
       last_used_at: null,
     },
@@ -278,7 +368,7 @@ describe('AppsPage', () => {
   const apps = (extra: Record<string, Handler | Handler[]> = {}) =>
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/oauth/grants': { body: GRANTS }, ...extra })
 
-  it('[covers:web-apps.list-grants] client・scope・選択中 ledger（未選択）・JST 日時', async () => {
+  it('[covers:web-apps.list-grants] client・scope・選択中 ledger（未選択・色 chip・option の色点）・JST 日時', async () => {
     apps()
     const { wrapper } = await mountApp('/apps')
     const g1 = wrapper.find('[data-test="grant-1"]').text()
@@ -287,6 +377,21 @@ describe('AppsPage', () => {
     expect(wrapper.find('[data-test="grant-1"] [data-test="active-ledger"]').text()).toBe('家計')
     expect(wrapper.find('[data-test="grant-2"] [data-test="active-ledger"]').text()).toBe('未選択')
     expect(g1).toContain('2026/10/01 09:00')
+    // TASK-20 §7-4: the selected-ledger dd carries the grant's own color chip
+    // (active_ledger_color); an unselected grant shows none
+    const chip = wrapper.find('[data-test="grant-1"] [data-test="active-ledger"] .ledger-chip')
+    expect(chip.exists()).toBe(true)
+    expect(chip.attributes('style')).toContain('var(--ledger-teal)')
+    expect(wrapper.find('[data-test="grant-2"] [data-test="active-ledger"] .ledger-chip').exists()).toBe(false)
+    // the switch select's options open with the membership color dot — DOM
+    // presence only in jsdom: native option popups do not paint it reliably
+    // (the closed select's dropdown is not DOM-painted even in chromium, so
+    // the real-paint check stays with the dd chip, §10-3)
+    const options = wrapper.find('[data-test="grant-1"] [data-test="switch-select"]').findAll('option')
+    expect(options).toHaveLength(3) // 家計簿を選択 placeholder + ME's 2 ledgers
+    expect(options[0]!.find('.option-dot').exists()).toBe(false)
+    expect(options[1]!.find('.option-dot').attributes('style')).toContain('var(--ledger-teal)')
+    expect(options[2]!.find('.option-dot').attributes('style')).toContain('var(--ledger-orange)')
   })
 
   it('[covers:web-shell.loading-skeleton] 接続中のアプリも初回 loading は skeleton（aria-hidden + sr-only）', async () => {

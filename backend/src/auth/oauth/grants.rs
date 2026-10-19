@@ -64,7 +64,9 @@ fn client_host(client_id: &str) -> String {
 }
 
 /// grant list columns: (id, client_id, scope, active_ledger_id, last_used_at,
-/// created_at, active_ledger_name).
+/// created_at, active_ledger_name, active_ledger_color). The color is the
+/// grant user's own `ledger_members.color` (TASK-16) of the active ledger;
+/// it is null exactly when the name is (unselected or membership gone).
 type GrantApiRow = (
     i64,
     String,
@@ -72,6 +74,7 @@ type GrantApiRow = (
     Option<i64>,
     Option<i64>,
     i64,
+    Option<String>,
     Option<String>,
 );
 
@@ -83,7 +86,7 @@ async fn list_grants(State(state): State<State_>, headers: axum::http::HeaderMap
     let now = session::now_ms();
     let rows: Vec<GrantApiRow> = match sqlx::query_as(
         "SELECT g.id, g.client_id, g.scope, g.active_ledger_id, g.last_used_at, g.created_at,
-                l.name
+                l.name, m.color
          FROM oauth_grants g
          LEFT JOIN ledger_members m ON m.ledger_id = g.active_ledger_id AND m.user_id = g.user_id
          LEFT JOIN ledgers l ON l.id = m.ledger_id
@@ -99,8 +102,16 @@ async fn list_grants(State(state): State<State_>, headers: axum::http::HeaderMap
         Err(e) => return internal(e),
     };
     let mut out = Vec::with_capacity(rows.len());
-    for (id, client_id, scope, active_ledger_id, last_used_at, created_at, active_ledger_name) in
-        rows
+    for (
+        id,
+        client_id,
+        scope,
+        active_ledger_id,
+        last_used_at,
+        created_at,
+        active_ledger_name,
+        active_ledger_color,
+    ) in rows
     {
         out.push(json!({
             "id": id,
@@ -109,6 +120,7 @@ async fn list_grants(State(state): State<State_>, headers: axum::http::HeaderMap
             "scope": scope,
             "active_ledger_id": active_ledger_id,
             "active_ledger_name": active_ledger_name,
+            "active_ledger_color": active_ledger_color,
             "created_at": created_at,
             "last_used_at": last_used_at,
         }));

@@ -344,6 +344,8 @@ export interface DataApi {
   updateLabelTitle(ledgerId: number, color: LabelColor, input: LabelTitleInput): Promise<LabelTitleResult>
   /** Apply a label diff to one receipt (idempotent, no revision bump). */
   setReceiptLabels(ledgerId: number, receiptId: number, input: SetReceiptLabelsInput): Promise<SetReceiptLabelsResult>
+  /** PATCH /api/ledgers/{l}: rename the ledger (editor or above). */
+  renameLedger(ledgerId: number, input: { name: string }): Promise<{ id: number; name: string }>
 }
 
 export interface LabelsResult {

@@ -44,8 +44,8 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 ## 4. 家計簿（ledger）スコープと越境防止
 
 - データ行は `ledger_id` でスコープし、作成者は `created_by` / `user_id` に保持する。全データ行は ledger_id 経由または user_id 直接で認証主体に辿れる。
-- ユーザー作成時に個人 ledger を1つ自動作成し、`users.default_ledger_id` に設定する（`ledger_members.role='owner'`）。家族共有はメンバー追加で行う。個人 ledger の名前は共有の定数 `default book`（`store::DEFAULT_LEDGER_NAME`。0008 より前は「<表示名>の家計簿」で作られ、0008 で改名された）。
-- `ledger_members.color` はユーザーごとの家計簿表示色。6色パレット（teal / orange / pink / brown / slate / graphite）のキーを保存（CHECK、NOT NULL DEFAULT 'teal'）。所属行の作成時にそのユーザーで未使用のパレット先頭キーを自動割当し、全色使用済みなら所属数 mod 6 のキーにする。変更は web 画面の設定から自分の所属行のみ（`PUT /api/ledgers/{id}/membership/color`、`spec_auth.md` §3-2）。
+- ユーザー作成時に個人 ledger を1つ自動作成し、`users.default_ledger_id` に設定する（`ledger_members.role='owner'`）。家族共有はメンバー追加で行う。個人 ledger の名前は共有の定数 `default book`（`store::DEFAULT_LEDGER_NAME`。0008 より前は「<表示名>の家計簿」で作られ、0008 で改名された）。名前は web 画面と MCP（`rename_ledger`）から変更できる（`ledgers.name`。trim 後 1〜100 字〔`max_ledger_name_chars`〕。同一ユーザーの所属内での重複は申告レベルで拒否し DB 制約は持たない。別ユーザー間の同名は可）。
+- `ledger_members.color` はユーザーごとの家計簿表示色。6色パレット（teal / orange / pink / brown / slate / graphite）のキーを保存（CHECK、NOT NULL DEFAULT 'teal'）。所属行の作成時にそのユーザーで未使用のパレット先頭キーを自動割当し、全色使用済みなら所属数 mod 6 のキーにする（TASK-34。ユーザー操作での変更 UI・API は持たない）。
 - 認可は「認証主体の user_id → 対象 ledger → `ledger_members` で所属と role を確認」で解決し、全データクエリは `ledger_id = ?` で絞る。書き込み（承認等）は role が editor 以上であることを確認する。対象 ledger は次の順で決める（詳細は `spec_auth.md` §5-3・§6）。
   - web 画面: `users.default_ledger_id`。
   - MCP: grant の選択中 ledger `oauth_grants.active_ledger_id`（所属を毎回確認。NULL・所属外は未選択として tool が選び直しを促す）。tool の任意引数 `ledger_id` があれば一回限りその ledger（所属・role を同様に確認。`active_ledger_id` は変えない）。
@@ -339,7 +339,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 ## 11. 監査
 
 - 全ドメイン行に `created_at` / `updated_at`。
-- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。
+- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。家計簿名の変更は `entity_type=ledger` / `action=rename_ledger`（entity_id は ledger_id、before・after に名前。TASK-20）。
 - 認証系の記録: `actor_kind=mcp_anonymous` は匿名の MCP 呼び出し（`request_recovery` の受付）。`entity_type` に `user` / `webauthn_credential` / `invitation` / `oauth_grant` / `recovery_request` 等、`action` に `switch_ledger` / `grant_create` / `consent` / `login_mismatch` / `counter_regression` / `token_issue` / `token_revoke` / `token_use` / `passkey_revoke` / `user_disable` / `user_note` / `recovery_resolve` / `recovery_reject` / `grant_revoke` / `session_revoke` 等を加える（アプリ側 enum。一覧の正本は `spec_auth.md`）。
 
 ## 12. TTL 掃除

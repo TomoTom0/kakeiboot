@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import AppIcon from '../components/AppIcon.vue'
 import { oauthApi, type Grant } from '../api/auth'
 import { errorMessage, formatDateTime } from '../composables/format'
 import { useSessionStore } from '../stores/session'
@@ -142,7 +143,14 @@ function switchLedger(g: Grant): Promise<void> {
           <dd>{{ scopeText(g.scope) }}</dd>
           <dt>選択中の家計簿</dt>
           <dd data-test="active-ledger">
-            {{ g.active_ledger_name ?? '未選択' }}
+            <span
+              v-if="g.active_ledger_color"
+              class="ledger-chip"
+              :style="{ background: `var(--ledger-${g.active_ledger_color})` }"
+            ><AppIcon
+              name="book"
+              :size="14"
+            /></span>{{ g.active_ledger_name ?? '未選択' }}
           </dd>
           <dt>接続日時</dt>
           <dd>{{ formatDateTime(g.created_at) }}</dd>
@@ -166,7 +174,10 @@ function switchLedger(g: Grant): Promise<void> {
               :key="l.id"
               :value="l.id"
             >
-              {{ l.name }}
+              <span
+                class="option-dot"
+                :style="{ background: `var(--ledger-${l.color})` }"
+              />{{ l.name }}
             </option>
           </select>
           <button

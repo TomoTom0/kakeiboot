@@ -124,7 +124,14 @@ async function decide(decision: 'allow' | 'deny'): Promise<void> {
         <dl class="kv">
           <dt>最初の接続先の家計簿</dt>
           <dd data-test="ledger-name">
-            {{ info.ledger_name ?? '未選択' }}
+            <span
+              v-if="info.ledger_color"
+              class="ledger-chip"
+              :style="{ background: `var(--ledger-${info.ledger_color})` }"
+            ><AppIcon
+              name="book"
+              :size="14"
+            /></span>{{ info.ledger_name ?? '未選択' }}
           </dd>
           <dt>ログイン中のユーザー</dt>
           <dd data-test="user-display-name">

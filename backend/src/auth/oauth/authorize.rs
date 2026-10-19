@@ -430,11 +430,26 @@ async fn consent_info(
             .unwrap_or(None),
         None => None,
     };
+    // the user's own palette color of the initial ledger (TASK-16 / TASK-20);
+    // the initial ledger is always the grant user's own membership, but stay
+    // null-tolerant for the unselected / lost-membership corner
+    let ledger_color: Option<String> = match initial {
+        Some(lid) => sqlx::query_scalar::<_, String>(
+            "SELECT m.color FROM ledger_members m WHERE m.ledger_id = ? AND m.user_id = ?",
+        )
+        .bind(lid)
+        .bind(s.user_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .unwrap_or(None),
+        None => None,
+    };
     Json(json!({
         "client_display": super::client_display_for_host(&host),
         "client_id": client_id,
         "scopes": scopes,
         "ledger_name": ledger_name,
+        "ledger_color": ledger_color,
         "user_display_name": s.display_name,
     }))
     .into_response()

@@ -447,6 +447,18 @@ fn s_switch(_l: &McpLimits) -> Value {
     )
 }
 
+/// TASK-20: the schema-side length is a hint at the input moment; the real
+/// trim / count verdict is the server-side check (spec 3-5, design 2-3).
+fn s_rename_ledger(l: &McpLimits) -> Value {
+    obj(
+        with_ledger(json!({
+            "name": { "type": "string", "minLength": 1, "maxLength": l.max_ledger_name_chars,
+                      "description": "新しい家計簿名（前後の空白は除去される。trim と字数の最終判定は server 側検証による）" }
+        })),
+        &["name"],
+    )
+}
+
 fn s_refresh(_l: &McpLimits) -> Value {
     obj(
         json!({ "refs": {
@@ -810,6 +822,21 @@ pub fn defs() -> Vec<ToolDef> {
             s_approve_batch,
         ),
         t(
+            "rename_ledger",
+            "家計簿の名前を変更",
+            d!("rename_ledger"),
+            W,
+            (false, false, true),
+            false,
+            Model,
+            ("家計簿の名前を変更中", "家計簿名を変更しました"),
+            true,
+            false,
+            false,
+            &[],
+            s_rename_ledger,
+        ),
+        t(
             "refresh_widget_images",
             "画像URLを更新",
             d!("refresh_widget_images"),
@@ -928,6 +955,7 @@ mod tests {
         McpLimits {
             max_items: 200,
             max_name_chars: 200,
+            max_ledger_name_chars: 100,
             max_note_chars: 1000,
             search_default_limit: 20,
             search_max_limit: 50,
@@ -950,8 +978,8 @@ mod tests {
         let defs = defs();
         assert_eq!(
             defs.len(),
-            21,
-            "20 model-visible (request_recovery gated) + W1"
+            22,
+            "21 model-visible (request_recovery gated) + W1"
         );
         let uri = "ui://budget-book/widget-abc.html";
         for d in &defs {

@@ -4,7 +4,7 @@
 // request reaches the Vite proxy / backend.
 
 import type { Page, Route } from '@playwright/test'
-import type { ConsentInfo, Me } from '@/web/api/auth'
+import type { ConsentInfo, Grant, Me } from '@/web/api/auth'
 import { ApiError } from '@/web/api/http'
 import { createMockDataApi } from '@/web/api/data/mock'
 import type { DataApi } from '@/web/api/data/types'
@@ -39,6 +39,9 @@ export const CONSENT: ConsentInfo = {
     { name: 'ledger.write', description: '家計簿の変更（レシートの作成・修正・確定・削除、カテゴリや店の管理）' },
   ],
   ledger_name: 'default book',
+  // the default ledger's own display color (TASK-20 §6-2 / §7-1: a real
+  // palette key so the captured consent.png shows the chip as production does)
+  ledger_color: 'teal',
   user_display_name: ME.display_name,
 }
 
@@ -114,12 +117,14 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
  * for the feed tests; `richLabels` titles the five label definitions and puts
  * all five on receipt 102 (TASK-60 §5); `bareTags` drops receipt 101's tags
  * row content so the label picker host sits at the row head (TASK-60 §9-1
- * alt-2, the popover-shift non-vacuous proof). The default mock data is
- * unchanged, and the options combine freely.
+ * alt-2, the popover-shift non-vacuous proof); `grants` replaces the
+ * /api/oauth/grants answer (default stays the empty list — TASK-20 §7-1 /
+ * §10-3: the grant-row chip check feeds its own fixture rows). The default
+ * mock data is unchanged, and the options combine freely.
  */
 export async function installApiStub(
   page: Page,
-  opts: { loggedIn?: boolean; feed?: number; richLabels?: boolean; bareTags?: boolean } = {},
+  opts: { loggedIn?: boolean; feed?: number; richLabels?: boolean; bareTags?: boolean; grants?: Grant[] } = {},
 ): Promise<void> {
   const loggedIn = opts.loggedIn ?? true
   const api = createMockDataApi({ feed: opts.feed, richLabels: opts.richLabels, bareTags: opts.bareTags })
@@ -150,7 +155,7 @@ export async function installApiStub(
       return loggedIn ? json(route, 200, ME) : json(route, 401, { error: 'unauthorized' })
     }
     if (path === '/api/auth/logout') return route.fulfill({ status: 204 })
-    if (path === '/api/oauth/grants') return json(route, 200, [])
+    if (path === '/api/oauth/grants') return json(route, 200, opts.grants ?? [])
     if (path.startsWith('/api/oauth/requests/')) return json(route, 200, CONSENT)
     if (path === '/api/passkeys') return json(route, 200, [])
     if (path.startsWith('/api/webauthn/')) return json(route, 400, { error: 'stubbed' })

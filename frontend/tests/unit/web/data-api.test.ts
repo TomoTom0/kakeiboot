@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDataApi, setDataApi } from '@/web/api/data'
+import { createMockDataApi } from '@/web/api/data/mock'
 import { cleanup, mockFetch } from './helpers'
 
 afterEach(() => {
@@ -89,5 +90,17 @@ describe('web/api/data', () => {
       'GET /api/ledgers/3/items?q=milk&from=2026-10-01&to=2026-10-31',
       'GET /api/ledgers/3/receipts?q=milk&store_id=5',
     ])
+  })
+
+  it('[covers:web-data-api.ledger-rename] renameLedger は PATCH /api/ledgers/{l} へ {name} を送り {id, name} を返す（TASK-20）', async () => {
+    const f = mockFetch({ 'PATCH /api/ledgers/3': { body: { id: 3, name: '新しい家計' } } })
+    const api = createDataApi()
+    await expect(api.renameLedger(3, { name: '新しい家計' })).resolves.toEqual({ id: 3, name: '新しい家計' })
+    expect(f.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['PATCH /api/ledgers/3'])
+    expect(f.calls[0]!.body).toEqual({ name: '新しい家計' })
+    // the in-memory mock (browser stub / screens without a backend) answers
+    // the same contract: {id, name} echoing the request
+    const mock = createMockDataApi()
+    await expect(mock.renameLedger(3, { name: '新しい家計' })).resolves.toEqual({ id: 3, name: '新しい家計' })
   })
 })

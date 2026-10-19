@@ -189,6 +189,7 @@ pub async fn call(
         "whoami" => account::whoami(&c, &args).await,
         "list_ledgers" => account::list_ledgers(&c, &args).await,
         "switch_ledger" => account::switch_ledger(&c, &args).await,
+        "rename_ledger" => account::rename_ledger(&c, &args).await,
         "refresh_widget_images" => widget::refresh(&c, &args).await,
         _ => return None,
     };

@@ -295,3 +295,58 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
       .toBe(true)
   })
 })
+
+// --- apps grant rows (TASK-20 §10-3): the 選択中の家計簿 dd carries the
+// grant's own --ledger-<key> chip as a real painted color. The grants stub
+// option feeds one grant whose active_ledger_color (pink) differs from the
+// web side's selected membership (teal), so the check is non-vacuous — the
+// chip follows the grant's color, not the session's. The switch select's
+// option dots are deliberately not measured here: a closed select's dropdown
+// is not DOM-painted even in chromium (jsdom DOM presence covers them) ---
+
+test.describe('apps grant ledger chip (390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  test('[covers:web-apps.list-grants] 選択中の家計簿の色 chip は --ledger-<key> の実色', async ({ page }) => {
+    logPageIssues(page, 'apps-chip')
+    await installApiStub(page, {
+      grants: [
+        {
+          id: 1,
+          client_display: 'ChatGPT',
+          client_id: 'https://chatgpt.com/a',
+          scope: 'ledger.read ledger.write',
+          active_ledger_id: 1,
+          active_ledger_name: 'default book',
+          active_ledger_color: 'pink',
+          created_at: Date.UTC(2026, 9, 1, 0, 0),
+          last_used_at: null,
+        },
+      ],
+    })
+    await page.goto('/apps')
+    await expect(page.locator('[data-test="grant-1"]')).toBeVisible()
+    // the measure.ts recipe (kept inline per this file's convention): resolve
+    // the palette var through a probe element's computed background — the
+    // same engine normalization as the chip's own computed color — and
+    // compare the two paint values
+    const m = await page.evaluate(() => {
+      const chip = document.querySelector('[data-test="grant-1"] [data-test="active-ledger"] .ledger-chip') as HTMLElement | null
+      const probe = document.createElement('span')
+      probe.style.background = 'var(--ledger-pink)'
+      document.body.appendChild(probe)
+      const resolved = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      if (!chip) return { present: false, bg: '', resolved, w: 0, h: 0 }
+      const r = chip.getBoundingClientRect()
+      return { present: true, bg: getComputedStyle(chip).backgroundColor, resolved, w: r.width, h: r.height }
+    })
+    const dump = JSON.stringify(m)
+    expect(m.present, dump).toBe(true)
+    // non-vacuous: the var resolves to a real paint, not transparent
+    expect(m.resolved, dump).toMatch(/^rgb/)
+    expect(m.bg, dump).toBe(m.resolved)
+    expect(m.w, dump).toBeGreaterThan(0)
+    expect(m.h, dump).toBeGreaterThan(0)
+  })
+})

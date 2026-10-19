@@ -18,8 +18,15 @@ pub struct LedgerInfo {
 }
 
 impl LedgerInfo {
+    /// The envelope `ledger` object (spec 3-2, TASK-20): `{id, name, source,
+    /// role}` — `role` is the caller's own role on this ledger.
     pub fn json(&self) -> Value {
-        json!({ "id": self.id, "name": self.name, "source": self.source })
+        json!({
+            "id": self.id,
+            "name": self.name,
+            "source": self.source,
+            "role": self.role.as_str(),
+        })
     }
 
     /// Lines every content text carries (spec 3-2, 3-3; spec_auth 6-3, 6-4).
@@ -171,7 +178,7 @@ mod tests {
         assert_eq!(v["view"], "draft");
         assert_eq!(
             v["ledger"],
-            json!({"id": 3, "name": "家族", "source": "draft"})
+            json!({"id": 3, "name": "家族", "source": "draft", "role": "owner"})
         );
         assert_eq!(v["warnings"][0]["code"], "w");
         assert_eq!(v["x"], 1);

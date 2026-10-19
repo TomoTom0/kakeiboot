@@ -7,6 +7,7 @@ use serde_json::json;
 use sqlx::{Connection, SqliteConnection, SqlitePool};
 
 use super::tokens::random_crockford8;
+use crate::domain::actor::Actor;
 
 /// Role rank for write checks (spec_auth.md 6-3: editor or above).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -185,6 +186,134 @@ pub async fn switch_ledger(
         role,
         previous_ledger_id,
         previous_name,
+    })
+}
+
+/// Rename failures (TASK-20, spec_mcp-tools.md 7-24): membership / role /
+/// input validation and the within-user duplicate, in the `SwitchError`
+/// style — the web adapter and the MCP handler map each variant themselves.
+#[derive(Debug, thiserror::Error)]
+pub enum RenameLedgerError {
+    /// not a member or no such ledger (indistinguishable by design,
+    /// spec_mcp-tools.md 4)
+    #[error("ledger not found")]
+    NotFound,
+    #[error("viewer cannot rename")]
+    Forbidden,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("duplicate ledger name within the user's memberships")]
+    Conflict,
+    #[error(transparent)]
+    Db(#[from] anyhow::Error),
+}
+
+impl From<sqlx::Error> for RenameLedgerError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e.into())
+    }
+}
+
+pub struct RenameOutcome {
+    pub ledger_id: i64,
+    pub before_name: String,
+    pub after_name: String,
+}
+
+/// Rename a ledger in one BEGIN IMMEDIATE transaction (TASK-20,
+/// spec_mcp-tools.md 7-24 / 12): membership and role re-checked inside the
+/// tx (editor or above), trim / length validated against `max_chars`, the
+/// same name is a no-op success (no audit, no `updated_at` bump), a
+/// duplicate within the *same user's* memberships is a conflict (another
+/// user's same-name ledger does not block), then UPDATE + one audit row.
+/// The name is ledger-wide state shared by every member.
+pub async fn rename_ledger(
+    pool: &SqlitePool,
+    user_id: i64,
+    ledger_id: i64,
+    new_name: &str,
+    actor: &Actor,
+    max_chars: usize,
+    now: i64,
+) -> Result<RenameOutcome, RenameLedgerError> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    // membership + role re-check inside the tx (the switch_ledger flow)
+    let role_str: Option<String> = sqlx::query_scalar(
+        "SELECT m.role FROM ledger_members m WHERE m.ledger_id = ? AND m.user_id = ?",
+    )
+    .bind(ledger_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(role) = role_str.as_deref().and_then(LedgerRole::parse) else {
+        return Err(RenameLedgerError::NotFound);
+    };
+    if role < LedgerRole::Editor {
+        return Err(RenameLedgerError::Forbidden);
+    }
+    let before_name: String = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+        .bind(ledger_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    // names are saved-value constraints: trim first, then count chars
+    let name = new_name.trim();
+    if name.is_empty() || name.chars().count() > max_chars {
+        return Err(RenameLedgerError::Invalid(format!(
+            "家計簿名は1〜{max_chars}字で入力してください"
+        )));
+    }
+    if name == before_name {
+        // no-op success: no audit, no updated_at bump, nothing to commit
+        return Ok(RenameOutcome {
+            ledger_id,
+            before_name,
+            after_name: name.to_string(),
+        });
+    }
+    // duplicate within this user's own memberships (another user's same-name
+    // ledger is naturally allowed by the m.user_id filter)
+    let dup: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM ledgers l JOIN ledger_members m ON m.ledger_id = l.id
+         WHERE m.user_id = ? AND l.name = ? AND l.id <> ? LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(name)
+    .bind(ledger_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if dup.is_some() {
+        return Err(RenameLedgerError::Conflict);
+    }
+    let updated = sqlx::query("UPDATE ledgers SET name = ?, updated_at = ? WHERE id = ?")
+        .bind(name)
+        .bind(now)
+        .bind(ledger_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if updated != 1 {
+        return Err(RenameLedgerError::Db(anyhow::anyhow!(
+            "ledger {ledger_id} vanished during rename"
+        )));
+    }
+    crate::domain::catalog::audit(
+        &mut tx,
+        ledger_id,
+        actor,
+        "ledger",
+        ledger_id,
+        "rename_ledger",
+        Some(&json!({ "name": before_name })),
+        Some(&json!({ "name": name })),
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(RenameOutcome {
+        ledger_id,
+        before_name,
+        after_name: name.to_string(),
     })
 }
 

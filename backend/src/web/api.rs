@@ -16,6 +16,7 @@ use sqlx::SqlitePool;
 use crate::app::AppState;
 use crate::auth::api::AuthApiState;
 use crate::auth::ledger::LedgerRole;
+use crate::auth::ledger::RenameLedgerError;
 use crate::auth::session::ValidSession;
 use crate::auth::session::now_ms;
 use crate::domain::actor::Actor;
@@ -30,6 +31,10 @@ use crate::domain::stats::Range;
 /// 10-1).
 pub fn routes(state: AuthApiState) -> Router {
     Router::new()
+        .route(
+            "/api/ledgers/{ledger_id}",
+            axum::routing::patch(rename_ledger),
+        )
         .route("/api/ledgers/{ledger_id}/catalog", get(get_catalog))
         .route("/api/ledgers/{ledger_id}/categories", post(manage_category))
         .route("/api/ledgers/{ledger_id}/stores", get(list_stores))
@@ -148,6 +153,17 @@ impl DataError {
             LabelError::Db(e) => Self::sqlx(e),
         }
     }
+
+    /// TASK-20 rename: invalid input and the within-user duplicate are the
+    /// same one 400 (the backend does not tell the web client why).
+    fn ledger(e: RenameLedgerError) -> Self {
+        match e {
+            RenameLedgerError::NotFound => Self::not_found(),
+            RenameLedgerError::Forbidden => Self::viewer_only(),
+            RenameLedgerError::Invalid(_) | RenameLedgerError::Conflict => Self::invalid(),
+            RenameLedgerError::Db(e) => Self::internal(e),
+        }
+    }
 }
 
 impl IntoResponse for DataError {
@@ -208,6 +224,39 @@ fn nullable_string(v: &Option<Value>) -> Result<Option<Option<String>>, DataErro
         Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
         Some(_) => Err(DataError::invalid()),
     }
+}
+
+// ---------------------------------------------------------------------------
+// ledger rename (TASK-20, spec_mcp-tools.md 12)
+
+/// PATCH /api/ledgers/{l}: rename the ledger (editor or above). The flat
+/// `{id, name}` with the trimmed name; before/after history is in the audit
+/// row, the UI already holds the old value.
+pub async fn rename_ledger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(ledger_id): Path<i64>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, DataError> {
+    let s = session(&state, &headers).await?;
+    let role = member_ledger(&state.db, ledger_id, s.user_id).await?;
+    require_writer(role)?;
+    let name = match body.get("name") {
+        Some(Value::String(v)) => v.as_str(),
+        _ => return Err(DataError::invalid()), // missing / null / non-string
+    };
+    let out = crate::auth::ledger::rename_ledger(
+        &state.db,
+        s.user_id,
+        ledger_id,
+        name,
+        &actor(&s),
+        state.tools.limits.max_ledger_name_chars,
+        now_ms(),
+    )
+    .await
+    .map_err(DataError::ledger)?;
+    Ok(Json(json!({ "id": out.ledger_id, "name": out.after_name })))
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,12 @@ export const useSessionStore = defineStore('web-session', () => {
     me.value = null
   }
 
+  /** Rename a membership ledger in place (PATCH /api/ledgers/{l} succeeded). */
+  function renameLedger(id: number, name: string): void {
+    if (!me.value) return
+    me.value = { ...me.value, ledgers: me.value.ledgers.map((l) => (l.id === id ? { ...l, name } : l)) }
+  }
+
   /** Open the step-up dialog; resolves after a successful re-auth. */
   function requestStepUp(): Promise<void> {
     stepUpOpen.value = true
@@ -79,6 +85,7 @@ export const useSessionStore = defineStore('web-session', () => {
     setMe,
     loadMe,
     clear,
+    renameLedger,
     requestStepUp,
     finishStepUp,
   }

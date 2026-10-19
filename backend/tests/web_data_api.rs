@@ -1836,3 +1836,190 @@ async fn stats_label_filter_and_echo() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+#[tokio::test]
+// [covers:web-data-api.ledger-rename]
+async fn ledger_rename_rules() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "editor").await;
+    let user: i64 = sqlx::query_scalar("SELECT id FROM users WHERE display_name = 'user'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // a second membership of the same user (the within-user rename conflict)
+    // and another user's ledger already holding the target name (a foreign
+    // same name must NOT block the rename)
+    let mine2: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('共有中', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'viewer', 0)",
+    )
+    .bind(mine2)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    common::insert_user(&pool, 77).await;
+    let theirs: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('書き換え後', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, 77, 'owner', 0)",
+    )
+    .bind(theirs)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // success: the flat {id, name} with the trimmed name
+    let v = body_json(
+        c.patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "  本家 " }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["id"], 1);
+    assert_eq!(v["name"], "本家");
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        2,
+        "the response is the flat {{id, name}}"
+    );
+
+    // [covers:auth-ledger.rename-ledger] exactly one web-actor audit row with
+    // the before/after names (entity_type = ledger / action = rename_ledger)
+    assert_eq!(audit_count(&pool, "ledger", "rename_ledger").await, 1);
+    let audit: (String, Option<String>, String, String) = sqlx::query_as(
+        "SELECT actor_kind, client_id, before_json, after_json FROM audit_events
+         WHERE entity_type = 'ledger' AND action = 'rename_ledger'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit.0, "web");
+    assert!(audit.1.is_none(), "web actors carry no client_id");
+    assert_eq!(audit.2, r#"{"name":"default book"}"#);
+    assert_eq!(audit.3, r#"{"name":"本家"}"#);
+
+    // [covers:auth-ledger.rename-ledger] the same name again: 200 no-op, no
+    // extra audit row, updated_at untouched
+    let at1: i64 = sqlx::query_scalar("SELECT updated_at FROM ledgers WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let v = body_json(
+        c.patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "本家" }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["name"], "本家");
+    let at2: i64 = sqlx::query_scalar("SELECT updated_at FROM ledgers WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(at2, at1, "no-op rename does not touch updated_at");
+    assert_eq!(
+        audit_count(&pool, "ledger", "rename_ledger").await,
+        1,
+        "no-op rename writes no audit row"
+    );
+
+    // missing / null / non-string name: the one invalid_request shape
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({ "name": null }),
+        serde_json::json!({ "name": 3 }),
+    ] {
+        let resp = c.patch(&router, "/api/ledgers/1", body.clone()).await;
+        assert_eq!(resp.status(), 400, "{body}");
+        assert_eq!(body_json(resp).await["error"], "invalid_request", "{body}");
+    }
+
+    // trim-empty and over the cap (max_ledger_name_chars = 100): 400
+    for name in ["   ".to_string(), "あ".repeat(101)] {
+        let resp = c
+            .patch(
+                &router,
+                "/api/ledgers/1",
+                serde_json::json!({ "name": name }),
+            )
+            .await;
+        assert_eq!(resp.status(), 400, "{name}");
+        assert_eq!(body_json(resp).await["error"], "invalid_request");
+    }
+    // exactly 100 chars succeeds
+    let v = body_json(
+        c.patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "あ".repeat(100) }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["name"].as_str().unwrap().chars().count(), 100);
+
+    // a foreign user's ledger with the same name does not block the rename
+    let v = body_json(
+        c.patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "書き換え後" }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["name"], "書き換え後");
+
+    // [covers:auth-ledger.rename-ledger] the user's own other membership with
+    // the name is the within-user conflict: 400 invalid_request
+    let resp = c
+        .patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "共有中" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    assert_eq!(body_json(resp).await["error"], "invalid_request");
+
+    // non-member and nonexistent ledger ids are the same 404
+    for path in [
+        format!("/api/ledgers/{theirs}"),
+        "/api/ledgers/999".to_string(),
+    ] {
+        let resp = c
+            .patch(&router, &path, serde_json::json!({ "name": "x" }))
+            .await;
+        assert_eq!(resp.status(), 404, "{path}");
+    }
+
+    // viewer: 403 viewer_only (same user demoted on the same ledger)
+    sqlx::query("UPDATE ledger_members SET role = 'viewer' WHERE ledger_id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let resp = c
+        .patch(
+            &router,
+            "/api/ledgers/1",
+            serde_json::json!({ "name": "もう一度" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(body_json(resp).await["error"], "viewer_only");
+}

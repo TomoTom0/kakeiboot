@@ -114,6 +114,7 @@ async fn tools_list_mounts_registry_tools_and_ping() {
         "whoami",
         "list_ledgers",
         "switch_ledger",
+        "rename_ledger",
         "label_receipts",
         "create_receipt_drafts",
         "approve_receipt_drafts",
@@ -121,7 +122,7 @@ async fn tools_list_mounts_registry_tools_and_ping() {
     ]
     .to_vec();
     expected.sort_unstable();
-    assert_eq!(names, expected, "21 model tools + W1 + ping");
+    assert_eq!(names, expected, "22 model tools + W1 + ping");
     // a widget-rendering tool carries the paired uri/_meta keys (spec 2-1)
     let summarize = tools
         .iter()
@@ -436,4 +437,218 @@ async fn search_receipts_query_length_is_input_error() {
         let text = r["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("200"), "the limit is in the message: {text}");
     }
+}
+
+// [covers:mcp-tools.ledger-rename]
+#[tokio::test]
+async fn rename_ledger_changes_name_and_validates_input() {
+    let (router, pool, token, grant, user, active) = setup_with_ledger().await;
+    // setup: the user owns the active ledger ("Tool Userの家計簿") and holds a
+    // viewer membership on "viewer-side" — the rename target and the
+    // within-user duplicate both come from there
+
+    // success: the envelope ledger carries the NEW name with role and source,
+    // before_name reports the old one, and the text names both
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            1,
+            "tools/call",
+            json!({"name": "rename_ledger", "arguments": { "name": "新しい名前" }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(false));
+    let sc = &r["structuredContent"];
+    assert_eq!(sc["view"], "ledger_renamed");
+    assert_eq!(sc["ledger"]["id"], json!(active));
+    assert_eq!(sc["ledger"]["name"], "新しい名前");
+    assert_eq!(sc["ledger"]["source"], "active");
+    assert_eq!(sc["ledger"]["role"], "owner");
+    assert_eq!(sc["before_name"], "Tool Userの家計簿");
+    let text = r["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("「Tool Userの家計簿」から「新しい名前」に変更しました"),
+        "{text}"
+    );
+    let db_name: String = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+        .bind(active)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(db_name, "新しい名前", "the row itself moved");
+
+    // [covers:auth-ledger.rename-ledger] the same-name resend stays a success
+    // (no-op)
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            2,
+            "tools/call",
+            json!({"name": "rename_ledger", "arguments": { "name": "新しい名前" }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(false));
+    let text = r["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("すでに"), "the no-op text says so: {text}");
+
+    // [covers:auth-ledger.rename-ledger] the single recorded row is the mcp
+    // actor carrying the grant's client_id; the resend added none
+    let audit: (i64, String, Option<String>) = sqlx::query_as(
+        "SELECT COUNT(*), actor_kind, client_id FROM audit_events
+         WHERE entity_type = 'ledger' AND action = 'rename_ledger'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit.0, 1, "no-op resend adds no audit row");
+    assert_eq!(audit.1, "mcp");
+    let client_id: String = sqlx::query_scalar("SELECT client_id FROM oauth_grants WHERE id = ?")
+        .bind(grant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(audit.2.as_deref(), Some(client_id.as_str()));
+
+    // name is required: a missing field is a parse-level input error
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            3,
+            "tools/call",
+            json!({"name": "rename_ledger", "arguments": { "ledger_id": active }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(true));
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("入力エラー"),
+        "parse-level invalid"
+    );
+
+    // trim-empty and over the cap: input errors whose message carries the
+    // limit number (max_ledger_name_chars = 100)
+    for name in ["   ".to_string(), "あ".repeat(101)] {
+        let v = post_mcp(
+            &router,
+            &token,
+            rpc(
+                4,
+                "tools/call",
+                json!({"name": "rename_ledger", "arguments": { "name": name }}),
+            ),
+        )
+        .await;
+        let r = result_of(&v);
+        assert_eq!(r["isError"], json!(true), "{name}");
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("家計簿名"), "{text}");
+        assert!(text.contains("100"), "the limit is in the message: {text}");
+    }
+
+    // [covers:auth-ledger.rename-ledger] the user's own viewer-side membership
+    // holds "viewer-side": renaming the active ledger onto it is an isError
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            5,
+            "tools/call",
+            json!({"name": "rename_ledger", "arguments": { "name": "viewer-side" }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(true));
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("同じ名前の家計簿"),
+        "the duplicate is refused"
+    );
+
+    // a viewer membership target: write refused
+    let viewer_ledger: i64 = sqlx::query_scalar(
+        "SELECT l.id FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
+         WHERE m.user_id = ? AND m.role = 'viewer'",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            6,
+            "tools/call",
+            json!({"name": "rename_ledger",
+                   "arguments": { "ledger_id": viewer_ledger, "name": "x" }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(true));
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("閲覧のみ"),
+        "viewer target is refused"
+    );
+
+    // an explicit ledger_id resolves as explicit (trimmed name applies)
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            7,
+            "tools/call",
+            json!({"name": "rename_ledger",
+                   "arguments": { "ledger_id": active, "name": " 明示指定 " }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(false));
+    let sc = &r["structuredContent"];
+    assert_eq!(sc["ledger"]["source"], "explicit");
+    assert_eq!(sc["ledger"]["name"], "明示指定");
+
+    // no active ledger and no ledger_id: the pick-again error
+    sqlx::query("UPDATE oauth_grants SET active_ledger_id = NULL WHERE id = ?")
+        .bind(grant)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            8,
+            "tools/call",
+            json!({"name": "rename_ledger", "arguments": { "name": "まだある" }}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(true));
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("選び直してください"),
+        "the pick-again guidance"
+    );
 }
