@@ -211,3 +211,36 @@ for (const scheme of ['light', 'dark'] as const) {
     })
   })
 }
+
+// --- label picker close-on-select (TASK-51): tapping a color in the picker
+// popover closes the dialog, lands the chip in the tags row and returns the
+// focus to the tag-plus trigger (the user read the always-open popover as a
+// bug; the chip animating in is the confirmation now) ---
+
+test.describe('label picker close on select (390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  test('[covers:web-labels.picker-close-real] 色の tap で popover が閉じ・chip が行に現れ・focus が label-add へ戻る', async ({ page }) => {
+    logPageIssues(page, 'picker-close')
+    await installApiStub(page)
+    await page.goto('/receipts/101')
+    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    const picker = page.locator('[data-test="receipt-panel-101"] [data-test="label-picker"]')
+    await expect(picker.locator('[data-test="label-add"]')).toBeVisible()
+    await picker.locator('[data-test="label-add"]').click()
+    await expect(picker.locator('.popover-dialog')).toBeVisible()
+    await picker.locator('[data-test="label-toggle-red"]').click()
+    const m = await page.evaluate(() => {
+      const p = document.querySelector('[data-test="receipt-panel-101"] [data-test="label-picker"]')!
+      return {
+        dialog: p.querySelector('[role="dialog"]') !== null,
+        chip: p.querySelectorAll('.label-chip').length,
+        focusOnAdd: document.activeElement === p.querySelector('[data-test="label-add"]'),
+      }
+    })
+    const dump = JSON.stringify(m)
+    expect(m.dialog, dump).toBe(false)
+    expect(m.chip, 'the selected chip rides the tags row').toBeGreaterThan(0)
+    expect(m.focusOnAdd, 'the focus returns to the tag-plus trigger').toBe(true)
+  })
+})

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import consentPng from '../assets/usage/consent.png'
 import loginPng from '../assets/usage/login.png'
+import AppIcon from '../components/AppIcon.vue'
 import ConnectFlow from '../components/usage/ConnectFlow.vue'
 import UsageFigure from '../components/usage/UsageFigure.vue'
 
@@ -13,10 +14,15 @@ import UsageFigure from '../components/usage/UsageFigure.vue'
 // verbatim copy of the backend scope_description so the explanation reads
 // against the consent screenshot (F5). The ChatGPT-side figures (F2/F6) are
 // placeholders until the real-device check supplies the screenshots.
+// TASK-48: the copy success is the button's own icon swap (copy → check with
+// a pop, .copy-btn.is-done) — no text row joins the URL box, so the box keeps
+// its height; the spoken confirmation is the sr-only status beside it.
 const url = `${location.origin}/mcp`
 const copied = ref(false)
 const copyFailed = ref(false)
 let restoreTimer: ReturnType<typeof setTimeout> | undefined
+
+const copyLabel = computed(() => (copied.value ? 'コピーしました' : 'URL をコピー'))
 
 async function copyUrl(): Promise<void> {
   copyFailed.value = false
@@ -68,20 +74,24 @@ onUnmounted(() => clearTimeout(restoreTimer))
             >{{ url }}</code>
             <button
               type="button"
-              class="btn btn-small"
+              class="ibtn copy-btn"
+              :class="{ 'is-done': copied }"
+              :aria-label="copyLabel"
+              :title="copyLabel"
               data-test="copy-url"
               @click="copyUrl"
             >
-              コピー
+              <AppIcon
+                :name="copied ? 'check' : 'copy'"
+                :size="18"
+              />
             </button>
-            <p
+            <span
               v-if="copied"
-              class="small usage-copy-done"
+              class="sr-only"
               role="status"
               data-test="copy-done"
-            >
-              コピーしました
-            </p>
+            >コピーしました</span>
             <p
               v-if="copyFailed"
               class="msg msg-error"

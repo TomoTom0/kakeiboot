@@ -774,7 +774,12 @@ sequenceDiagram
 
 ## 13. 将来: Sign in with ChatGPT
 
-OpenAI の「Sign in with ChatGPT」（OIDC。署名付き ID token の `sub`）が一般開放されたら、ログインと回復の手段として追加する（現在は商用パートナー限定）。
+OpenAI の「Sign in with ChatGPT」（OIDC。署名付き ID token の `sub`）が一般開発者に開放されたら、ログインと回復の手段として追加する。2026-10-19調査時点の状況（TASK-9）:
+
+- オープンソース・ローカル実行（127.0.0.1 callback の host ID 方式）の個人アプリ向けに技術公開済み（cookbook・quickstart・token-sharing-open-source、2026-09-28頃。DevDay 2026で16パートナーとともに公式ローンチ）
+- リモートホストの有料/非公開アプリ（本appの形態）は選定制waitlist: 「selected commercial partners through a limited trial」（https://developers.openai.com/siwc/website）。申請は interest form（https://openai.com/form/sign-in-with-chatgpt-interest/）経由で時期不読
+- よって本appは現行の登録招待+パスキー+運用者CLI回復のまま運用し、以下のウォッチ条件のいずれかが成立したら導入を検討する: (1) client ID発行ページ（https://developers.openai.com/siwc/request-client-id）がself-service/個人アプリ向けに変化 (2) interest formの選定がprivate/personal appsへ拡大する旨の発表 (3) registered callback持ちclient IDのフォームなし発行が可能になる
+- 開放時の補足: 本appはSIWCではOpenAIをOPとするRP（OIDC client）になり、既存のOAuth 2.1認可サーバー（MCPクライアント向け）とはendpoint・client registryが別で競合しない。client_id/secret・callback URL（例: `<origin>/auth/siwc/callback`）はconfigs/管理。SIWCログインは招待制を維持した「既存userのもう1つの認証手段」に位置づける
 
 - 外部 ID 紐付けテーブル `user_external_identities`（user_id、issuer、client_id、sub、UNIQUE(issuer, client_id, sub)）を、その時点の仕様（pairwise sub の有無、必要な列）に合わせて migration で追加する。初版の migration には含めない。
 - 紐付けはパスキー認証済みの user が web 画面から行い、ID token の署名（issuer の JWKS）・`iss`・`aud`・`exp`・`nonce` を検証してから `sub` を保存する。

@@ -66,9 +66,10 @@ const catAction = (wrapper: W, id: number, action: string) => rowAction(wrapper,
 const storeAction = (wrapper: W, id: number, action: string) =>
   rowAction(wrapper, `[data-test="store-${id}"]`, `row-menu-${id}`, action)
 
-/** A labeled button inside a row (the editor's 保存 / やめる, an add row's 作成). */
+/** A labeled button inside a row (the editor's 保存 / やめる, an add row's 作成).
+ * TASK-47 made these icon-only: the label rides as aria-label. */
 function rowButton(wrapper: W, row: string, label: string) {
-  const btn = wrapper.find(row).findAll('button').find((b) => b.text() === label)
+  const btn = wrapper.find(row).findAll('button').find((b) => b.attributes('aria-label') === label)
   expect(btn, `${label} in ${row}`).toBeTruthy()
   return btn!
 }
@@ -356,7 +357,7 @@ describe('CategoriesPage', () => {
     expect(viewer.wrapper.find(`${sel(outId)} [data-test="row-menu-${outId}"]`).attributes('disabled')).toBeDefined()
     expect(viewer.wrapper.find('[data-test="add-top"]').attributes('disabled')).toBeDefined()
     expect(viewer.wrapper.find(`[data-test="add-child-${foodId}"]`).attributes('disabled')).toBeDefined()
-  })
+  }, 15_000)
 
   it('[covers:web-manage.category-group-fold] chevronで開閉し折り畳み中は子数表示・bb-cat-foldにledger×kindで保持し再mountで復元・editor展開中はchevron無効', async () => {
     const ids = await catIds()
@@ -550,6 +551,54 @@ describe('CategoriesPage', () => {
 })
 
 describe('StoresPage', () => {
+  it('[covers:web-manage.editor-icon-actions] 行editorの保存/やめる・追加行の作成・検索は icon-only（aria-label+title・svg）で keyboard 経路は不変', async () => {
+    const listStores = vi.spyOn(api, 'listStores')
+    const { wrapper } = await mountApp('/settings/stores')
+
+    // the search submit is an icon-only search button
+    const search = wrapper.find('form.inline-form button[type="submit"]')
+    expect(search.text()).toBe('')
+    expect(search.attributes('aria-label')).toBe('検索')
+    expect(search.attributes('title')).toBe('検索')
+    expect(search.find('svg').html()).toContain('M11 18a7 7 0 1 0') // the "search" glyph
+    await wrapper.find('[data-test="query"]').setValue('エー')
+    await wrapper.find('form.inline-form').trigger('submit')
+    await settle()
+    expect(listStores).toHaveBeenCalledWith(1, 'エー')
+
+    // the row editor's pair is icon-only: check (primary) + close
+    await storeAction(wrapper, 2, 'menu-edit')
+    const save = wrapper.find('[data-test="store-2"] [data-test="edit-save"]')
+    expect(save.text()).toBe('')
+    expect(save.attributes('aria-label')).toBe('保存')
+    expect(save.attributes('title')).toBe('保存')
+    expect(save.classes()).toContain('primary')
+    expect(save.find('svg').exists()).toBe(true)
+    const cancel = wrapper.find('[data-test="store-2"] button:not([data-test])')
+    expect(cancel.text()).toBe('')
+    expect(cancel.attributes('aria-label')).toBe('やめる')
+    // Enter saves through the input (unchanged), Escape gives up
+    await wrapper.find('[data-test="store-2"] input[aria-label="店名"]').setValue('エーマート駅前')
+    await wrapper.find('[data-test="store-2"] input[aria-label="店名"]').trigger('keydown', { key: 'Enter' })
+    await settle()
+    expect(wrapper.find('[data-test="store-2"] input[aria-label="店名"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="store-2"] [data-test="store-name"]').text()).toBe('エーマート駅前')
+    cleanup()
+
+    // the categories add row: 作成 (check, primary) / やめる (close)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const cats = await mountApp('/settings/categories')
+    await cats.wrapper.find('[data-test="add-top"]').trigger('click')
+    await settle()
+    const create = cats.wrapper.find('.add-row button:not([data-test])')
+    expect(create.text()).toBe('')
+    expect(create.attributes('aria-label')).toBe('作成')
+    expect(create.classes()).toContain('primary')
+    expect(cats.wrapper.findAll('.add-row button').some((b) => b.attributes('aria-label') === 'やめる')).toBe(true)
+    // the empty add row keeps 作成 disabled (unchanged rule)
+    expect(create.attributes('disabled')).toBeDefined()
+  })
+
   it('[covers:web-stores.update-store][covers:web-manage.row-editor] 行末⋯→「編集」でその行だけeditor・未保存の切替は1回止め・注記は行内status・viewerは⋯無効', async () => {
     const update = vi.spyOn(api, 'updateStore')
     const { wrapper } = await mountApp('/settings/stores')

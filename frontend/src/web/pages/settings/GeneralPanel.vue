@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
+import IconButton from '../../components/IconButton.vue'
 import RowMenu, { type RowMenuItem } from '../../components/RowMenu.vue'
 import { useDataApi } from '../../api/data'
 import { ApiError } from '../../api/http'
@@ -138,23 +139,20 @@ async function save(): Promise<void> {
                 @keydown.enter.prevent="save"
                 @keydown.esc.prevent="cancel"
               >
-              <button
-                class="btn btn-primary"
-                type="button"
+              <IconButton
+                icon="check"
+                label="保存"
+                variant="primary"
                 :disabled="busy"
-                data-test="edit-save"
+                test="edit-save"
                 @click="save"
-              >
-                保存
-              </button>
-              <button
-                class="btn"
-                type="button"
+              />
+              <IconButton
+                icon="close"
+                label="やめる"
                 :disabled="busy"
                 @click="cancel"
-              >
-                やめる
-              </button>
+              />
             </div>
             <p
               v-if="statusOf !== null && statusOf.id === l.id"

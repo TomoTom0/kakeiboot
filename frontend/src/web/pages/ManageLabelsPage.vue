@@ -8,6 +8,7 @@ import { useLedger } from '../composables/ledger'
 import { useLabelsStore } from '../stores/labels'
 import { useSessionStore } from '../stores/session'
 import AppIcon from '../components/AppIcon.vue'
+import IconButton from '../components/IconButton.vue'
 
 // Label management (TASK-17, redesigned in TASK-26 2-5, /settings/labels):
 // the five labels as a plain list of LabelChips (no color names, no
@@ -148,20 +149,19 @@ async function save(c: LabelColor): Promise<void> {
               @keydown.enter.prevent="save(l.color)"
               @keydown.esc.prevent="endEdit"
             >
-            <button
-              class="btn btn-small"
-              :data-test="`label-save-${l.color}`"
+            <IconButton
+              icon="check"
+              label="保存"
+              variant="primary"
+              :test="`label-save-${l.color}`"
               @click="save(l.color)"
-            >
-              保存
-            </button>
-            <button
-              class="btn btn-small"
-              :data-test="`label-cancel-${l.color}`"
+            />
+            <IconButton
+              icon="close"
+              label="やめる"
+              :test="`label-cancel-${l.color}`"
               @click="endEdit"
-            >
-              やめる
-            </button>
+            />
           </template>
           <LabelChip
             v-else

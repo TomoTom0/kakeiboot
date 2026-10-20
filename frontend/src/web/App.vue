@@ -40,8 +40,9 @@ const SECTION_TITLES = {
 } as const
 type SectionName = keyof typeof SECTION_TITLES
 // Main navigation: to / name only — labels and icons come from SECTION_TITLES.
-// Account screens (settings / connected apps) live in the top-right account
-// menu, not here.
+// The four data sections feed the sidebar nav and the mobile tabbar; settings
+// joins the sidebar alone in a separated second group (TASK-56) and the
+// account screens stay in the top-right account menu as well.
 const NAV: { to: string; name: SectionName }[] = [
   { to: '/', name: 'home' },
   { to: '/receipts', name: 'receipts' },
@@ -221,7 +222,10 @@ async function logout(): Promise<void> {
           data-test="menu-button"
           @click="toggleMenu"
         >
-          <AppIcon :name="drawerOpen ? 'close' : 'menu'" />
+          <!-- TASK-52: the glyph points where the panel goes — the sidebar
+               sits at the left edge, so open shows a left chevron (a close X
+               read as a second hamburger); closed is the menu again -->
+          <AppIcon :name="drawerOpen ? 'chevron-left' : 'menu'" />
         </button>
         <RouterLink
           to="/"
@@ -344,6 +348,20 @@ async function logout(): Promise<void> {
               <AppIcon :name="SECTION_TITLES[n.name].icon" />
               <span>{{ SECTION_TITLES[n.name].title }}</span>
             </RouterLink>
+            <!-- TASK-56: settings rides in a separated second group under the
+                 data nav (the tabbar keeps the four data sections; the
+                 account-menu entry stays as the second way in) -->
+            <div class="side-nav-secondary">
+              <RouterLink
+                to="/settings"
+                class="side-link"
+                :class="{ active: section === 'settings' }"
+                data-test="nav-settings"
+              >
+                <AppIcon :name="SECTION_TITLES.settings.icon" />
+                <span>{{ SECTION_TITLES.settings.title }}</span>
+              </RouterLink>
+            </div>
           </nav>
           <div class="sidebar-foot">
             <div class="side-user">

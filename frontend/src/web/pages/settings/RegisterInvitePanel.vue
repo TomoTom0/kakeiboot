@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { authApi } from '../../api/auth'
 import { charCount, errorMessage, formatDateTime } from '../../composables/format'
+import IconButton from '../../components/IconButton.vue'
 
 // Registration-only invitation card (TASK-32, spec_auth.md 2-1), living in
 // the auth tab: a URL that registers a new user with their own personal
@@ -58,14 +59,14 @@ async function issueRegisterInvite(): Promise<void> {
         aria-label="メモ"
         data-test="register-invite-note"
       >
-      <button
-        class="btn"
+      <IconButton
+        icon="plus"
+        label="登録 URL を発行"
+        variant="primary"
         :disabled="busy"
-        data-test="register-invite-issue"
+        test="register-invite-issue"
         @click="issueRegisterInvite"
-      >
-        登録 URL を発行
-      </button>
+      />
     </div>
     <p
       v-if="registerUrl"

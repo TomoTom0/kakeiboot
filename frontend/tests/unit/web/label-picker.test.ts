@@ -69,7 +69,7 @@ async function openPopover(w: W, id = 101): Promise<void> {
 }
 
 describe('LabelPicker (Feed)', () => {
-  it('[covers:web-receipts.label-picker][covers:web-labels.no-color-names-on-screen] popover 内トグルで即時 setReceiptLabels・aria-pressed・applyReceipt 書き戻し・可視テキストに色名なし', async () => {
+  it('[covers:web-receipts.label-picker][covers:web-labels.no-color-names-on-screen] popover 内トグルで即時 setReceiptLabels・tap で popover が閉じ chip が現れる・可視テキストに色名なし', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     let confirmed: string[] = []
@@ -77,46 +77,37 @@ describe('LabelPicker (Feed)', () => {
       confirmed = [...new Set([...confirmed, ...(input.add ?? [])])].filter((c) => !(input.remove ?? []).includes(c))
       return { receipt_id: r, labels: confirmed.map((color) => ({ color, title: null })) }
     })
-    const { wrapper } = await mountApp(DETAIL)
+    const { wrapper } = await mountApp(DETAIL, { attach: true })
     await openPopover(wrapper)
 
     expect(toggle(wrapper, 'red').attributes('aria-pressed')).toBe('false')
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenCalledWith(1, 101, { add: ['red'] })
-    // the response writes back through applyReceipt: pressed + chip stay on
-    expect(isPressed(wrapper, 'red')).toBe(true)
+    // TASK-51: a selection closes the popover (the chip appearing in the row
+    // is the confirmation) and returns the focus to the trigger
+    expect(picker(wrapper).find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(addBtn(wrapper).element)
     expect(picker(wrapper).find('.label-chip').exists()).toBe(true)
-    // off again is a remove
+    // reopening shows the pressed state; toggling off closes again (remove)
+    await openPopover(wrapper)
+    expect(isPressed(wrapper, 'red')).toBe(true)
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenLastCalledWith(1, 101, { remove: ['red'] })
-    expect(isPressed(wrapper, 'red')).toBe(false)
-    // the visible text carries no color names (open popover included) and
-    // the name-edit link is gone
-    expect(picker(wrapper).text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
-    expect(picker(wrapper).find('[data-test="label-edit-link"]').exists()).toBe(false)
-  })
-
-  it('[covers:web-receipts.label-picker] 連続タップは1要求に合成される', async () => {
-    mockFetch({ 'GET /api/auth/me': { body: ME } })
-    await withLabels([])
-    let confirmed: string[] = []
-    const set = injectSetLabels(async (_l, r, input) => {
-      confirmed = [...new Set([...confirmed, ...(input.add ?? [])])].filter((c) => !(input.remove ?? []).includes(c))
-      return { receipt_id: r, labels: confirmed.map((color) => ({ color, title: null })) }
-    })
-    const { wrapper } = await mountApp(DETAIL)
+    expect(picker(wrapper).find('.label-chip').exists()).toBe(false)
+    // a second color joins through another open-select round (each selection
+    // is its own send now that the popover closes on tap)
     await openPopover(wrapper)
-
-    // two taps in the same tick compose into one request
-    await toggle(wrapper, 'red').trigger('click')
     await toggle(wrapper, 'blue').trigger('click')
     await settle()
-    expect(set).toHaveBeenCalledTimes(1)
-    expect(set).toHaveBeenCalledWith(1, 101, { add: ['red', 'blue'] })
-    expect(isPressed(wrapper, 'red')).toBe(true)
-    expect(isPressed(wrapper, 'blue')).toBe(true)
+    expect(set).toHaveBeenLastCalledWith(1, 101, { add: ['blue'] })
+    expect(picker(wrapper).find('.label-chip').exists()).toBe(true)
+    // the visible text carries no color names (open popover included) and
+    // the name-edit link is gone
+    await openPopover(wrapper)
+    expect(picker(wrapper).text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
+    expect(picker(wrapper).find('[data-test="label-edit-link"]').exists()).toBe(false)
   })
 
   it('[covers:web-receipts.label-picker] 送信保留中の追撃は1度に1要求、応答後に差分を再送（直列）', async () => {
@@ -143,24 +134,27 @@ describe('LabelPicker (Feed)', () => {
     const { wrapper } = await mountApp(DETAIL)
     await openPopover(wrapper)
 
+    // the first selection closes the popover and its send is in flight
     await toggle(wrapper, 'red').trigger('click')
     await settle()
     expect(set).toHaveBeenCalledTimes(1)
-    // while the first request is in flight a second tap only queues
+    expect(picker(wrapper).find('[role="dialog"]').exists()).toBe(false)
+    // while the first request is in flight a second selection (after
+    // reopening) only queues — desired already shows the chip
+    await openPopover(wrapper)
     await toggle(wrapper, 'blue').trigger('click')
     await settle()
     expect(set).toHaveBeenCalledTimes(1)
-    expect(isPressed(wrapper, 'blue')).toBe(true)
+    expect(picker(wrapper).findAll('.label-chip')).toHaveLength(2)
     // the first reply lands; the queued diff is sent as one follow-up
     release!({ receipt_id: 101, labels: [{ color: 'red', title: null }] })
     await settle()
     expect(set).toHaveBeenCalledTimes(2)
     expect(set).toHaveBeenLastCalledWith(1, 101, { add: ['blue'] })
-    expect(isPressed(wrapper, 'red')).toBe(true)
-    expect(isPressed(wrapper, 'blue')).toBe(true)
+    expect(picker(wrapper).findAll('.label-chip')).toHaveLength(2)
   })
 
-  it('[covers:web-receipts.label-picker] 失敗時は要求に含めた色を confirmed へ戻し、popover 内とボタン部に表示', async () => {
+  it('[covers:web-receipts.label-picker] 失敗時は要求に含めた色を confirmed へ戻し、閉じた後はボタン部の警告バッジ・開き直しで popover 内に表示', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     let confirmed: string[] = []
@@ -172,30 +166,25 @@ describe('LabelPicker (Feed)', () => {
     const { wrapper } = await mountApp(DETAIL)
     await openPopover(wrapper)
 
+    // the failed tap has already closed the popover (TASK-51): the rollback
+    // lands with the button's warning badge + visually-hidden note in view
     await toggle(wrapper, 'red').trigger('click')
-    await toggle(wrapper, 'blue').trigger('click')
     await settle()
-    // the whole request rolls back to the confirmed (empty) set (design 2-5);
-    // colors with unsent changes keep their intent (not exercised here)
-    expect(isPressed(wrapper, 'red')).toBe(false)
-    expect(isPressed(wrapper, 'blue')).toBe(false)
     expect(set).toHaveBeenCalledTimes(1)
-    // the error line lives inside the open popover
-    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(true)
-    expect(picker(wrapper).find('[data-test="label-error"]').attributes('role')).toBe('alert')
-    // closing the popover puts a warning badge + a visually-hidden note on
-    // the button instead of a new row
-    await addBtn(wrapper).trigger('click')
-    await settle()
-    expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(false)
+    expect(picker(wrapper).find('[role="dialog"]').exists()).toBe(false)
+    expect(picker(wrapper).find('.label-chip').exists()).toBe(false)
     expect(addBtn(wrapper).find('.label-add-badge').exists()).toBe(true)
     expect(addBtn(wrapper).find('.sr-only').exists()).toBe(true)
-    // reopening resurfaces the error in the popover; a fresh tap clears it
+    // reopening resurfaces the error inside the popover
     await openPopover(wrapper)
     expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(true)
+    expect(picker(wrapper).find('[data-test="label-error"]').attributes('role')).toBe('alert')
+    // a fresh tap clears the error, closes the popover and sends again
     await toggle(wrapper, 'green').trigger('click')
     await settle()
+    expect(set).toHaveBeenLastCalledWith(1, 101, { add: ['green'] })
     expect(picker(wrapper).find('[data-test="label-error"]').exists()).toBe(false)
+    expect(addBtn(wrapper).find('.label-add-badge').exists()).toBe(false)
   })
 
   it('[covers:web-receipts.label-picker] viewer と削除済み（canEdit=false）はチップ表示のみで操作不可', async () => {
@@ -271,10 +260,13 @@ describe('LabelPicker (Feed)', () => {
     await p.find('[data-test="edit-form"]').trigger('submit')
     await settle()
     expect(p.find('[data-test="revision"]').text()).toBe('2')
-    // the label reply arrives after the save: the revision stays at 2
+    // the label reply arrives after the save: the revision stays at 2 and the
+    // chip (desired) stays on the row (the popover closed on selection)
     release!({ receipt_id: 101, labels: [{ color: 'red', title: null }] })
     await settle()
     expect(wrapper.find('[data-test="receipt-panel-101"] [data-test="revision"]').text()).toBe('2')
+    expect(picker(wrapper).find('.label-chip').exists()).toBe(true)
+    await openPopover(wrapper)
     expect(isPressed(wrapper, 'red')).toBe(true)
     expect(set).toHaveBeenCalledTimes(1)
   })

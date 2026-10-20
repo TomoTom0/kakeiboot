@@ -296,20 +296,22 @@ const isInert = (el: Element | undefined) =>
   !!el && ((el as HTMLElement).inert === true || el.hasAttribute('inert'))
 
 describe('App shell', () => {
-  it('[covers:web-shell.navigation] 主ナビはデータ4節（sidebar に brand 見出しなし）、表題は SECTION_TITLES からアイコン併記、設定は右上メニューで示す', async () => {
+  it('[covers:web-shell.navigation] 主ナビはデータ4節＋区切り付きで設定（sidebar に brand 見出しなし）、表題は SECTION_TITLES からアイコン併記', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     const { wrapper, router } = await mountApp('/')
     const side = wrapper.find('[data-test="sidebar"]')
     for (const n of ['home', 'receipts', 'categories', 'stores']) {
       expect(side.find(`[data-test="nav-${n}"] svg`).exists()).toBe(true)
     }
-    expect(side.findAll('.side-link')).toHaveLength(4)
+    // TASK-56: the sidebar's side-links are the four data sections plus the
+    // settings entry of the separated second group
+    expect(side.findAll('.side-link')).toHaveLength(5)
     // the sidebar is nav + user only: no brand heading (TASK-27)
     expect(side.find('.sidebar-head').exists()).toBe(false)
     expect(side.find('a.brand').exists()).toBe(false)
-    expect(wrapper.find('[data-test="nav-settings"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="nav-apps"]').exists()).toBe(false)
     expect(side.find('[data-test="nav-home"]').classes()).toContain('active')
+    // the tabbar keeps the four data sections only (TASK-56)
     const tabbar = wrapper.find('[data-test="tabbar"]')
     const tabs = tabbar.findAll('a')
     expect(tabs.map((t) => t.text())).toEqual(['ホーム', 'レシート', 'カテゴリ', '店'])
@@ -346,6 +348,48 @@ describe('App shell', () => {
     expect(receiptsSvg.exists()).toBe(true)
     expect(receiptsSvg.attributes('aria-hidden')).toBe('true')
     expect(receiptsSvg.html()).toContain('M5 3h14v18l-2.5-1.5') // the "receipt" glyph
+  })
+
+  it('[covers:web-shell.sidebar-settings-nav] sidebar 主 nav の下に区切り付きの設定 nav（tabbar とアカウントメニューは不変）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    const { wrapper, router } = await mountApp('/')
+    const side = wrapper.find('[data-test="sidebar"]')
+    // the settings link rides in a separated second group under the main nav
+    const settingsLink = side.find('[data-test="nav-settings"]')
+    expect(settingsLink.exists()).toBe(true)
+    expect(settingsLink.attributes('href')).toBe('/settings')
+    expect(settingsLink.classes()).toContain('side-link')
+    expect(settingsLink.find('svg').exists()).toBe(true)
+    expect(settingsLink.text()).toBe('設定')
+    expect(side.find('.side-nav-secondary').exists()).toBe(true)
+    // the settings link rides in the separated second group inside the same
+    // nav (below the four data links), and home is not active while on /
+    expect(side.find('.side-nav [data-test="nav-settings"]').exists()).toBe(true)
+    expect(side.find('.side-nav > [data-test="nav-settings"]').exists()).toBe(false)
+    expect(side.find('.side-nav-secondary [data-test="nav-settings"]').exists()).toBe(true)
+    // on / the home entry is active and the settings entry is not
+    expect(side.find('[data-test="nav-home"]').classes()).toContain('active')
+    expect(settingsLink.classes()).not.toContain('active')
+
+    // pressing it navigates to /settings and the entry turns active
+    await settingsLink.trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/settings/general')
+    expect(wrapper.find('[data-test="nav-settings"]').classes()).toContain('active')
+    // the manage screens inherit the settings section (TASK-74) — active too
+    await router.push('/settings/labels')
+    await settle()
+    expect(wrapper.find('[data-test="nav-settings"]').classes()).toContain('active')
+
+    // the tabbar keeps the four data tabs and the account menu keeps its
+    // settings item (TASK-56: no removal, both entries live on)
+    const tabbar = wrapper.find('[data-test="tabbar"]')
+    expect(tabbar.findAll('a')).toHaveLength(4)
+    expect(tabbar.attributes('style')).toMatch(/--tab-count:\s*4/)
+    expect(tabbar.find('[data-test="nav-settings"]').exists()).toBe(false)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    const settingsItem = accountItems(wrapper).find((i) => i.text().includes('設定'))
+    expect(settingsItem?.attributes('aria-current')).toBe('page')
   })
 
   it('[covers:web-shell.section-from-meta] section・ledgerScoped は route.meta から（/search の表題・ledger スコープ・nav active・manage-* の settings 継承）', async () => {
@@ -412,12 +456,14 @@ describe('App shell', () => {
     expect(menuBtn().find('svg').html()).toContain('M4 6h16') // the "menu" glyph
 
     // open: the same button at the same spot becomes the close control
+    // (TASK-52: the glyph points where the panel goes — a left chevron, not
+    // the close X that read as a second hamburger)
     await menuBtn().trigger('click')
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
     expect(menuBtn().attributes('aria-expanded')).toBe('true')
     expect(menuBtn().attributes('aria-label')).toBe('メニューを閉じる')
-    expect(menuBtn().find('svg').html()).toContain('M6 6l12 12') // the "close" glyph
+    expect(menuBtn().find('svg').html()).toContain('M15 18l-6-6 6-6') // the "chevron-left" glyph
     // focus lands on the active section's link (receipts, not the first item)
     expect(document.activeElement).toBe(wrapper.find('[data-test="nav-receipts"]').element)
     // no separate close button; the content columns are inert, the topbar is not
@@ -434,8 +480,9 @@ describe('App shell', () => {
     expect(menuBtn().attributes('aria-label')).toBe('メニューを開く')
     expect(document.activeElement).toBe(menuBtn().element)
 
-    // a section without a nav entry (settings): the first link takes the focus
-    await router.push('/settings')
+    // a section without a nav entry (usage): the first link takes the focus
+    // (settings gained its own sidebar entry in TASK-56)
+    await router.push('/usage')
     await settle()
     await menuBtn().trigger('click')
     await settle()

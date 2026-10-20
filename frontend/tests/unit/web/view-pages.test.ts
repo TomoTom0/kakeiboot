@@ -335,11 +335,14 @@ describe('SettingsPage data management', () => {
     await settle()
     expect(stores.router.currentRoute.value.path).toBe('/settings/stores')
     expect(stores.wrapper.find('.page-back').exists()).toBe(false)
-    // the main nav has no settings item: the title and the account menu show the section
+    // the main nav's data sections stay inactive on a manage screen; the
+    // settings entry of the sidebar's second group is the active one
+    // (TASK-56) and the title and the account menu show the section too
     expect(stores.wrapper.find('.topbar-title').text()).toBe('設定')
-    for (const link of stores.wrapper.findAll('[data-test="sidebar"] .side-link')) {
+    for (const link of stores.wrapper.findAll('[data-test="sidebar"] .side-nav > .side-link')) {
       expect(link.classes()).not.toContain('active')
     }
+    expect(stores.wrapper.find('[data-test="nav-settings"]').classes()).toContain('active')
     await stores.wrapper.find('[data-test="account-button"]').trigger('click')
     const settingsItem = stores.wrapper
       .findAll('[data-test="account-menu"] [role="menuitem"]')

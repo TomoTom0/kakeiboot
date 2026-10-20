@@ -216,6 +216,127 @@ describe('SettingsPage', () => {
     expect(f.to('PATCH', '/api/passkeys/1')[0]!.body).toEqual({ label: 'Mac' })
   })
 
+  it('[covers:web-settings.passkey-icon-actions] パスキー行操作・追加・editor確定は icon-only（aria-label+title）、削除確認の文字は不変', async () => {
+    home({ 'PATCH /api/passkeys/1': { body: {} } })
+    const { wrapper } = await mountApp('/settings/auth')
+    // the row actions are icon-only 44px buttons carrying the row's own name
+    const rename = wrapper.find('[data-test="passkey-1"] [data-test="rename"]')
+    expect(rename.text()).toBe('')
+    expect(rename.attributes('aria-label')).toBe('iPhoneの名前を変更')
+    expect(rename.attributes('title')).toBe('iPhoneの名前を変更')
+    expect(rename.find('svg').exists()).toBe(true)
+    const del = wrapper.find('[data-test="passkey-1"] [data-test="delete"]')
+    expect(del.text()).toBe('')
+    expect(del.attributes('aria-label')).toBe('iPhoneを削除')
+    expect(del.classes()).toContain('danger')
+    expect(del.find('svg').html()).toContain('M3 6h18') // the "trash" glyph
+    // the add form's button is icon-only too (key-plus: key circle + plus)
+    const add = wrapper.find('[data-test="add-passkey"]')
+    expect(add.text()).toBe('')
+    expect(add.attributes('aria-label')).toBe('パスキーを追加')
+    expect(add.find('svg').html()).toContain('M20 3v4') // the key-plus' plus
+
+    // the rename editor's confirm pair is icon-only with plain labels
+    await wrapper.find('[data-test="passkey-1"] [data-test="rename"]').trigger('click')
+    await settle()
+    const save = wrapper.find('[data-test="rename-save"]')
+    expect(save.text()).toBe('')
+    expect(save.attributes('aria-label')).toBe('保存')
+    expect(save.classes()).toContain('primary')
+    const cancel = wrapper.find('[data-test="passkey-1"] .actions button:not([data-test])')
+    expect(cancel.attributes('aria-label')).toBe('やめる')
+    expect(cancel.text()).toBe('')
+    // the save still runs through PATCH (the icon swap changes no behavior;
+    // this editor confirms with its buttons, no Enter binding here)
+    await wrapper.find('[data-test="rename-input"]').setValue('Mac')
+    await wrapper.find('[data-test="rename-save"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="rename-input"]').exists()).toBe(false)
+
+    // the destructive confirm keeps its words: icon-only is the row actions
+    // and the editor pair alone
+    await wrapper.find('[data-test="passkey-1"] [data-test="delete"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="passkey-1"]').text()).toContain('削除しますか？')
+    expect(wrapper.find('[data-test="delete-confirm"]').text()).toBe('削除する')
+    const cancelDelete = wrapper.findAll('[data-test="passkey-1"] button').find((b) => b.text() === 'やめる')
+    expect(cancelDelete).toBeTruthy()
+  })
+
+  it('[covers:web-settings.issue-url-icons] 共有URL・登録URLの発行 button は icon-only（aria-label+title・動作不変）', async () => {
+    const f = home({
+      'POST /api/invitations': { status: 201, body: { url: 'https://h/register?token=X', expires_at: 0 } },
+      'POST /api/register-invitations': { status: 201, body: { url: 'https://h/register?token=R', expires_at: 0 } },
+    })
+    const { wrapper } = await mountApp('/settings/auth')
+    const issue = wrapper.find('[data-test="invite-issue"]')
+    expect(issue.text()).toBe('')
+    expect(issue.attributes('aria-label')).toBe('共有 URL を発行')
+    expect(issue.attributes('title')).toBe('共有 URL を発行')
+    expect(issue.classes()).toContain('primary')
+    expect(issue.find('svg').exists()).toBe(true)
+    const register = wrapper.find('[data-test="register-invite-issue"]')
+    expect(register.text()).toBe('')
+    expect(register.attributes('aria-label')).toBe('登録 URL を発行')
+    expect(register.attributes('title')).toBe('登録 URL を発行')
+    // the actions still run through the same API paths
+    await wrapper.find('[data-test="invite-note"]').setValue('妹')
+    await issue.trigger('click')
+    await wrapper.find('[data-test="register-invite-note"]').setValue('妹')
+    await register.trigger('click')
+    await settle()
+    expect(f.to('POST', '/api/invitations')).toHaveLength(1)
+    expect(f.to('POST', '/api/register-invitations')).toHaveLength(1)
+  })
+
+  it('[covers:web-manage.editor-icon-actions] 家計簿名・ラベル名の行内editor確定は icon-only（aria-label+title・Enter/Escape 不変）', async () => {
+    const api = createMockDataApi()
+    const renameLedger = vi.fn(async (l: number, input: { name: string }) => ({ id: l, name: input.name }))
+    Object.assign(api, { renameLedger })
+    setDataApi(api)
+    mockFetch({
+      'GET /api/auth/me': { body: ME },
+      'GET /api/passkeys': { body: [] },
+    })
+    const { wrapper } = await mountApp('/settings/general')
+    // open the ledger rename editor through the row menu
+    await wrapper.find('[data-test="row-menu-1"]').trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    await settle()
+    const save = wrapper.find('[data-test="edit-save"]')
+    expect(save.text()).toBe('')
+    expect(save.attributes('aria-label')).toBe('保存')
+    expect(save.attributes('title')).toBe('保存')
+    expect(save.classes()).toContain('primary')
+    expect(save.find('svg').exists()).toBe(true)
+    const cancel = wrapper.find('[data-test="ledgers"] .ledger-row-editor button:not([data-test])')
+    expect(cancel.text()).toBe('')
+    expect(cancel.attributes('aria-label')).toBe('やめる')
+    // Enter saves, Escape gives up — the keyboard paths are unchanged
+    await wrapper.find('[data-test="edit-name"]').setValue('我が家')
+    await wrapper.find('[data-test="edit-name"]').trigger('keydown', { key: 'Enter' })
+    await settle()
+    expect(renameLedger).toHaveBeenCalledWith(1, { name: '我が家' })
+    setDataApi(null)
+    cleanup()
+
+    // the label rows on /settings/labels use the same icon pair
+    const api2 = createMockDataApi()
+    setDataApi(api2)
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    const labels = await mountApp('/settings/labels')
+    await labels.wrapper.find('[data-test="label-edit-yellow"]').trigger('click')
+    await settle()
+    const labelSave = labels.wrapper.find('[data-test="label-save-yellow"]')
+    expect(labelSave.text()).toBe('')
+    expect(labelSave.attributes('aria-label')).toBe('保存')
+    const labelCancel = labels.wrapper.find('[data-test="label-cancel-yellow"]')
+    expect(labelCancel.text()).toBe('')
+    expect(labelCancel.attributes('aria-label')).toBe('やめる')
+    setDataApi(null)
+  })
+
   it('[covers:web-settings.invite-issue] owner は共有 URL を発行でき、owner でなければフォームなし', async () => {
     const f = home({
       'POST /api/invitations': { status: 201, body: { url: 'https://h/register?token=X', expires_at: 0 } },

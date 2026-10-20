@@ -5,6 +5,11 @@
 // untitled labels show no text at all); the default renders the labels as
 // LabelChip list (a colored name chip when titled, a bare color chip when
 // not). Nothing is rendered for an empty label list.
+// TASK-51: the children render through a TransitionGroup (name=label-anim)
+// so a context may animate chips joining / leaving / reordering — the DOM
+// shape is the same span as before, and the animation only happens where
+// the context defines the .label-anim-* CSS (the web picker; everywhere
+// else, the widget included, stays instant).
 import LabelChip from './LabelChip.vue'
 import { labelAriaName, labelIndexOf, type LabelLike } from '../labels'
 
@@ -12,7 +17,9 @@ defineProps<{ labels: LabelLike[] | null | undefined; compact?: boolean }>()
 </script>
 
 <template>
-  <span
+  <TransitionGroup
+    tag="span"
+    name="label-anim"
     class="label-dots"
     :class="{ compact }"
   >
@@ -36,5 +43,5 @@ defineProps<{ labels: LabelLike[] | null | undefined; compact?: boolean }>()
         :index="labelIndexOf(l.color)"
       />
     </template>
-  </span>
+  </TransitionGroup>
 </template>

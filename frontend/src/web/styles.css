@@ -193,10 +193,15 @@ html.drawer-lock { overflow: hidden; }
 }
 .topbar-brand { display: inline-flex; flex: none; }
 .topbar-logo-compact { display: none; }
-/* the title keeps one line and ellipsizes (TASK-27 §2; icon added in TASK-35) */
+/* the title keeps one line and ellipsizes (TASK-27 §2; icon added in
+   TASK-35). TASK-69 centers the title inside the box that spans
+   brand → right-side cluster (filters or actions): on a wide bar the title
+   reads as the page's own heading instead of clinging to the logo, and on
+   the narrow bands the shrunken box keeps it near the brand as before */
 .topbar-title {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.375rem;
   flex: 1 1 auto;
   min-width: 0;
@@ -313,6 +318,13 @@ html.drawer-lock { overflow: hidden; }
 }
 .side-link:hover { background: var(--bb-hover); color: var(--bb-fg); }
 .side-link.active { background: var(--bb-accent-soft); color: var(--bb-accent); }
+/* TASK-56: the settings entry rides in a separated second group under the
+   main data nav (the tabbar keeps the four data sections only) */
+.side-nav-secondary {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--bb-border);
+}
 .sidebar-foot { margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--bb-border); }
 .side-user { display: flex; align-items: center; gap: 0.6rem; padding: 0.25rem 0.5rem; }
 .side-user-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
@@ -389,6 +401,32 @@ html.drawer-lock { overflow: hidden; }
 }
 .icon-btn:hover:not(:disabled) { background: var(--bb-hover); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* icon-only action buttons (TASK-47, IconButton.vue): the row-level
+   secondary actions, the inline editors' confirm pair and the issue/add
+   submits. 44px square (the shared tap-target floor), the label rides as
+   aria-label + title; primary paints the accent for the add/save submits,
+   danger colors the destructive row glyphs */
+.ibtn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bb-radius);
+  background: transparent;
+  color: var(--bb-fg);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.ibtn:hover:not(:disabled) { background: var(--bb-hover); }
+.ibtn:disabled { opacity: 0.35; cursor: default; }
+.ibtn.primary { background: var(--bb-accent); color: var(--bb-accent-fg); }
+.ibtn.primary:hover:not(:disabled) { background: var(--bb-accent-strong); }
+.ibtn.danger { color: var(--bb-danger); }
+.ibtn.danger:hover:not(:disabled) { background: var(--bb-error-bg); }
 /* the menu button stays visible at every width (real-device review): it
    toggles the one sidebar overlay — the modal drawer below 900px, the
    plain slide at 900px+ (TASK-33 overlay unification) */
@@ -1344,6 +1382,33 @@ a.sub-row:hover { background: var(--bb-hover); }
 }
 .label-error { margin: 0 0 0.5rem; color: var(--bb-danger); font-size: 0.78rem; }
 
+/* the picker's chip motion (TASK-51): a chip joining the tags row animates
+   in from zero width so the row stretches smoothly instead of jumping (the
+   tag-plus button glides), a removed chip shrinks away in flow, and a
+   reorder (the LABEL_COLORS-order normalization) rides the move class.
+   The width animates via max-width; the chip's own min-width 24px and side
+   padding are zeroed on the collapse ends and overflow is clipped mid-flight
+   so the text never sticks out. Scoped to .label-picker only: the plain
+   LabelDots everywhere else (list rows, topbar chips, widget) stay instant */
+.label-picker .label-anim-enter-active,
+.label-picker .label-anim-leave-active {
+  max-width: 16rem;
+  overflow: hidden;
+  transition: max-width 0.2s ease, opacity 0.2s ease, transform 0.2s ease, margin-left 0.2s ease, padding 0.2s ease;
+}
+.label-picker .label-anim-enter-from,
+.label-picker .label-anim-leave-to {
+  max-width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: -0.3rem; /* absorb the flex gap while invisible */
+  opacity: 0;
+  transform: scale(0.5);
+}
+.label-picker .label-anim-leave-from { max-width: 16rem; opacity: 1; }
+.label-picker .label-anim-move { transition: transform 0.2s ease; }
+
 /* filter (toolbar, TASK-26 2-4): one button, max 88px. Unselected carries
    the word; a selection shows 6px dots and the accent border instead */
 .label-filter { position: relative; display: inline-flex; }
@@ -1614,11 +1679,21 @@ a.sub-row:hover { background: var(--bb-hover); }
 .usage-steps h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
 .usage-steps h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
 
-/* the runtime-generated connection URL: selectable code line + copy button */
+/* the runtime-generated connection URL: selectable code line + the copy
+   control. TASK-48: the success state is the button's own icon swap
+   (copy → check with a pop) — no text row joins the box, so the box keeps
+   its height; the spoken confirmation is the sr-only status next to the
+   button (UsageConnectPage). The error guidance keeps its .msg row */
 .usage-url { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; padding: 0.65rem 0.75rem; border: 1px solid var(--bb-border); border-radius: var(--bb-radius); background: var(--bb-surface-2); }
-.usage-url .msg, .usage-url .usage-copy-done { flex-basis: 100%; margin: 0; }
+.usage-url .msg { flex-basis: 100%; margin: 0; }
 .usage-url code { flex: 1 1 12rem; min-width: 0; font-size: 0.95rem; }
-.usage-copy-done { margin: 0.25rem 0 0; color: var(--bb-accent); }
+.copy-btn.is-done { color: var(--bb-accent); }
+.copy-btn.is-done .icon { animation: bb-copy-pop 0.25s ease; }
+@keyframes bb-copy-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
 
 /* figures of the walkthrough: screenshots at a readable phone width, dashed
    placeholders until an asset is captured */
@@ -1678,13 +1753,13 @@ a.sub-row:hover { background: var(--bb-hover); }
 .slide-forward-leave-active,
 .slide-back-leave-active { position: absolute; top: 0; left: 0; width: 100%; }
 
-/* messages (errors / notices / copy confirmations) fade in when inserted */
+/* messages (errors / notices) fade in when inserted (the copy confirmation
+   moved to the button's icon swap, TASK-48) */
 @keyframes bb-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 .msg { animation: bb-fade-in 0.16s ease; }
-.usage-copy-done { animation: bb-fade-in 0.16s ease; }
 
 /* loading skeleton: the dash-grid silhouette in flat surface blocks, no
    shimmer — the shape holds the layout, one soft fade on insert only */
@@ -1784,7 +1859,13 @@ a.sub-row:hover { background: var(--bb-hover); }
   .slide-forward-leave-to,
   .slide-back-enter-from,
   .slide-back-leave-to { transform: none; }
-  .msg, .usage-copy-done, .skeleton .sk { animation: none; }
+  .msg, .skeleton .sk { animation: none; }
+  /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
+     are off (the icon swap and the instant chips keep the information) */
+  .copy-btn.is-done .icon { animation: none; }
+  .label-picker .label-anim-enter-active,
+  .label-picker .label-anim-leave-active,
+  .label-picker .label-anim-move { transition: none; }
   .topbar.ledger-scoped { transition: none; }
   .ledger-chip { transition: none; }
   .cat-fold .icon { transition: none; }

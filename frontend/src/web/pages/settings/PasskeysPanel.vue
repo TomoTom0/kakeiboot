@@ -3,12 +3,15 @@ import { onMounted, ref } from 'vue'
 import { authApi, type Passkey } from '../../api/auth'
 import { createPasskey, isCancel } from '../../api/webauthn'
 import { charCount, errorMessage, formatDateTime } from '../../composables/format'
+import IconButton from '../../components/IconButton.vue'
 
 // Passkey section (spec_auth.md 2-7), the first card of the auth tab
 // (/settings/auth): list (synced / device-bound), add, rename and delete.
 // Add and delete go through step-up; the last passkey cannot be deleted
 // (the API answers 409). Moved from SettingsPage when the settings screen
-// split into panels (TASK-36).
+// split into panels (TASK-36). TASK-47: the row actions, the add submit and
+// the rename editor's pair are icon-only buttons (the row's own name rides
+// as the accessible name); the destructive confirm keeps its words.
 const passkeys = ref<Passkey[]>([])
 const error = ref('')
 const info = ref('')
@@ -22,6 +25,11 @@ function backupLabel(p: Passkey): string {
   if (p.backup_state === true) return '同期済み'
   if (p.backup_state === false) return '端末内'
   return '不明'
+}
+
+/** The row-scoped name for the icon buttons' accessible names (TASK-47). */
+function nameOf(p: Passkey): string {
+  return p.label ?? '名前なしのパスキー'
 }
 
 async function reload(): Promise<void> {
@@ -120,20 +128,19 @@ function confirmDelete(id: number): Promise<void> {
               data-test="rename-input"
             >
             <div class="actions">
-              <button
-                class="btn btn-primary"
+              <IconButton
+                icon="check"
+                label="保存"
+                variant="primary"
                 :disabled="busy"
-                data-test="rename-save"
+                test="rename-save"
                 @click="saveRename(p.id)"
-              >
-                保存
-              </button>
-              <button
-                class="btn"
+              />
+              <IconButton
+                icon="close"
+                label="やめる"
                 @click="editingId = null"
-              >
-                取消
-              </button>
+              />
             </div>
           </template>
           <template v-else>
@@ -164,20 +171,19 @@ function confirmDelete(id: number): Promise<void> {
             </button>
           </template>
           <template v-else>
-            <button
-              class="btn"
-              data-test="rename"
+            <IconButton
+              icon="pencil"
+              :label="`${nameOf(p)}の名前を変更`"
+              test="rename"
               @click="startRename(p)"
-            >
-              名前を変更
-            </button>
-            <button
-              class="btn"
-              data-test="delete"
+            />
+            <IconButton
+              icon="trash"
+              variant="danger"
+              :label="`${nameOf(p)}を削除`"
+              test="delete"
               @click="deletingId = p.id; editingId = null"
-            >
-              削除
-            </button>
+            />
           </template>
         </div>
       </li>
@@ -190,14 +196,14 @@ function confirmDelete(id: number): Promise<void> {
         aria-label="追加するパスキーの名前"
         data-test="new-label"
       >
-      <button
-        class="btn btn-primary"
+      <IconButton
+        icon="key-plus"
+        label="パスキーを追加"
+        variant="primary"
         :disabled="busy"
-        data-test="add-passkey"
+        test="add-passkey"
         @click="addPasskey"
-      >
-        パスキーを追加
-      </button>
+      />
     </div>
     <p
       v-if="error"

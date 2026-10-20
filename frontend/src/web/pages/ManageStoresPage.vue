@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { useDataApi, type StoreRow } from '../api/data'
+import IconButton from '../components/IconButton.vue'
 import RowMenu, { type RowMenuItem } from '../components/RowMenu.vue'
 import { errorMessage } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -221,12 +222,11 @@ function doMerge(): Promise<void> {
         aria-label="店名で検索"
         data-test="query"
       >
-      <button
-        class="btn"
+      <IconButton
+        icon="search"
+        label="検索"
         type="submit"
-      >
-        検索
-      </button>
+      />
     </form>
     <p
       v-if="error"
@@ -289,23 +289,20 @@ function doMerge(): Promise<void> {
               {{ p }}
             </option>
           </select>
-          <button
-            class="btn btn-primary"
-            type="button"
+          <IconButton
+            icon="check"
+            label="保存"
+            variant="primary"
             :disabled="busy"
-            data-test="edit-save"
+            test="edit-save"
             @click="saveEdit"
-          >
-            保存
-          </button>
-          <button
-            class="btn"
-            type="button"
+          />
+          <IconButton
+            icon="close"
+            label="やめる"
             :disabled="busy"
             @click="cancelEditor"
-          >
-            やめる
-          </button>
+          />
         </div>
         <RowMenu
           v-else

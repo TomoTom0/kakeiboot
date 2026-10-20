@@ -578,3 +578,96 @@ describe('receipts filter popover (TASK-76 §6-3)', () => {
     ).toBe(true)
   })
 })
+
+describe('icon-only action buttons (TASK-47)', () => {
+  it('[covers:web-settings.passkey-icon-actions][covers:web-settings.issue-url-icons][covers:web-manage.editor-icon-actions] .ibtn は44px正方・variant・disabled の規則を持つ', () => {
+    const base = rulesFor('.ibtn')
+    expect(base.length).toBeGreaterThan(0)
+    expect(base.some((r) => decl(r.body, 'width') === '44px' && decl(r.body, 'height') === '44px')).toBe(true)
+    expect(base.some((r) => decl(r.body, 'padding') === '0')).toBe(true)
+    // the variants: primary paints the accent, danger colors the glyph
+    expect(
+      rulesFor('.ibtn.primary').some(
+        (r) => decl(r.body, 'background') === 'var(--bb-accent)' && decl(r.body, 'color') === 'var(--bb-accent-fg)',
+      ),
+    ).toBe(true)
+    expect(rulesFor('.ibtn.danger').some((r) => decl(r.body, 'color') === 'var(--bb-danger)')).toBe(true)
+    expect(rulesFor('.ibtn:disabled').some((r) => (decl(r.body, 'opacity') ?? '') !== '')).toBe(true)
+  })
+})
+
+describe('topbar title position (TASK-69)', () => {
+  it('[covers:web-shell.topbar-title-position] .topbar-title は中央寄せで ellipsis 系は不変', () => {
+    const title = rulesFor('.topbar-title')
+    expect(title.some((r) => decl(r.body, 'justify-content') === 'center')).toBe(true)
+    // the flex growth and the ellipsis machinery stay as they were
+    expect(title.some((r) => decl(r.body, 'flex') === '1 1 auto' && decl(r.body, 'min-width') === '0')).toBe(true)
+    const text = rulesFor('.topbar-title-text')
+    expect(text.some((r) => decl(r.body, 'white-space') === 'nowrap' && decl(r.body, 'text-overflow') === 'ellipsis')).toBe(true)
+  })
+})
+
+describe('label picker chip motion (TASK-51)', () => {
+  it('[covers:web-labels.picker-chip-motion] .label-picker 配下の label-anim は幅・不透明度・縮尺の遷移で 0 へ縮み、scope 外・reduced-motion では無効', () => {
+    const enterActive = rulesFor('.label-picker .label-anim-enter-active')
+    expect(enterActive.length).toBeGreaterThan(0)
+    expect(
+      enterActive.some((r) => {
+        const t = decl(r.body, 'transition') ?? ''
+        const durs = (t.match(/[\d.]+s/g) ?? []).map((d) => parseFloat(d))
+        return /max-width/.test(t) && /opacity/.test(t) && /transform/.test(t) && durs.length > 0 && Math.min(...durs) >= 0.15
+      }),
+    ).toBe(true)
+    expect(enterActive.some((r) => decl(r.body, 'overflow') === 'hidden')).toBe(true)
+    const from = rulesFor('.label-picker .label-anim-enter-from')
+    expect(
+      from.some(
+        (r) =>
+          decl(r.body, 'max-width') === '0' &&
+          decl(r.body, 'opacity') === '0' &&
+          (decl(r.body, 'min-width') ?? '') === '0' &&
+          /^0/.test(decl(r.body, 'padding-left') ?? 'x') &&
+          /-/.test(decl(r.body, 'margin-left') ?? ''),
+      ),
+    ).toBe(true)
+    expect(from.some((r) => /scale/.test(decl(r.body, 'transform') ?? ''))).toBe(true)
+    const leaveTo = rulesFor('.label-picker .label-anim-leave-to')
+    expect(leaveTo.some((r) => decl(r.body, 'max-width') === '0' && decl(r.body, 'opacity') === '0')).toBe(true)
+    expect(rulesFor('.label-picker .label-anim-move').some((r) => (decl(r.body, 'transition') ?? '') !== '')).toBe(true)
+    // scoped: the animation classes carry no styles outside .label-picker
+    expect(rulesFor('.label-anim-enter-active').length).toBe(0)
+    // reduced motion turns the row motion off entirely
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(rm, 'reduced-motion block').toBeDefined()
+    expect(rm!).toMatch(/\.label-picker \.label-anim/)
+  })
+})
+
+describe('copy feedback motion (TASK-48)', () => {
+  it('[covers:web-usage.copy-motion] .copy-btn.is-done は check icon に pop animation・reduced-motion で無効・box 内 text 行の規則は廃止', () => {
+    expect(rulesFor('.copy-btn.is-done').some((r) => decl(r.body, 'color') === 'var(--bb-accent)')).toBe(true)
+    expect(rulesFor('.copy-btn.is-done .icon').length).toBeGreaterThan(0)
+    expect(rulesFor('.copy-btn.is-done .icon').some((r) => /bb-copy-pop/.test(decl(r.body, 'animation') ?? ''))).toBe(true)
+    expect(css).toMatch(/@keyframes bb-copy-pop/)
+    // the keyframes animate scale + opacity (a pop, not a plain fade)
+    const kf = blockAfter(/@keyframes bb-copy-pop/)
+    expect(kf, 'bb-copy-pop keyframes').toBeDefined()
+    expect(kf!).toMatch(/scale\(/)
+    // the old visible done-line inside the URL box is gone
+    expect(css).not.toMatch(/\.usage-copy-done/)
+    // reduced motion keeps the swap but not the animation
+    const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(rm, 'reduced-motion block').toBeDefined()
+    expect(rm!).toMatch(/copy-btn/)
+  })
+})
+
+describe('sidebar settings nav (TASK-56)', () => {
+  it('[covers:web-shell.sidebar-settings-nav] .side-nav-secondary は主 nav の下の区切り付き group', () => {
+    const sec = rulesFor('.side-nav-secondary')
+    expect(sec.length).toBeGreaterThan(0)
+    expect(sec.some((r) => decl(r.body, 'border-top') !== undefined && decl(r.body, 'padding-top') !== undefined)).toBe(
+      true,
+    )
+  })
+})

@@ -78,5 +78,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['tests/**/*.test.ts'],
+    // 実App mount型のtestは孤立時でも1〜4秒かかる（最重は4秒強）。既定5sは
+    // 並列build等のload下で切れてfalse redになるため、余裕を持たせる
+    testTimeout: 15_000,
   },
 })

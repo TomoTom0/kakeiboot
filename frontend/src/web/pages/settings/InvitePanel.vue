@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { authApi } from '../../api/auth'
 import { charCount, errorMessage } from '../../composables/format'
 import { useSessionStore } from '../../stores/session'
+import IconButton from '../../components/IconButton.vue'
 
 // Ledger sharing card (spec_auth.md 2-1), living in the auth tab: the owner
 // of the default ledger issues share URLs (POST /api/invitations,
@@ -75,14 +76,14 @@ async function issueInvite(): Promise<void> {
           aria-label="メモ"
           data-test="invite-note"
         >
-        <button
-          class="btn"
+        <IconButton
+          icon="plus"
+          label="共有 URL を発行"
+          variant="primary"
           :disabled="busy"
-          data-test="invite-issue"
+          test="invite-issue"
           @click="issueInvite"
-        >
-          共有 URL を発行
-        </button>
+        />
       </div>
       <p
         v-if="inviteUrl"

@@ -296,6 +296,47 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
   })
 })
 
+// --- topbar title position (TASK-69): the title centers inside the box that
+// spans brand → right-side cluster (filters or actions). On a chip-less
+// screen the title text sits at the midpoint between the brand's right edge
+// and the actions' left edge; on a chip screen it pulls well clear of the
+// brand (before the change it hugged it at the topbar gap, 12px at 1280px) ---
+
+test.describe('topbar title position (1280x800)', () => {
+  test.use({ viewport: { width: 1280, height: 800 } })
+
+  test('[covers:web-shell.topbar-title-position-real] 表題は brand と右側要素の間の中央寄せ（/settings 中点一致・/receipts は brand から離れる）', async ({ page }) => {
+    logPageIssues(page, 'title-pos')
+    await installApiStub(page)
+    await page.goto('/settings')
+    await expect(page.locator('.topbar-title')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect()
+      const brand = r('.topbar-brand')
+      const icon = r('.topbar-title .icon')
+      const text = r('.topbar-title-text')
+      const actions = r('.topbar-actions')
+      // the whole title content (icon + gap + text) is the centered unit
+      const contentCenter = (icon.left + text.right) / 2
+      return { brandRight: brand.right, textLeft: text.left, contentCenter, actionsLeft: actions.left }
+    })
+    const mid = (m.brandRight + m.actionsLeft) / 2
+    expect(Math.abs(m.contentCenter - mid), `/settings title center ${JSON.stringify(m)} mid ${mid}`).toBeLessThanOrEqual(4)
+
+    await page.goto('/receipts')
+    await expect(page.locator('.topbar-title')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const f = await page.evaluate(() => {
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect()
+      const brand = r('.topbar-brand')
+      const text = r('.topbar-title-text')
+      return { brandRight: brand.right, textLeft: text.left }
+    })
+    expect(f.textLeft - f.brandRight, `/receipts ${JSON.stringify(f)}`).toBeGreaterThanOrEqual(40)
+  })
+})
+
 // --- apps grant rows (TASK-20 §10-3): the 選択中の家計簿 dd carries the
 // grant's own --ledger-<key> chip as a real painted color. The grants stub
 // option feeds one grant whose active_ledger_color (pink) differs from the

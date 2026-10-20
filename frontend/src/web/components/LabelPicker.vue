@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import { LABEL_COLORS, labelColorsOf, type Label, type LabelColor } from '@/shared/labels'
 import { useDataApi, type ReceiptView } from '../api/data'
@@ -18,9 +18,12 @@ import { useLabelsStore } from '../stores/labels'
 // response updates `confirmed` only (never `desired`) and is written back
 // through applyReceipt with the panel's latest receipt, so a content edit
 // saved while a label request is in flight keeps its revision (labels never
-// bump it). The popover stays open across consecutive toggles; a failure
-// shows as one line inside it, or — once closed — as a warning badge on the
-// button (with a visually-hidden note) that reappears in the popover. While
+// bump it). TASK-51: a selection closes the popover — the chip animating
+// into the tags row is the confirmation — and the focus returns to the
+// trigger (PopoverPanel's own focus return only runs on its Escape /
+// outside close, so the picker focuses its trigger itself). A failure of an
+// already-closed popover shows as the warning badge on the button (with a
+// visually-hidden note) and reappears in the popover once reopened. While
 // editing the form the button is disabled; the request in flight and the
 // queued diff still run to completion.
 const props = defineProps<{
@@ -41,6 +44,8 @@ const desired = ref<LabelColor[]>(labelColorsOf(props.receipt.labels))
 const sending = ref(false)
 const error = ref('')
 let timer: ReturnType<typeof setTimeout> | null = null
+
+const addBtnEl = ref<HTMLButtonElement | null>(null)
 
 function titles(): Record<LabelColor, string | null> {
   const out = {} as Record<LabelColor, string | null>
@@ -67,6 +72,11 @@ function toggle(c: LabelColor): void {
   desired.value = desired.value.includes(c) ? desired.value.filter((x) => x !== c) : [...desired.value, c]
   error.value = ''
   scheduleSend()
+  // TASK-51: the selection closes the popover and the focus goes back to
+  // the trigger — the toggle button unmounts with the dialog, so without
+  // this the focus would drop to the body
+  open.value = false
+  void nextTick(() => addBtnEl.value?.focus())
 }
 
 /** Debounce across one macrotask: taps within the same burst compose. */
@@ -148,6 +158,7 @@ onBeforeUnmount(() => {
     >
       <template #trigger="{ 'aria-expanded': expanded, 'aria-controls': controls }">
         <button
+          ref="addBtnEl"
           type="button"
           class="label-add-btn"
           :aria-expanded="expanded"
