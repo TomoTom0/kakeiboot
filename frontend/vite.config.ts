@@ -68,10 +68,12 @@ export default defineConfig({
     // mobile shell (menu button, tabbar, drawer sidebar) disappears.
     // Safari 15 keeps the classic (max-width: ...) form.
     cssTarget: 'safari15',
+    // web only: the widget entry is built by the dedicated pass in
+    // vite.widget.config.ts, which inlines its JS/CSS into widget.html
+    // (the ChatGPT sandbox cannot resolve /assets/* references, TASK-50)
     rollupOptions: {
       input: {
         web: fileURLToPath(new URL('./web.html', import.meta.url)),
-        widget: fileURLToPath(new URL('./widget.html', import.meta.url)),
       },
     },
   },

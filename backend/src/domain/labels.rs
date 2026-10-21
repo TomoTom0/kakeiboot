@@ -75,6 +75,15 @@ fn sort_colors(colors: &mut [LabelColor]) {
     colors.sort_by_key(|c| c.order());
 }
 
+/// Normalize a label color list (TASK-21 draft labels): drop duplicates and
+/// restore the palette definition order. Callers turn an empty result into
+/// `None` ("no labels") before storing it in the draft payload
+/// (spec_mcp-tools.md 7-1).
+pub fn normalize_colors(colors: &mut Vec<LabelColor>) {
+    sort_colors(colors);
+    colors.dedup();
+}
+
 /// The five definitions of a ledger in definition order (title NULL = color
 /// only). Ledgers without rows (unknown id) simply yield an empty vec.
 pub async fn list_labels(conn: &mut SqliteConnection, ledger_id: i64) -> sqlx::Result<Vec<Label>> {
@@ -474,5 +483,22 @@ mod tests {
         assert_eq!(LabelColor::parse("orange"), None);
         assert_eq!(LabelColor::Red.display_ja(), "赤");
         assert_eq!(LabelColor::Blue.display_ja(), "青");
+    }
+
+    // [covers:mcp-draft.label-colors-normalize]
+    #[test]
+    fn normalize_colors_dedupes_and_orders() {
+        let parse = |v: &[&str]| -> Vec<LabelColor> {
+            v.iter().map(|s| LabelColor::parse(s).unwrap()).collect()
+        };
+        let mut dup = parse(&["blue", "red", "blue"]);
+        normalize_colors(&mut dup);
+        assert_eq!(dup, parse(&["red", "blue"]));
+        let mut shuffled = parse(&["purple", "yellow", "green", "yellow"]);
+        normalize_colors(&mut shuffled);
+        assert_eq!(shuffled, parse(&["yellow", "green", "purple"]));
+        let mut none: Vec<LabelColor> = vec![];
+        normalize_colors(&mut none);
+        assert!(none.is_empty(), "empty stays empty (callers store None)");
     }
 }

@@ -94,6 +94,12 @@ pub struct DraftPayload {
     pub payment_method: Option<PaymentMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Draft-stage labels (TASK-21): color keys chosen at intake, normalized
+    /// to the palette order (spec_mcp-tools.md 7-1). None/empty = unlabeled;
+    /// carried into `receipt_labels` by the approval transaction
+    /// (spec_data-model.md 7-5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_colors: Option<Vec<super::labels::LabelColor>>,
     pub items: Vec<DraftItem>,
 }
 
@@ -237,6 +243,10 @@ pub struct DraftView {
     pub reported: ReportedMeta,
     pub image_meta: Option<ImageMetaView>,
     pub payload: DraftPayload,
+    /// Draft-stage labels with the ledger's titles in palette order
+    /// (TASK-21, spec_mcp-tools.md 7-1): what approval will carry into
+    /// `receipt_labels`. Always an array (empty when unlabeled).
+    pub labels: Vec<Label>,
     pub resolution: Resolution,
     pub approved_receipt_id: Option<i64>,
     pub possible_duplicates: Vec<PossibleDuplicate>,

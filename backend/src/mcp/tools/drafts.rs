@@ -322,8 +322,16 @@ pub async fn update(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     if row.status != "pending" {
         return Err(conflict(c, &row, &ledger).await);
     }
-    let (payload, changed) =
+    let (mut payload, changed) =
         apply_patch(&row.payload(), &patch).map_err(|e| result::invalid(&e))?;
+    // draft labels: keep the stored payload in the normalized form (TASK-21),
+    // same as the intake path
+    if let Some(colors) = payload.label_colors.as_mut() {
+        crate::domain::labels::normalize_colors(colors);
+        if colors.is_empty() {
+            payload.label_colors = None;
+        }
+    }
     let errs = validate_payload(&payload, c.limits());
     if !errs.is_empty() {
         return Err(result::invalid(&errs));

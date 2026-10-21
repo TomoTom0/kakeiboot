@@ -288,6 +288,7 @@ type DraftPayload = {               // draft の payload_json と tool I/O で�
   tax_amount?: integer | null;
   payment_method?: PaymentMethod | null;
   note?: string | null;
+  label_colors?: LabelColor[] | null;  // 作成時指定ラベル（下記注記。TASK-21）
   items: DraftItem[];
 };
 type DraftItem = {
@@ -312,6 +313,7 @@ type DraftView = {
   image_meta?: { original_filename: string | null; original_filename_source: "download" | "model" | null;
                  taken_at: string | null; taken_at_source: "exif" | "model" | null } | null;  // 確定値
   payload: DraftPayload;
+  labels: Label[];                  // draft 段階のラベル（ledger_labels のタイトルと結合した定義順。常時配列）
   resolution: {                     // server の解決見込み（承認時に確定）
     store: { status: "existing" | "new"; store_id?: integer };
     categories: { line_no: integer; input: string | null; status: "ok" | "unknown" | "history"; resolved?: string }[];
@@ -333,6 +335,7 @@ type Label = { color: LabelColor; title: string | null };           // title は
 ```
 
 - `input_kind` は列を持たず `image_status = 'none'` ⇔ `manual` で表す。
+- `label_colors`（TASK-21）: ユーザーがラベル（色またはラベルの名前）を指定したときだけモデルが入れる色キー配列で、ラベルの名前で言われた場合は `get_catalog` の `labels` で色に解決する。#1 / #20 の payload と #2 の `set`（配列で置換・`null` で解除）で共通。サーバーは重複を除き定義順に正規化して保存し（null / 空配列 = なし）、承認時に `receipt_labels` へ引き継ぐ（`spec_data-model.md` §7-5）。DraftView の `labels` が ledger_labels のタイトルと結合した定義順で確認でき、`get_receipt_drafts` の一覧行には載せない。
 
 ### 7-2 create_receipt_draft（#1）
 
@@ -383,7 +386,7 @@ input = {
 output = Envelope<"draft", { draft: DraftView; changed: string[] }>
 ```
 
-- revision 引数は取らない（`spec_data-model.md` §7-3）。pending 以外は isError（conflict）。変更が空なら入力検証エラー。
+- revision 引数は取らない（`spec_data-model.md` §7-3）。pending 以外は isError（conflict）。変更が空なら入力検証エラー。`set.label_colors`（配列で置換・`null` で解除）は 7-1 の注記どおり draft 段階ラベルの修正経路。
 - 修正された明細のカテゴリは draft 内でユーザー指定として扱い、承認時に `category_source = 'user'` とする。
 
 ### 7-4 approve_receipt_draft（#3）
@@ -601,7 +604,7 @@ output = Envelope<"label_change", {
 - 入力検証エラー（isError）: `receipt_ids` 空・51件以上、add / remove 両方空、add と remove の交差、未知の色キー。
 - 対象 ledger は 3-1 と同じ解決。role は editor 以上（viewer は既存の権限不足エラーとして全体を isError。skipped にはしない）。ledger 未選択・所属外も既存の選び直しエラー。
 - 他家計簿・存在しない `receipt_id` は `skipped: not_found`、論理削除済みは `skipped: deleted`（ラベルは保持され復元で戻る）。一部 skip は成功 + `skipped`、全件 skip は isError。
-- draft 段階への付与は持たない。タイトル編集の tool も持たない（web 画面のみ。description に「ユーザーがタイトルで言った場合は get_catalog の labels で色に解決する」「タイトルの変更は web 画面の 設定 > ラベル で行う」を書く）。
+- draft 段階への付与はこの tool で行わない（作成時の `payload.label_colors` が承認時に引き継がれる。7-1）。タイトル編集の tool も持たない（web 画面のみ。description に「ユーザーがタイトルで言った場合は get_catalog の labels で色に解決する」「タイトルの変更は web 画面の 設定 > ラベル で行う」「下書き段階へのラベル指定はこの tool ではなく作成時の payload.label_colors」を書く）。
 - widget view は無し（可視性 model のみ。widget での付け外しは会話経由のみ）。
 
 ### 7-22 create_receipt_drafts（#20）
@@ -830,7 +833,7 @@ Envelope<"stats", {
 
 | view | 描画 tool | 内容 | 操作 |
 |---|---|---|---|
-| draft | create / update / approve / reopen / get_receipt_drafts（draft_id 指定） | ledger バッジ、店・日時・支払・合計、明細表（カテゴリ、unknown は警告色）、明細合計と印字合計の差、画像（行タップで bbox 枠表示）、画像状態（5-4）、重複の帯（`possible_duplicates` と承認結果の `duplicate_*` warnings）、revision | pending 時のみ「この内容で登録」ボタン（11-3。重複帯があっても無効化しない）。承認後は「登録済み（レシート #id）」 |
+| draft | create / update / approve / reopen / get_receipt_drafts（draft_id 指定） | ledger バッジ、店・日時・支払・合計、ヘッダのラベルは LabelChip 列（名前あり = 名前チップ・名前なし = 文字のない色チップ。`labels`。receipt 行と同じ表示規則）、明細表（カテゴリ、unknown は警告色）、明細合計と印字合計の差、画像（行タップで bbox 枠表示）、画像状態（5-4）、重複の帯（`possible_duplicates` と承認結果の `duplicate_*` warnings）、revision | pending 時のみ「この内容で登録」ボタン（11-3。重複帯があっても無効化しない）。承認後は「登録済み（レシート #id）」 |
 | draft_batch | create_receipt_drafts / approve_receipt_drafts | ledger バッジ、「下書き N 件（画像あり a / 画像なし b）」、draft_list と同じ行表示（店・日付・行数・合計・画像状態の文言・重複の印）+ 行ごとの状態（未登録 / 登録済み #id / 内容が更新されています / 要確認）、stale_revision があれば「内容が更新されています」の帯。保存されなかった要素（`rejected`）・未参照画像は表示しない（会話側の content text で扱う） | 「すべて登録（pending 件数）」ボタン（11-3）。行タップで詳細（structuredContent 内の DraftView を使い callTool しない。画像は `_meta.images.drafts["<draft_id>"]` の初期 URL、期限切れ時は refresh_widget_images の `kind: "draft"`。戻るボタンで一覧へ）。詳細の「この内容で登録」は approve_receipt_draft。「すべて登録」の送信中は行タップを無効にする |
 | draft_list | get_receipt_drafts（一覧） | pending 一覧。各行に ledger 名、画像状態の文言（`image_display`）、重複の印 | 行タップで詳細（get_receipt_drafts を callTool、widget 内で view 切替） |
 | receipt | get_receipt / update_receipt | draft と同等の表示 + 削除済み表示、ヘッダのラベルは LabelChip 列（名前あり = 名前チップ・名前なし = 文字のない色チップ。`labels`。表示のみ） | なし（編集は会話。ラベルの付け外しも会話の label_receipts） |

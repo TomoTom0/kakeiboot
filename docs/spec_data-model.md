@@ -121,7 +121,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 固定5色（red / yellow / green / blue / purple）・ledger 単位の共有ラベル。1色=1定義行（`ledger_labels`、PK `(ledger_id, color)`、WITHOUT ROWID）。既定は色だけで、タイトルは任意（`title` nullable TEXT。trim 後 1〜20字・Unicode scalar、空文字は NULL、一意制約なし。上限は `configs/<env>/mcp.toml` の `max_label_title_chars`）。色の増減は migration を伴う設計変更（3節）。
 - 定義行は `AFTER INSERT ON ledgers` トリガ（0009）で5行 seed する。`store::create_ledger_with_seed`・登録 ceremony の直接 INSERT・テスト helper の直接 INSERT など作成経路に依らない。既存 ledger へは 0009 の backfill で投入した。`ledger_id` / `color` はトリガで不変（`title` のみ UPDATE 可）。ledger 行の削除（アプリ経路は無い）で CASCADE する。
 - 付与は `receipt_labels(receipt_id, color)` の関連行（insert / delete only。行の UPDATE はトリガで禁止）。1レシートに複数色を付与できる。`receipt_id` の ledger 一致はトリガで強制し、色の妥当性は `(ledger_id, color) → ledger_labels` の複合 FK（CASCADE）で保証する（`color` に CHECK を付けない）。
-- 付け外しは差分（add / remove）で冪等・可換（add は `INSERT OR IGNORE`、remove は `DELETE`）。`receipts.revision` / `updated_at` は変えない（楽観ロックと独立に失われる更新がない）。変化したレシートにのみ audit（entity_type `receipt` / action `label`、before・after は色キーの配列）。タイトル変更は entity_type `ledger_label` / action `update`（同値の再設定は記録しない）。
+- 付け外しは差分（add / remove）で冪等・可換（add は `INSERT OR IGNORE`、remove は `DELETE`）。`receipts.revision` / `updated_at` は変えない（楽観ロックと独立に失われる更新がない）。変化したレシートにのみ audit（entity_type `receipt` / action `label`、before・after は色キーの配列）。タイトル変更は entity_type `ledger_label` / action `update`（同値の再設定は記録しない）。draft の作成時指定（`payload.label_colors`・TASK-21）の承認時付与も `INSERT OR IGNORE` で行い、作成時付与の証跡は draft 承認の audit（`after_json` = payload_json）に一元化して receipt/label の audit 行は重複して残さない（§7-5）。
 - 論理削除しても付与は保持し、復元でそのまま戻る。削除中の付け外しは不可（web は 409 `deleted`、MCP は skipped）。90日の物理削除（purge）で FK CASCADE によりレシートと共に消える。
 - 書き込み（付与・解除・タイトル設定）は editor 以上。定義一覧の読み取りと検索・集計のラベル絞り込みは member 全員。
 
@@ -138,6 +138,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
   "purchased_on": "2026-10-11", "purchased_time": "18:42",
   "tax_mode": "inclusive", "total_amount": 1234, "tax_amount": 91,
   "payment_method": "credit_card", "note": null,
+  "label_colors": ["red", "blue"],
   "items": [
     {"line_no": 1, "line_kind": "item", "name": "牛乳", "name_raw": "ｷﾞｭｳﾆｭｳ1L",
      "quantity": 1, "unit_price": 198, "amount": 198, "tax_rate": 8,
@@ -152,6 +153,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 購入日が読めない場合、draft 段階で撮影日時（EXIF 優先）の日付を初期値に入れる。承認時は `purchased_on` 必須。
 - revision 履歴テーブルは持たない（承認時の最終 payload は audit_events に残る）。
 - `batch_id`（TEXT、NULL 可）: 同じ `create_receipt_drafts` 呼び出しで作った draft（兄弟）の共通 ID（ULID）。1件版の作成と reopen は NULL。用途は重複検知の file_id 照合から兄弟を除外することだけ（`spec_mcp-tools.md` §6）。reopen は batch_id をコピーしない。
+- `label_colors`（TASK-21）: 作成時（#1 / #20 の payload）と `update_receipt_draft` の `set` で指定する draft 段階ラベルの色キー配列。保存前に重複を除き定義順（red / yellow / green / blue / purple）へ正規化し、null と空配列は「なし」（None）として保存するため、保存済み payload は常に正規形。reopen は `payload_json` のコピーでそのまま引き継ぐ。承認時に `receipt_labels` へ引き継がれる（§7-5）。
 
 ### 7-2 ライフサイクル
 
@@ -263,6 +265,10 @@ BEGIN IMMEDIATE;
      INSERT INTO stores ... ; INSERT INTO store_aliases ...（store_category 名は store_categories で解決、未知は NULL + 警告）
 3. INSERT INTO receipts (ledger_id, created_by, source, image_id, store_id, store_name_raw, purchased_on, ...)
      VALUES (..., 'image' or 'manual', ...) RETURNING id;   -- source は image_status='none' なら manual、それ以外は image（6-1）
+3b. payload.label_colors の各色を INSERT OR IGNORE INTO receipt_labels (receipt_id, ledger_id, color, created_by, created_at)
+     で引き継ぐ（TASK-21。冪等再承認は手順1で return するためここへ来ない。FK 先の定義行は seed 済みで常に存在。
+     作成時付与の証跡は手順6の draft 承認 audit〔after_json = payload_json が label_colors を含む〕に一元化し、
+     receipt/label の audit 行は書かない。label_receipts による後からの付け外しは従来どおり audit を残す）
 4. 各明細: カテゴリ名 → item_categories（WHERE ledger_id = :lid）で解決（未知は NULL + 警告、category_source='model'）、
    tax_mode と tax_rate から amount_incl を算出。item 行を先に INSERT し、値引行は parent_line_no → parent_item_id と category 複写。
      INSERT INTO receipt_items (...)   -- FTS はトリガで同期
@@ -340,7 +346,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 ## 11. 監査
 
 - 全ドメイン行に `created_at` / `updated_at`。
-- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。家計簿名の変更は `entity_type=ledger` / `action=rename_ledger`（entity_id は ledger_id、before・after に名前。TASK-20）。データの書き出し・取り込みは同じく `entity_type=ledger` で `action=export`（after に件数・bytes。誰がいつ何を書き出したかの記録）/ `action=import`（新規 ledger 作成。after に名前・件数。TASK-58）。
+- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。draft の作成時ラベル付与（`payload.label_colors`・TASK-21）の承認時確定は draft 承認の audit（`after_json` = payload_json）で証跡化し、receipt/label の audit 行は重複して残さない（§6-4・§7-5）。家計簿名の変更は `entity_type=ledger` / `action=rename_ledger`（entity_id は ledger_id、before・after に名前。TASK-20）。データの書き出し・取り込みは同じく `entity_type=ledger` で `action=export`（after に件数・bytes。誰がいつ何を書き出したかの記録）/ `action=import`（新規 ledger 作成。after に名前・件数。TASK-58）。
 - 認証系の記録: `actor_kind=mcp_anonymous` は匿名の MCP 呼び出し（`request_recovery` の受付）。`entity_type` に `user` / `webauthn_credential` / `invitation` / `oauth_grant` / `recovery_request` 等、`action` に `switch_ledger` / `grant_create` / `consent` / `login_mismatch` / `counter_regression` / `token_issue` / `token_revoke` / `token_use` / `passkey_revoke` / `user_disable` / `user_note` / `recovery_resolve` / `recovery_reject` / `grant_revoke` / `session_revoke` 等を加える（アプリ側 enum。一覧の正本は `spec_auth.md`）。
 
 ## 12. TTL 掃除

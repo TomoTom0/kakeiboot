@@ -66,6 +66,9 @@ export type DraftPayload = {
   tax_amount?: Integer | null
   payment_method?: PaymentMethod | null
   note?: string | null
+  /** draft-stage labels, chosen at intake and carried into the receipt at
+   *  approval (TASK-21; normalized to the palette order by the server) */
+  label_colors?: LabelColor[] | null
   items: DraftItem[]
 }
 
@@ -94,6 +97,9 @@ export type DraftView = {
     taken_at_source: 'exif' | 'model' | null
   } | null
   payload: DraftPayload
+  /** draft-stage labels with the ledger's titles, palette order (TASK-21;
+   *  empty when unlabeled — older payloads omit it) */
+  labels?: Label[]
   resolution: {
     store: { status: 'existing' | 'new'; store_id?: Integer }
     categories: {

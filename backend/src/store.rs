@@ -538,6 +538,29 @@ pub async fn approve_draft(
     .fetch_one(&mut *tx)
     .await?;
 
+    // step 3b: the draft's labels carry over inside the same tx (TASK-21,
+    // spec_data-model.md 7-5): INSERT OR IGNORE — the idempotent re-approval
+    // returns before this point, and the FK target row always exists (the
+    // 0009 seed trigger plants all five colors per ledger). The sole audit
+    // record of the creation-time assignment is the draft approve audit
+    // (after_json = payload_json, which carries label_colors); no separate
+    // receipt/label audit row is written.
+    if let Some(colors) = &payload.label_colors {
+        for c in colors {
+            sqlx::query(
+                "INSERT OR IGNORE INTO receipt_labels (receipt_id, ledger_id, color, created_by, created_at)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(receipt_id)
+            .bind(ledger_id)
+            .bind(c.as_str())
+            .bind(user_id)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
     // step 4: receipt items (category per line; item lines first, then discounts)
     let mut category_ids: Vec<Option<i64>> = Vec::with_capacity(payload.items.len());
     for it in &payload.items {

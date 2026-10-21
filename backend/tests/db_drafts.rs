@@ -23,6 +23,7 @@ fn base_payload() -> DraftPayload {
         tax_amount: None,
         payment_method: None,
         note: None,
+        label_colors: None,
         items: vec![DraftItem {
             line_no: 1,
             line_kind: LineKind::Item,

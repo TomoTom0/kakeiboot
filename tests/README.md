@@ -61,6 +61,7 @@
 | `backend/tests/mcp_tools_catalog.rs` | 結合 | get_catalog・manage_category/manage_store・summarize_spending・filters 上限 [TASK-73] |
 | `backend/tests/mcp_tools_labels.rs` | 結合 | label_receipts と検索・集計の label_colors [TASK-17] |
 | `backend/tests/mcp_tools_drafts_batch.rs` | 結合 | 一括 tool（create/approve_receipt_drafts） [TASK-18]・障害注入 [TASK-25] |
+| `backend/tests/mcp_tools_draft_labels.rs` | 結合 | draft 段階ラベル（payload.label_colors 取込: schema 5色 enum・正規化と DraftView.labels タイトル結合・不正色の isError・承認時 receipt_labels 引き継ぎと audit 一元化） [TASK-21] |
 | `backend/tests/rate_limit.rs` | 結合 | アプリ内 rate limit の経路別 429 |
 | `backend/tests/web_data_api.rs` | 結合 | web 補助データ REST と静的配信（catalog/stores/receipts/labels・家計簿名変更 [TASK-20]・query 上限 [TASK-73]・時刻順 cursor 3要素 [TASK-63]・payment_method 絞り込み [TASK-65]・SPA 配信） |
 | `backend/tests/web_export_import.rs` | 結合 | データの書き出し・取り込み（export: viewer 含む member の一貫 snapshot・version 1 構造・audit。import: 新規 ledger 復元・ID remap・round-trip 一致。guard: 401・403・非所属 404 同一視。上限: export/import_too_large・413・import_invalid は rollback・画像 file 残存なし [TASK-58]） |
@@ -115,6 +116,7 @@
 | `frontend/tests/unit/web/label-picker.test.ts` | 単体 | LabelPicker（tags 行末ボタン + popover・差分・rollback） [TASK-17] [TASK-26] |
 | `frontend/tests/unit/web/popover-panel.test.ts` | 単体 | PopoverPanel（role=dialog・フォーカス・sheet-narrow） [TASK-27] |
 | `frontend/tests/unit/stores.test.ts` | 単体 | web / widget の Pinia store が独立していること |
+| `frontend/tests/unit/inline-widget-html.test.ts` | 単体 | widget 単一 HTML 化 build plugin（TASK-50: 偽 bundle で script/stylesheet の inline・modulepreload 除去・`</script` エスケープ・chunk の非放出・postcondition の error〔bundle に無い asset・CSS の url()/@import・残存 src/href〕・package.json build script と vite.widget.config.ts〔単一 entry + codeSplitting: false + emptyOutDir: false + inline plugin〕・web pass が web.html のみを input に持つことの文本検証） |
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面の png・metrics.json を幅別に出力 |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（asset へ配置） |
