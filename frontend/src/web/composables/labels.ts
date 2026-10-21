@@ -11,3 +11,9 @@ export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
   bank_transfer: '銀行振込',
   other: 'その他',
 }
+
+/** True when v is one of the nine payment-method keys (URL validation,
+ *  TASK-65 — unknown values drop out of the context instead of a 400). */
+export function isPaymentMethod(v: string | null | undefined): v is PaymentMethod {
+  return v !== null && v !== undefined && Object.prototype.hasOwnProperty.call(PAYMENT_LABEL, v)
+}

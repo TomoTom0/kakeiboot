@@ -109,7 +109,18 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     expect((changed!.at(-1)![0] as ReceiptView).total_amount).toBe(1234)
     // the panel never re-lists the sequence (Feed order / position are untouched)
     expect(list).not.toHaveBeenCalled()
-    owner.wrapper.unmount()
+  })
+
+  it('[covers:web-receipts.payment-tag-link] 支払方法タグは /receipts?payment_method=&<購入月> へのリンク', async () => {
+    const { wrapper } = await mountPanel(withRole('viewer'), 101)
+    const tag = wrapper.find('[data-test="payment-method"]')
+    expect(tag.exists()).toBe(true)
+    expect(tag.element.tagName).toBe('A')
+    expect(tag.classes()).toContain('tag-link')
+    const url = new URL(tag.attributes('href')!, 'http://localhost')
+    expect(url.pathname).toBe('/receipts')
+    expect(url.searchParams.get('payment_method')).toBe('cash')
+    expect(url.searchParams.get('month')).toBe('2026-10') // the purchase month
   })
 })
 

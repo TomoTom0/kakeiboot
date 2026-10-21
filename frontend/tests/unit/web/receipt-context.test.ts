@@ -77,3 +77,16 @@ describe('receiptContext (CONTEXT_FIELDS)', () => {
     }
   })
 })
+
+// TASK-65: payment_method joins the context fields (URL <-> ReceiptListQuery
+// with unknown values dropped, the labels/store_id tolerance pattern).
+describe('CONTEXT_FIELDS payment_method (TASK-65)', () => {
+  it('[covers:web-receipts.payment-filter] payment_method は URL と ReceiptListQuery を往復し未知の値は落とす', () => {
+    expect(contextToListQuery({ payment_method: 'cash' })).toEqual({ payment_method: 'cash' })
+    expect(listQueryToContext({ payment_method: 'credit_card' })).toEqual({ payment_method: 'credit_card' })
+    expect(listQueryToContext({})).toEqual({})
+    for (const bad of ['paypay', 'CASH', '1']) {
+      expect(contextToListQuery({ payment_method: bad }), bad).toEqual({})
+    }
+  })
+})

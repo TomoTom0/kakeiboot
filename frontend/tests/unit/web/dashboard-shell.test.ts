@@ -123,7 +123,7 @@ describe('HomePage (dashboard)', () => {
     expect(rest.text()).toContain('100円')
   })
 
-  it('[covers:web-home.dashboard-month-switch] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
+  it('[covers:web-home.dashboard-month-switch][covers:web-home.empty-text-unified] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const stats = vi.spyOn(api, 'getStats')
     const { wrapper, router } = await mountApp('/')
@@ -150,6 +150,10 @@ describe('HomePage (dashboard)', () => {
     // empty-state nudge; the dialog stays open and next is enabled again
     expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年9月の支出')
     expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
+    // TASK-57 A1: the stats cards share one empty text (the まだ nuance is
+    // gone; the recent card keeps its onboarding empty-state below)
+    expect(wrapper.find('[data-test="breakdown"] .empty').text()).toBe('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="stores"] .empty').text()).toBe('この期間の記録はありません。')
     expect(wrapper.find('[data-test="recent"]').text()).toContain('ChatGPT でレシートの写真を送ると')
     expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
 
@@ -272,11 +276,81 @@ describe('HomePage (dashboard)', () => {
     expect(wrapper.find('[data-test="diff"]').text()).toContain('前期間比 +948円')
     expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('1日あたり 73円') // 948 / 13日
     expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('前期間 0円')
-    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(1)
-    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10月'])
+    // TASK-55: a 13-day range is daily granularity — 13 zero-filled day bars
+    // with shortDate axis ends (no monthly_trend call; the overview's
+    // daily_cumulative is the source)
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(13)
+    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10/3', '10/15'])
     const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
     expect(recent.searchParams.get('from')).toBe('2026-10-03')
     expect(recent.searchParams.get('to')).toBe('2026-10-15')
+  })
+
+  it('[covers:web-home.dashboard-week-mode][covers:web-home.trend-granularity] 週モードに追従（前週比・1日あたり・7本の日棒・今日強調・日棒は押せない・空状態）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper } = await mountApp('/')
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+    await chip().trigger('click')
+    await settle()
+    await wrapper.find('[data-test="mode-week"]').trigger('click')
+    await settle()
+    // the current week (2026-10-12..18, Monday anchored) is empty in the mock:
+    // the overview answers with from/to and the trend is its own daily bars —
+    // no separate monthly_trend call rides along (the summary is the source)
+    expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', from: '2026-10-12', to: '2026-10-18' })
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月12日の週')
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月12日の週の支出')
+    expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
+    expect(wrapper.find('[data-test="bar-2026-10-15"]').classes()).toContain('current')
+    expect(wrapper.find('[data-test="bar-2026-10-15"]').attributes('title')).toBe('10月15日（木） 0円')
+    // day bars have nowhere to move: they are not buttons
+    expect(wrapper.find('[data-test="trend-card"] .bar-btn').exists()).toBe(false)
+    expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('合計 0円')
+    expect(wrapper.find('[data-test="recent"]').text()).toContain('ChatGPT でレシートの写真を送ると')
+    // the previous week (2026-10-05..11) holds all three receipts; per-day
+    // divides by the full 7 days (a settled period) and the compare is 前週
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月5日の週')
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月5日の週の支出')
+    expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
+    expect(wrapper.find('[data-test="diff"]').text()).toContain('前週比 +948円')
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('レシート 3件')
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('1日あたり 135円') // 948 / 7日
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('前週 0円')
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
+    expect(wrapper.find('[data-test="bar-2026-10-10"]').attributes('title')).toBe('10月10日（土） 400円')
+    expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('合計 948円')
+    // a past week carries no current highlight (today is outside)
+    expect(wrapper.find('.bar-col.current').exists()).toBe(false)
+  })
+
+  it('[covers:web-home.trend-granularity] 期間モードの推移は 62/366 日の閾値で日・週棒へ（週棒の押下で週モードへ）', async () => {
+    // 13 days -> day bars; both ends shortDate (covered in the period-modes
+    // test above); here the weekly window of a 76-day range
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    await wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="mode-range"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="range-from"]').setValue('2026-08-01')
+    await wrapper.find('[data-test="range-to"]').setValue('2026-10-15')
+    await wrapper.find('[data-test="range-apply"]').trigger('click')
+    await settle()
+    // 12 Monday-anchored weekly buckets (2026-07-27..10-12), the last clipped
+    // at the range end; the week holding today is the current one
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(12)
+    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['7/27', '10/12'])
+    expect(wrapper.find('[data-test="bar-2026-10-05"]').attributes('title')).toBe('10/5〜10/11 948円')
+    expect(wrapper.find('[data-test="bar-2026-10-12"]').classes()).toContain('current')
+    // weekly bars move the period: a press lands in the week mode on that week
+    await wrapper.find('[data-test="bar-2026-10-05"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月5日の週の支出')
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
   })
 })
 

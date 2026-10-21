@@ -653,6 +653,9 @@ pub struct StatsQuery {
     store_id: Option<i64>,
     #[serde(default)]
     item_query: Option<String>,
+    /// Exact payment-method match (web only, TASK-65; one of the 9 keys)
+    #[serde(default)]
+    payment_method: Option<String>,
     /// Comma-separated palette keys (OR), e.g. `label_colors=red,blue`
     #[serde(default)]
     label_colors: Option<String>,
@@ -662,8 +665,16 @@ pub struct StatsQuery {
 /// `domain::stats::summarize` the MCP summarize_spending tool uses
 /// (spec_mcp-tools.md 10, 12). `report` defaults to monthly_overview; the
 /// period is one of `month=YYYY-MM` / `year=YYYY` / `from&to`, default the
-/// report's default period (JST). Any ledger member (viewer included) may
-/// read.
+/// report's default period (JST). The web-only `payment_method` query key
+/// (TASK-65) filters by exact payment method. Any ledger member (viewer
+/// included) may read.
+/// A payment-method query key (TASK-65): one of the nine dto keys, else 400.
+fn parse_payment(p: String) -> Result<String, DataError> {
+    serde_json::from_value::<crate::domain::dto::PaymentMethod>(serde_json::Value::String(p))
+        .map(|v| v.as_str().to_string())
+        .map_err(|_| DataError::invalid())
+}
+
 pub async fn get_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -692,6 +703,7 @@ pub async fn get_stats(
         store: q.store,
         store_category: q.store_category,
         store_id: q.store_id,
+        payment_method: q.payment_method.map(parse_payment).transpose()?,
         item_query: q.item_query,
         label_colors: (!label_colors.is_empty()).then_some(label_colors),
     };
@@ -743,6 +755,9 @@ pub struct ReceiptListQuery {
     /// Comma-separated palette keys (OR), e.g. `label_colors=red,blue`
     #[serde(default)]
     label_colors: Option<String>,
+    /// Exact payment-method match (web only, TASK-65; one of the 9 keys)
+    #[serde(default)]
+    payment_method: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
     #[serde(default)]
@@ -783,7 +798,7 @@ pub async fn list_receipts(
         store_id: q.store_id,
         item_query: q.item_query,
         category: q.category,
-        payment_method: None,
+        payment_method: q.payment_method.map(parse_payment).transpose()?,
         label_colors: parse_label_colors(q.label_colors.as_deref())?,
         include_deleted: q.include_deleted.unwrap_or(false),
     };

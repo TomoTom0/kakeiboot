@@ -62,7 +62,7 @@
 | `backend/tests/mcp_tools_labels.rs` | 結合 | label_receipts と検索・集計の label_colors [TASK-17] |
 | `backend/tests/mcp_tools_drafts_batch.rs` | 結合 | 一括 tool（create/approve_receipt_drafts） [TASK-18]・障害注入 [TASK-25] |
 | `backend/tests/rate_limit.rs` | 結合 | アプリ内 rate limit の経路別 429 |
-| `backend/tests/web_data_api.rs` | 結合 | web 補助データ REST と静的配信（catalog/stores/receipts/labels・家計簿名変更 [TASK-20]・query 上限 [TASK-73]・SPA 配信） |
+| `backend/tests/web_data_api.rs` | 結合 | web 補助データ REST と静的配信（catalog/stores/receipts/labels・家計簿名変更 [TASK-20]・query 上限 [TASK-73]・時刻順 cursor 3要素 [TASK-63]・payment_method 絞り込み [TASK-65]・SPA 配信） |
 | `backend/tests/web_export_import.rs` | 結合 | データの書き出し・取り込み（export: viewer 含む member の一貫 snapshot・version 1 構造・audit。import: 新規 ledger 復元・ID remap・round-trip 一致。guard: 401・403・非所属 404 同一視。上限: export/import_too_large・413・import_invalid は rollback・画像 file 残存なし [TASK-58]） |
 | `backend/tests/web_media.rs` | 結合 | `GET /media/img/<token>` の配信時再検査と IP rate limit |
 | `backend/tests/admin_cli_phaseb.rs` | 結合 | 運用者 CLI Phase B（grant/session/recovery/resolve/reject/cleanup） |
@@ -91,21 +91,23 @@
 | `frontend/tests/unit/web/vite-proxy.test.ts` | 単体 | Vite dev proxy 構成・dev spa fallback・strictPort [TASK-29] |
 | `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター・ログイン・登録受付・同意（色 chip [TASK-20]・me 確定 [TASK-39]） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内の操作部品の非描画・favicon.svg の実色 |
-| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム（期間追従 [TASK-66]・時期チップ [TASK-44]・skeleton [TASK-39]・密度 [TASK-75]）とアプリ骨格（drawer・メニュー・route.meta 化 [TASK-74]） |
+| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム（期間追従 [TASK-66]・週モード [TASK-53]・推移粒度 [TASK-55]・時期チップ [TASK-44]・skeleton [TASK-39]・密度 [TASK-75]）とアプリ骨格（drawer・メニュー・route.meta 化 [TASK-74]） |
 | `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の家計簿名変更 [TASK-20]・パスキー・招待・4tab）・接続中のアプリ [TASK-20]・ラベル管理 [TASK-26] |
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
-| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（階層ドリル [TASK-74]・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・skeleton [TASK-39]） |
+| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（階層ドリル [TASK-74]・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・skeleton [TASK-39]・一覧・詳細の推移の週モード日棒とKPI実数 [TASK-55] [TASK-57]） |
 | `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels ヘルパ（軸両端ラベルの書式） [TASK-42] |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈・URL 同期・着地・優越判定 [TASK-77]・世代ガード [TASK-61]） |
-| `frontend/tests/unit/web/receipt-panel.test.ts` | 単体 | ReceiptPanel の labels slot 契約と明細リンク [TASK-74] |
-| `frontend/tests/unit/web/receipt-context.test.ts` | 単体 | 文脈 query ↔ ReceiptListQuery の対称変換 [TASK-17] |
+| `frontend/tests/unit/web/receipt-panel.test.ts` | 単体 | ReceiptPanel の labels slot 契約と明細リンク [TASK-74]・支払方法タグのリンク [TASK-65] |
+| `frontend/tests/unit/web/receipt-context.test.ts` | 単体 | 文脈 query ↔ ReceiptListQuery の対称変換 [TASK-17]（payment_method は9キー検証で不明値を落とす [TASK-65]） |
 | `frontend/tests/unit/web/ledger-switcher.test.ts` | 単体 | 家計簿の色と切替（初期選択・チップ・色帯） |
 | `frontend/tests/unit/web/brand-logo.test.ts` | 単体 | BrandLogo の2形態（full/compact・word prop・role=img） |
 | `frontend/tests/unit/web/styles.test.ts` | 単体 | styles.css の静的検査（grid・パレット・topbar・toolbar・密度・popover 化） [TASK-44] [TASK-75] [TASK-76] |
-| `frontend/tests/unit/web/filter-bar.test.ts` | 単体 | topbar 中央絞り込みバー [TASK-44] と検索チップ [TASK-41] |
+| `frontend/tests/unit/web/filter-bar.test.ts` | 単体 | topbar 中央絞り込みバー [TASK-44]（時期 dialog の tab は月/週/年/期間の4 tab [TASK-53]）と検索チップ [TASK-41] |
+| `frontend/tests/unit/web/period-store.test.ts` | 単体 | period store の週モード [TASK-53]（月曜始まりの7日 range・ラベル・labelShort・前週比較・urlQuery week=・step ±7日） |
+| `frontend/tests/unit/web/trend-granularity.test.ts` | 単体 | 推移粒度ヘルパ [TASK-55/57]（trendGranularity の週モード=日・range の62/366日閾値・dailyRows/weeklyRows の零埋め・weekStart・shortTime） |
 | `frontend/tests/unit/web/search-page.test.ts` | 単体 | /search 検索tab（debounce・2タブ・行リンク・URL 復元） [TASK-41] |
 | `frontend/tests/unit/web/transition.test.ts` | 単体 | 遷移のアトミック化とアニメーション・slide 方向判定 [TASK-39] [TASK-74] |
 | `frontend/tests/unit/web/label-dots.test.ts` | 単体 | LabelDots と読み上げ名ヘルパ [TASK-17] [TASK-26] |

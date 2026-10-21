@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import { parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
-import { useDataApi, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult } from '../api/data'
+import { useDataApi, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
@@ -13,8 +13,10 @@ import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { usePageReady } from '../composables/usePageReady'
-import { dayLabel, shortDate } from '../composables/period'
+import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
+import { axisMonthLabels, dayLabel, monthLabel, periodDays, shortDate, shortTime } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
+import { bucketSpan, dailyRows, monthlyRows, spanGranularity, weeklyRows } from '../composables/trend'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
@@ -35,10 +37,14 @@ const s = (v: unknown) => (typeof v === 'string' ? v : '')
 // include_deleted comes back through the URL (the feed round trip returns
 // the same context), read the same way receiptContext.ts does
 const includeDeletedQuery = s(route.query.include_deleted)
+// TASK-65: the payment-method filter rides the URL like the text filters (a
+// const first so the isPaymentMethod predicate narrows the property's type)
+const paymentQuery = s(route.query.payment_method)
 const filters = reactive({
   store: s(route.query.store),
   item: s(route.query.item),
   category: s(route.query.category),
+  paymentMethod: (isPaymentMethod(paymentQuery) ? paymentQuery : '') as PaymentMethod | '',
   includeDeleted: includeDeletedQuery === '1' || includeDeletedQuery === 'true',
   labelColors: [] as LabelColor[],
 })
@@ -79,6 +85,7 @@ function listQuery(cursor?: string): ReceiptListQuery {
     store: filters.store.trim() || undefined,
     item_query: filters.item.trim() || undefined,
     category: filters.category.trim() || undefined,
+    payment_method: filters.paymentMethod || undefined,
     label_colors: filters.labelColors,
     include_deleted: filters.includeDeleted || undefined,
     limit: 50,
@@ -92,6 +99,7 @@ function statsFilters(): StatsQuery {
     ...(filters.store.trim() ? { store: filters.store.trim() } : {}),
     ...(filters.item.trim() ? { item_query: filters.item.trim() } : {}),
     ...(filters.category.trim() ? { category: filters.category.trim() } : {}),
+    ...(filters.paymentMethod ? { payment_method: filters.paymentMethod } : {}),
     label_colors: filters.labelColors,
   }
 }
@@ -174,6 +182,7 @@ function applyFilters(): void {
   filters.store = draft.store
   filters.item = draft.item
   filters.category = draft.category
+  filters.paymentMethod = draft.paymentMethod
   filters.includeDeleted = draft.includeDeleted
   filtersOpen.value = false
   syncQuery()
@@ -187,10 +196,27 @@ function clearFilter(key: 'store' | 'item' | 'category'): void {
   void load()
 }
 
+/** RankedList's select: a payment row press toggles the filter in place (the
+ *  aggregate rows — その他 / 支払方法不明, keys[0]=null — stay inert). */
+function onPaymentRow(row: StatsRow): void {
+  const m = row.keys[0]
+  if (typeof m !== 'string') return
+  togglePayment(m as PaymentMethod)
+}
+
+function togglePayment(method: PaymentMethod): void {
+  filters.paymentMethod = filters.paymentMethod === method ? '' : method
+  draft.paymentMethod = filters.paymentMethod
+  syncQuery()
+  void load()
+}
+
 function syncQuery(): void {
   // keep the period and the filters in the URL: rows link back into the feed
-  // with this same context
-  void router.replace({ query: listQueryToContext(listQuery()) })
+  // with this same context. The period key (month= / week= / year=) rides
+  // alongside from/to so a reload/deep link restores the mode (TASK-57 A16 —
+  // the feed round trip itself stays range-based, CONTEXT_FIELDS)
+  void router.replace({ query: { ...listQueryToContext(listQuery()), ...period.urlQuery } })
 }
 
 const activeFilters = computed(() =>
@@ -209,6 +235,7 @@ const activeFilters = computed(() =>
  * form as the detail pages). */
 const chips = computed<FilterChip[]>(() => [
   ...activeFilters.value.map(([key, label, value]) => ({ key, label: `${label}: ${value}` })),
+  ...(filters.paymentMethod ? [{ key: 'payment', label: `支払: ${PAYMENT_LABEL[filters.paymentMethod]}` }] : []),
   ...filters.labelColors.map((c) => ({ key: `label-${c}`, label: labelDefOf(c).title ?? c })),
 ])
 
@@ -220,32 +247,60 @@ function removeChip(key: string): void {
     clearFilter(key)
     return
   }
+  if (key === 'payment') {
+    // the chip exists only while a method is selected (TS can't see that)
+    if (filters.paymentMethod) togglePayment(filters.paymentMethod)
+    return
+  }
   if (key.startsWith('label-')) {
     period.setLabelColors(filters.labelColors.filter((c) => c !== (key.slice(6) as LabelColor)))
   }
 }
 
 const average = computed(() => (totalCount.value ? Math.round(sumAmount.value / totalCount.value) : 0))
-
-// daily bars from the cumulative series (only for ranges up to ~2 months)
-const daily = computed(() => {
-  const series = overview.value?.daily_cumulative ?? []
+/** 1日あたり (TASK-57 A6): the same periodDays rule as the Home KPI. */
+const perDay = computed(() => {
   const [from, to] = period.range
-  const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1
-  if (days > 62) return null
-  const byDay = new Map<string, number>()
-  let prev = 0
-  for (const p of series) {
-    byDay.set(p.date, p.value - prev)
-    prev = p.value
+  return Math.round(sumAmount.value / periodDays(from, to))
+})
+
+/** TASK-55/A8: the trend card follows the period's length — day (<=62 days,
+ *  e.g. a month's 31 bars), Monday-anchored weeks (63..366) or months — so it
+ *  never disappears on long periods. The data stays the overview call's
+ *  daily_cumulative (no extra request). */
+const trendGran = computed(() => spanGranularity(...period.range))
+const trendTitle = computed(() =>
+  trendGran.value === 'day' ? '日別の支出' : trendGran.value === 'week' ? '週別の支出' : '月別の支出',
+)
+const trendCols = computed(() => {
+  const cum = overview.value?.daily_cumulative ?? []
+  const [from, to] = period.range
+  const rows =
+    trendGran.value === 'day'
+      ? dailyRows(cum, from, to)
+      : trendGran.value === 'week'
+        ? weeklyRows(cum, from, to)
+        : monthlyRows(cum, from, to)
+  const max = Math.max(...rows.map((r) => r.value), 1)
+  const title = (key: string) => {
+    if (trendGran.value === 'day') return `${dayLabel(key)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
+    if (trendGran.value === 'month') return `${monthLabel(key)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
+    const [lo, hi] = bucketSpan(key, 'week', from, to)
+    return `${shortDate(lo)}〜${shortDate(hi)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
   }
-  const out: { date: string; value: number }[] = []
-  for (let i = 0; i < days; i++) {
-    const d = new Date(Date.parse(from) + i * 86_400_000).toISOString().slice(0, 10)
-    out.push({ date: d, value: byDay.get(d) ?? 0 })
+  return rows.map((r) => {
+    const key = String(r.keys[0])
+    return { key, value: r.value, height: r.value ? Math.max(Math.round((r.value / max) * 100), 3) : 0, title: title(key) }
+  })
+})
+const trendAxis = computed(() => {
+  const cols = trendCols.value
+  if (cols.length === 0) return null
+  if (trendGran.value === 'day') {
+    return { first: dayLabel(cols[0]!.key), last: dayLabel(cols.at(-1)!.key) }
   }
-  const max = Math.max(...out.map((d) => d.value), 1)
-  return out.map((d) => ({ ...d, height: d.value ? Math.max(Math.round((d.value / max) * 100), 3) : 0 }))
+  if (trendGran.value === 'month') return axisMonthLabels(cols.map((c) => c.key))
+  return { first: shortDate(cols[0]!.key), last: shortDate(cols.at(-1)!.key) }
 })
 
 const groups = computed(() => {
@@ -324,6 +379,15 @@ const groups = computed(() => {
               type="search"
               data-test="category"
             ></label>
+            <!-- TASK-65: the payment-method filter select (未設定 = no filter) -->
+            <label class="field"><span>支払方法</span><select
+              v-model="draft.paymentMethod"
+              data-test="payment"
+            ><option value="">未設定</option><option
+              v-for="(label, key) in PAYMENT_LABEL"
+              :key="key"
+              :value="key"
+            >{{ label }}</option></select></label>
             <label class="check"><input
               v-model="draft.includeDeleted"
               type="checkbox"
@@ -363,11 +427,11 @@ const groups = computed(() => {
         data-test="summary"
       >
         <p class="kpi-head">
-          <span class="label">{{ period.label }}</span>
+          <span class="label">{{ period.label }}の支出</span>
           <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
         </p>
         <p class="kpi-sub">
-          レシート {{ totalCount }}件 ・ 1件あたり {{ formatYen(average) }} ・ {{ period.compareLabel }} {{ formatYen(overview?.totals.compare_value ?? null) }}
+          レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }} ・ {{ period.compareLabel }} {{ formatYen(overview?.totals.compare_value ?? null) }}
         </p>
       </section>
 
@@ -376,44 +440,49 @@ const groups = computed(() => {
         data-test="payments"
       >
         <h2>支払方法</h2>
+        <!-- TASK-65: a row press toggles the payment filter in place (the
+             null-key aggregates stay inert rows) -->
         <RankedList
           v-if="(payments?.sections[0]?.rows.length ?? 0) > 0"
           :rows="payments!.sections[0]!.rows"
+          :select="onPaymentRow"
           colors
         />
         <p
           v-else
           class="muted empty"
         >
-          記録はありません。
+          この期間の記録はありません。
         </p>
       </section>
 
       <section
-        v-if="daily"
         class="card wide"
         data-test="daily"
       >
-        <h2>日別の支出</h2>
+        <h2>{{ trendTitle }}</h2>
         <div
           class="daily-bars"
-          :style="{ gridTemplateColumns: `repeat(${daily.length}, minmax(0.25rem, 1fr))` }"
+          :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
         >
           <span
-            v-for="d in daily"
-            :key="d.date"
+            v-for="c in trendCols"
+            :key="c.key"
             class="daily-col"
-            :title="`${dayLabel(d.date)} ${formatYen(d.value)}`"
+            :title="c.title"
           >
             <span
               class="daily-bar"
-              :style="{ height: `${d.height}%` }"
+              :style="{ height: `${c.height}%` }"
             />
           </span>
         </div>
-        <div class="axis-ends muted small">
-          <span>{{ dayLabel(daily[0]!.date) }}</span>
-          <span>{{ dayLabel(daily[daily.length - 1]!.date) }}</span>
+        <div
+          v-if="trendAxis"
+          class="axis-ends muted small"
+        >
+          <span>{{ trendAxis.first }}</span>
+          <span v-if="trendAxis.last">{{ trendAxis.last }}</span>
         </div>
       </section>
 
@@ -454,7 +523,9 @@ const groups = computed(() => {
                 class="recent-row receipt-row"
                 :class="{ deleted: r.deleted_at }"
               >
-                <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
+                <!-- the day head carries the date (TASK-63/57): the row's
+                     column is the time; the 日付なし group shows '-' too -->
+                <span class="recent-date">{{ g.date ? shortTime(r.purchased_time) : '-' }}</span>
                 <span
                   class="recent-store truncate"
                   data-test="store-name"

@@ -12,6 +12,7 @@ import AppIcon from './AppIcon.vue'
 const period = usePeriodStore()
 const MODES: { id: PeriodMode; label: string }[] = [
   { id: 'month', label: '月' },
+  { id: 'week', label: '週' },
   { id: 'year', label: '年' },
   { id: 'range', label: '期間' },
 ]

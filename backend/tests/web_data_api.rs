@@ -2023,3 +2023,165 @@ async fn ledger_rename_rules() {
     assert_eq!(resp.status(), 403);
     assert_eq!(body_json(resp).await["error"], "viewer_only");
 }
+
+// ---------------------------------------------------------------------------
+// TASK-63: same-date receipts order by purchased_time (newest first, NULL
+// last) with the 3-part keyset cursor; the item-level list shares the rule.
+// TASK-65: the web payment_method filter on /receipts and /stats.
+
+/// [covers:web-data-api.receipt-time-ordering] same-day time ordering + cursor
+#[tokio::test]
+async fn receipt_list_time_ordering_and_cursor() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "editor").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    // ids in a "wrong" order on the same day: 101 @09:00, 102 @18:30, 103 no
+    // time, 104 on another (later) day
+    for (id, on) in [
+        (101, "2026-10-10"),
+        (102, "2026-10-10"),
+        (103, "2026-10-10"),
+        (104, "2026-10-12"),
+    ] {
+        insert_receipt_full(&pool, id, 1, 1, on, 100).await;
+    }
+    for (id, t) in [(101, "09:00"), (102, "18:30")] {
+        sqlx::query("UPDATE receipts SET purchased_time = ? WHERE id = ?")
+            .bind(t)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // within the day: 18:30 -> 09:00 -> (no time), then the later date first
+    // overall (date desc); pagination with limit=2 loses and duplicates nothing
+    let mut got = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..3 {
+        let path = if cursor.is_empty() {
+            "/api/ledgers/1/receipts?limit=2".to_string()
+        } else {
+            format!("/api/ledgers/1/receipts?limit=2&cursor={cursor}")
+        };
+        let v = body_json(c.get(&router, &path).await).await;
+        for r in v["receipts"].as_array().unwrap() {
+            got.push(r["receipt_id"].as_i64().unwrap());
+        }
+        match v["next_cursor"].as_str() {
+            Some(next) => cursor = next.to_string(),
+            None => break,
+        }
+    }
+    assert_eq!(
+        got,
+        vec![104, 102, 101, 103],
+        "date desc, then time desc within the day, NULL last"
+    );
+
+    // the old 2-part cursor format no longer decodes: 400
+    // (base64url of "2026-10-10|101", precomputed)
+    let old = "MjAyNi0xMC0xMHwxMDE";
+    let resp = c
+        .get(&router, &format!("/api/ledgers/1/receipts?cursor={old}"))
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    // the item-level list shares the key: same-day items follow the receipt's
+    // time desc, then item id desc; pagination is lossless as well
+    let mut items = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..5 {
+        let path = if cursor.is_empty() {
+            "/api/ledgers/1/items?limit=2".to_string()
+        } else {
+            format!("/api/ledgers/1/items?limit=2&cursor={cursor}")
+        };
+        let v = body_json(c.get(&router, &path).await).await;
+        for r in v["items"].as_array().unwrap() {
+            items.push(r["item_id"].as_i64().unwrap());
+        }
+        match v["next_cursor"].as_str() {
+            Some(next) => cursor = next.to_string(),
+            None => break,
+        }
+    }
+    // fixture items: insert_receipt_full gives each receipt one item with the
+    // id <receipt>*100 — the later date leads, then the same day by time
+    assert_eq!(items, vec![10400, 10200, 10100, 10300]);
+}
+
+/// [covers:web-data-api.payment-method-filter] payment_method on /receipts and /stats
+#[tokio::test]
+async fn receipt_and_stats_payment_method_filter() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "editor").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
+    insert_receipt_full(&pool, 102, 1, 1, "2026-10-08", 180).await;
+    insert_receipt_full(&pool, 103, 1, 1, "2026-10-05", 150).await;
+    sqlx::query("UPDATE receipts SET payment_method = 'cash' WHERE id IN (101, 103)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE receipts SET payment_method = 'credit_card' WHERE id = 102")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // /receipts narrows to the exact method
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/receipts?payment_method=cash")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 2);
+    assert_eq!(v["sum_amount"], 370);
+    // an unknown key is a 400, a known-but-empty one is a plain empty page
+    let resp = c
+        .get(&router, "/api/ledgers/1/receipts?payment_method=paypay")
+        .await;
+    assert_eq!(resp.status(), 400);
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/receipts?payment_method=point")
+            .await,
+    )
+    .await;
+    assert_eq!(v["total_count"], 0);
+    assert_eq!(v["receipts"].as_array().unwrap().len(), 0);
+
+    // /stats: the filter rides every report and the compare period, and the
+    // filters echo omits it (the store_id web-only pattern)
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/stats?report=by_payment_method&month=2026-10&payment_method=cash",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 370, "cash rows only");
+    assert_eq!(v["totals"]["compare_value"], 0);
+    assert!(v.get("filters").is_none() || v["filters"].get("payment_method").is_none());
+    let rows = v["sections"][0]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["labels"][0], "現金");
+    // monthly_overview narrows the same way (total + daily cumulative)
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/stats?report=monthly_overview&month=2026-10&payment_method=cash",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["totals"]["value"], 370);
+    // an unknown key on /stats is a 400 too
+    let resp = c
+        .get(
+            &router,
+            "/api/ledgers/1/stats?report=by_store&payment_method=x",
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}

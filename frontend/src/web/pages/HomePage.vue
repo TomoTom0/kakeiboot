@@ -14,6 +14,7 @@ import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { periodDays, shortDate } from '../composables/period'
 import { usePageReady } from '../composables/usePageReady'
+import { currentTrendKey, dailyRows, trendGranularity, weeklyRows } from '../composables/trend'
 import { usePeriodStore } from '../stores/period'
 
 // Dashboard: the selected period's spending at a glance (GET
@@ -36,6 +37,10 @@ const recent = ref<ReceiptSummary[]>([])
 const loading = ref(false)
 const error = ref('')
 
+/** TASK-55: the trend granularity of the selected period (week -> the
+ *  week's days, month/year -> months, a custom range -> by its length). */
+const gran = computed(() => trendGranularity(period.mode, ...period.range))
+
 let seq = 0
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
@@ -45,15 +50,22 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   const [from, to] = period.range
   try {
-    // the trend call rides first so the primary monthly_overview is the
-    // load's last stats call (the Categories ordering); its month window is
-    // Home's own 6-month one (trendQuery(5)) — the year / range modes use
-    // the selected period itself
-    const [tr, s, r] = await Promise.all([
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(5) }),
+    // month granularity keeps its own monthly_trend window call (6 months
+    // through the selected month, trendQuery(5)); it rides first so the
+    // primary monthly_overview is the load's last stats call (the Categories
+    // ordering). The day/week granularities skip it and reuse the overview's
+    // daily_cumulative — in week/range modes that call already covers the
+    // very range the bars need, so a second identical call would be waste.
+    // (a promise created outside the all would reject unhandled when a
+    // sibling call fails first — keep every call inside the single all)
+    const [trendTrend, s, r] = await Promise.all([
+      gran.value === 'month'
+        ? api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(5) })
+        : Promise.resolve(null),
       api.getStats(l, { report: 'monthly_overview', ...period.query() }),
       api.listReceipts(l, { from, to, limit: 5, ...(period.labelQuery ? { label_colors: period.labelQuery } : {}) }),
     ])
+    const tr = trendTrend ?? s
     if (n !== seq) return
     summary.value = s
     trendResult.value = tr
@@ -77,6 +89,25 @@ watch([() => period.range, () => period.labelQuery], () => void load())
 
 const totals = computed(() => summary.value?.totals ?? null)
 const section = (id: string) => summary.value?.sections.find((s) => s.id === id)?.rows ?? []
+
+/** The trend bars for the current granularity: month rows come from the
+ *  monthly_trend section, day/week rows from daily_cumulative. */
+const trendRows = computed<StatsRow[]>(() => {
+  if (gran.value === 'month') return trendResult.value?.sections[0]?.rows ?? []
+  const cum = trendResult.value?.daily_cumulative ?? []
+  const [from, to] = period.range
+  return gran.value === 'day' ? dailyRows(cum, from, to) : weeklyRows(cum, from, to)
+})
+
+/** The highlighted bar: the selected month in month mode, today's day / week
+ *  when the charted range holds it (currentTrendKey). */
+const trendCurrent = computed(() => currentTrendKey(gran.value, period.mode, ...period.range, period.month))
+
+/** A bar press moves the period to that granularity's unit (TASK-55). */
+function onTrendSelect(key: string): void {
+  if (gran.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
 
 /** Spending change vs. the previous period: more spending is the warning side. */
 const diff = computed(() => {
@@ -199,9 +230,11 @@ const recentQuery = computed(() => {
              follows at once, TASK-44 §11-5) -->
         <TrendBars
           v-if="trendResult"
-          :rows="trendResult.sections[0]?.rows ?? []"
-          :current="period.mode === 'month' ? period.month : null"
-          @select="period.setMonth"
+          :rows="trendRows"
+          :granularity="gran"
+          :span="period.range"
+          :current="trendCurrent"
+          @select="onTrendSelect"
         />
       </section>
 
@@ -222,7 +255,7 @@ const recentQuery = computed(() => {
           v-if="donutRows.length === 0"
           class="muted empty"
         >
-          この期間の記録はまだありません。
+          この期間の記録はありません。
         </p>
         <div
           v-else
@@ -258,7 +291,7 @@ const recentQuery = computed(() => {
           v-if="storeRows.length === 0"
           class="muted empty"
         >
-          この期間の記録はまだありません。
+          この期間の記録はありません。
         </p>
         <RankedList
           v-else

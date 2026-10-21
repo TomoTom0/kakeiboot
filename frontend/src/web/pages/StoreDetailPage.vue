@@ -23,6 +23,7 @@ import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
+import { currentTrendKey, dailyRows, trendGranularity, weeklyRows } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
@@ -65,6 +66,9 @@ async function resolveStore(l: number): Promise<boolean> {
 // the category 掛け合わせ (a category page's cross row lands here with ?category=)
 const categoryQuery = computed(() => firstString(route.query.category))
 
+/** TASK-55: the trend granularity of the selected period. */
+const gran = computed(() => trendGranularity(period.mode, ...period.range))
+
 const overview = ref<StatsResult | null>(null)
 const byCategoryResult = ref<StatsResult | null>(null)
 const trend = ref<StatsResult | null>(null)
@@ -88,12 +92,17 @@ async function load(id?: number): Promise<void> {
       ...labels,
     }
     // the category cross-section drops the category 掛け合わせ (it would
-    // collapse the categories to the one — the KPI keeps it)
-    const [byCat, trendRes, ov] = await Promise.all([
+    // collapse the categories to the one — the KPI keeps it). TASK-55: month
+    // granularity keeps its own monthly_trend call; the other granularities
+    // reuse the overview response below (daily rows ride daily_cumulative)
+    const [byCat, trendTrend, ov] = await Promise.all([
       api.getStats(l, { report: 'by_category', ...period.query(), store_id: storeId.value, ...labels }),
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...base }),
+      gran.value === 'month'
+        ? api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...base })
+        : Promise.resolve(null),
       api.getStats(l, { report: 'monthly_overview', ...period.query(), ...base }),
     ])
+    const trendRes = trendTrend ?? ov
     const recentRes = await api.listReceipts(l, {
       from,
       to,
@@ -144,6 +153,21 @@ async function init(id?: number): Promise<void> {
 // the labelQuery rides the fullPath: its watch below replaces the labels= key
 // and this watch reloads once on that change (no double load)
 watch([() => period.range, () => route.fullPath], () => void init())
+
+const trendRows = computed<StatsRow[]>(() => {
+  if (gran.value === 'month') return trend.value?.sections[0]?.rows ?? []
+  const cum = trend.value?.daily_cumulative ?? []
+  const [from, to] = period.range
+  return gran.value === 'day' ? dailyRows(cum, from, to) : weeklyRows(cum, from, to)
+})
+
+const trendCurrent = computed(() => currentTrendKey(gran.value, period.mode, ...period.range, period.month))
+
+/** A bar press moves the period to that granularity's unit (TASK-55). */
+function onTrendSelect(key: string): void {
+  if (gran.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
 
 const totals = computed(() => overview.value?.totals ?? null)
 const totalText = computed(() => (totals.value ? formatYen(totals.value.value) : undefined))
@@ -290,7 +314,7 @@ const menuItems: PageMenuItem[] = [
           data-test="kpi"
         >
           <p class="kpi-sub">
-            レシート {{ totals.receipts }}件 ・ 累計件数 {{ store.receipt_count }}件 ・ 最終購入日 {{ store.last_purchased_on ? shortDate(store.last_purchased_on) : '—' }}
+            レシート {{ totals.receipts }}件 ・ 累計件数 {{ store.receipt_count }}件 ・ 最終購入日 {{ store.last_purchased_on ? shortDate(store.last_purchased_on) : '-' }}
           </p>
         </section>
 
@@ -319,9 +343,11 @@ const menuItems: PageMenuItem[] = [
           <h2>支出の推移</h2>
           <TrendBars
             v-if="trend"
-            :rows="trend.sections[0]?.rows ?? []"
-            :current="period.mode === 'month' ? period.month : null"
-            @select="period.setMonth"
+            :rows="trendRows"
+            :granularity="gran"
+            :span="period.range"
+            :current="trendCurrent"
+            @select="onTrendSelect"
           />
         </section>
 

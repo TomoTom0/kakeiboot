@@ -237,7 +237,9 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(row.find('.recent-icon').exists()).toBe(false)
     expect(row.find('.recent-main').exists()).toBe(false)
     expect(row.find('[data-test="label-dot"]').exists()).toBe(true)
-    expect(row.text()).toContain('10/10')
+    // TASK-63/57: the day head carries the date, so the row's column shows
+    // the time (mock 101 is 18:30)
+    expect(row.find('.recent-date').text()).toBe('18:30')
     expect(row.text()).toContain('Aマート')
     expect(row.text()).toContain('400円')
     expect(row.text()).not.toContain('品目')
@@ -262,6 +264,131 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(wrapper.find('[data-test="chip-x-category"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-receipts.kpi-parity][covers:web-receipts.group-time-column][covers:web-receipts.list-time-order] KPI は {label}の支出+1日あたり・同一日内は時刻降順で行は時刻列（searchItems も時刻順）', async () => {
+    // 102 joins 101's day with an earlier time; 103 loses its time — the
+    // same-day group orders by time desc (18:30 above 09:00, a time-less row
+    // last) and the row column shows the time / '-'
+    await api.updateReceipt(1, 102, { revision: 1, set: { purchased_on: '2026-10-10', purchased_time: '09:00' } })
+    await api.updateReceipt(1, 103, { revision: 1, set: { purchased_time: null } })
+    const { wrapper } = await mountApp('/receipts?month=2026-10')
+    const kpi = wrapper.find('[data-test="summary"]')
+    // TASK-57 A6: the same KPI vocabulary as the other dashboards
+    expect(kpi.find('.label').text()).toBe('2026年10月の支出')
+    const sub = kpi.find('.kpi-sub').text()
+    expect(sub).toContain('レシート 3件')
+    expect(sub).toContain('1日あたり 63円') // 948 / 15日（進行中は今日まで）
+    expect(sub).toContain('1件あたり 316円')
+    expect(sub).toContain('前月 0円')
+    const groups = wrapper.findAll('.day-group')
+    const day10 = groups.find((g) => g.text().includes('10月10日'))!
+    const rows = day10.findAll('li')
+    expect(rows.map((r) => r.find('.recent-date').text())).toEqual(['18:30', '09:00'])
+    expect(rows[0]!.attributes('data-test')).toBe('receipt-101')
+    const day5 = groups.find((g) => g.text().includes('10月5日'))!
+    expect(day5.find('[data-test="receipt-103"] .recent-date').text()).toBe('-')
+    // the mock's item-level list keeps the same key (date desc -> time desc)
+    const items = await api.searchItems(1, { from: '2026-10-01', to: '2026-10-31' })
+    const sameDay = items.items.filter((i) => i.purchased_on === '2026-10-10')
+    expect([...new Set(sameDay.map((i) => i.receipt_id))]).toEqual([101, 102])
+  })
+
+  it('[covers:web-receipts.payment-filter] 支払方法の絞り込み（ランキング行トグル・フォーム select・チップ・URL・一覧と集計の両方）', async () => {
+    await api.updateReceipt(1, 102, { revision: 1, set: { payment_method: 'credit_card' } })
+    const list = vi.spyOn(api, 'listReceipts')
+    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper, router } = await mountApp('/receipts')
+    // TASK-65: the payment ranking rows are pressable (button, no chevron) and
+    // filter in place; the unknown aggregate stays inert
+    const cashRow = wrapper.find('[data-test="payments"] [data-test="row-現金"]')
+    expect(cashRow.element.tagName).toBe('BUTTON')
+    expect(cashRow.classes()).toContain('is-link')
+    expect(cashRow.find('svg').exists()).toBe(false)
+    await cashRow.trigger('click')
+    await settle()
+    expect(router.currentRoute.value.query.payment_method).toBe('cash')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ payment_method: 'cash' }))
+    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ report: 'by_payment_method', payment_method: 'cash' }))
+    expect(wrapper.find('[data-test="summary"]').text()).toContain('550円') // 400 + 150（102は除外）
+    expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="chip-payment"]').text()).toBe('支払: 現金')
+    // pressing the same row again clears the filter (toggle)
+    await wrapper.find('[data-test="payments"] [data-test="row-現金"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.query.payment_method).toBeUndefined()
+    expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
+    // the filter form's select applies too
+    await wrapper.find('[data-test="filters-toggle"]').trigger('click')
+    await wrapper.find('[data-test="payment"]').setValue('credit_card')
+    await wrapper.find('[data-test="filters"]').trigger('submit')
+    await settle()
+    expect(router.currentRoute.value.query.payment_method).toBe('credit_card')
+    expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="receipt-102"]').exists()).toBe(true)
+    await wrapper.find('[data-test="chip-x-payment"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(true)
+    // a deep link filters the same way (CONTEXT_FIELDS round trip)
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    const direct = await mountApp('/receipts?payment_method=cash')
+    expect(direct.wrapper.find('[data-test="receipt-102"]').exists()).toBe(false)
+    expect(direct.wrapper.find('[data-test="chip-payment"]').text()).toBe('支払: 現金')
+  })
+
+  it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）', async () => {
+    const title = (w: W) => w.find('[data-test="daily"] h2').text()
+    const cols = (w: W) => w.findAll('[data-test="daily"] .daily-col')
+    const axis = (w: W) => w.find('[data-test="daily"] .axis-ends').findAll('span').map((s) => s.text())
+    // a month period keeps its daily bars (the browser-measured 31-column rule)
+    const month = await mountApp('/receipts?month=2026-10')
+    expect(title(month.wrapper)).toBe('日別の支出')
+    expect(cols(month.wrapper)).toHaveLength(31)
+    expect(axis(month.wrapper)).toEqual(['10月1日（木）', '10月31日（土）'])
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    // 76 days -> Monday-anchored weekly buckets (12), the ends are the bucket
+    // starts; the card no longer disappears past 62 days
+    const week = await mountApp('/receipts?from=2026-08-01&to=2026-10-15')
+    expect(title(week.wrapper)).toBe('週別の支出')
+    expect(cols(week.wrapper)).toHaveLength(12)
+    expect(axis(week.wrapper)).toEqual(['7/27', '10/12'])
+    const bar = cols(week.wrapper).at(10)
+    expect(bar?.attributes('title')).toBe('10/5〜10/11 948円')
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    // 22 months -> monthly buckets with the year-boundary axis form
+    const long = await mountApp('/receipts?from=2025-01-01&to=2026-10-15')
+    expect(title(long.wrapper)).toBe('月別の支出')
+    expect(cols(long.wrapper)).toHaveLength(22)
+    expect(axis(long.wrapper)).toEqual(['2025年1月', '2026年10月'])
+  })
+
+  it('[covers:web-receipts.period-identity-in-url][covers:web-home.empty-text-unified] フィルタ適用後も URL に month= が残り再読込で月モード・支払方法の空テキスト統一', async () => {
+    const { wrapper, router } = await mountApp('/receipts?month=2026-09')
+    expect(wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
+    // TASK-57 A1: the same empty text as every stats card
+    expect(wrapper.find('[data-test="payments"] .empty').text()).toBe('この期間の記録はありません。')
+    await wrapper.find('[data-test="filters-toggle"]').trigger('click')
+    await wrapper.find('[data-test="item"]').setValue('牛乳')
+    await wrapper.find('[data-test="filters"]').trigger('submit')
+    await settle()
+    // TASK-57 A16: the period key survives the URL rewrite alongside from/to
+    expect(router.currentRoute.value.query.month).toBe('2026-09')
+    expect(router.currentRoute.value.query.from).toBe('2026-09-01')
+    expect(router.currentRoute.value.query.to).toBe('2026-09-30')
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    // a fresh mount of that URL (the literal form of the asserted query)
+    // restores the month mode — the compare vocabulary stays 前月
+    const again = await mountApp('/receipts?item=%E7%89%9B%E4%B9%B3&from=2026-09-01&to=2026-09-30&month=2026-09')
+    expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
+    expect(again.wrapper.find('[data-test="summary"]').text()).toContain('前月 ')
   })
 
   it('[covers:web-shell.loading-skeleton] レシート一覧も初回 loading は skeleton で統一', async () => {
@@ -981,5 +1108,107 @@ describe('ReceiptsPage 絞り込み popover (TASK-76 §6-3)', () => {
     await settle()
     expect(narrow.wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(narrow.wrapper.find('.popover-scrim').exists()).toBe(false)
+  })
+})
+
+describe('TASK-53/55/57 view-page additions', () => {
+  it('[covers:web-categories.kpi-count-excludes-other] カテゴリ数はその他の折り畳み行を数えない（truncated_rows を加算）', async () => {
+    // 12 real top categories: 10 stay rows, 2 fold into その他 — the count
+    // must be the real 12 (rows-with-keys + truncated_rows), not rows.length.
+    // The eight extra tops are created in the catalog first (the mock keys
+    // only resolve catalog nodes, the backend parity of TASK-74 §4-1)
+    for (const c of ['医療', '教育', '交際', '郵便', 'ガーデン', '文具', '玩具', 'ペット']) {
+      await api.manageCategory(1, { kind: 'item', action: 'create', category: c })
+    }
+    await api.updateReceipt(1, 102, {
+      revision: 1,
+      upsert_items: [
+        { name: 'バス代', amount: 100, category: '交通費' },
+        { name: '雑誌', amount: 90, category: '趣味' },
+        { name: '風邪薬', amount: 80, category: '医療' },
+        { name: '教科書', amount: 70, category: '教育' },
+        { name: '贈り物', amount: 60, category: '交際' },
+        { name: '切手', amount: 50, category: '郵便' },
+        { name: '花', amount: 40, category: 'ガーデン' },
+        { name: '文具', amount: 30, category: '文具' },
+        { name: 'おもちゃ', amount: 20, category: '玩具' },
+        { name: 'ペットフード', amount: 10, category: 'ペット' },
+      ],
+    })
+    const { wrapper } = await mountApp('/categories')
+    expect(wrapper.findAll('[data-test="breakdown"] .ranked-row').length).toBeGreaterThanOrEqual(11)
+    expect(wrapper.find('[data-test="breakdown"] [data-test="row-その他"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('カテゴリ数 12')
+  })
+
+  it('[covers:web-stores.kpi-count-excludes-other] 利用した店はその他・店不明を数えない・最終購入日の不在は -', async () => {
+    // a crafted by_store answer: 2 named stores + 店不明 + その他 folding 3
+    // (truncated_rows) — the count is the real 5; the detail page's missing
+    // last-purchase date reads '-' like the shared formatters
+    const inner = createMockDataApi()
+    const storeRow = (id: number | null, label: string, value: number): StatsRow => ({
+      keys: [id],
+      labels: [label],
+      value,
+      share: 0,
+    })
+    const fake: DataApi = {
+      ...inner,
+      getStats: (l, q) =>
+        q.report === 'by_store'
+          ? Promise.resolve({
+              report: 'by_store',
+              period_resolved: { from: '2026-10-01', to: '2026-10-31', label: '2026-10' },
+              compare_period: null,
+              totals: { value: 948, compare_value: 0, diff: 948, diff_pct: null, receipts: 3 },
+              sections: [
+                {
+                  id: 'stores',
+                  title: '店別',
+                  dims: ['store'],
+                  chart: 'bar_h',
+                  rows: [storeRow(1, 'Aマート', 400), storeRow(2, 'Bコンビニ', 150), storeRow(null, '店不明', 100), storeRow(null, 'その他', 298)],
+                  truncated_rows: 3,
+                },
+              ],
+              notes: [],
+            })
+          : inner.getStats(l, q),
+      listStores: () =>
+        Promise.resolve([
+          { store_id: 1, name: 'Aマート', category: 'スーパー', receipt_count: 9, last_purchased_on: null },
+        ]),
+    }
+    setDataApi(fake)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const list = await mountApp('/stores')
+    expect(list.wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('利用した店 5')
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const detail = await mountApp('/stores/1')
+    expect(detail.wrapper.find('[data-test="kpi"]').text()).toContain('最終購入日 -')
+  })
+
+  it('[covers:web-categories.trend-granularity] 一覧・詳細の推移も週モードで日棒へ（monthly_overview 切替・掛け合わせ保持）', async () => {
+    let stats = vi.spyOn(api, 'getStats')
+    const cat = await mountApp('/categories?week=2026-10-05')
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', from: '2026-10-05', to: '2026-10-11' })
+    expect(stats).toHaveBeenCalledWith(1, { report: 'by_category', from: '2026-10-05', to: '2026-10-11' })
+    expect(cat.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    stats = vi.spyOn(api, 'getStats')
+    const stores = await mountApp('/stores?week=2026-10-05')
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', from: '2026-10-05', to: '2026-10-11' })
+    expect(stores.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
+    cleanup()
+    setDataApi(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    stats = vi.spyOn(api, 'getStats')
+    const detail = await mountApp('/stores/1?week=2026-10-05')
+    // the detail page's 掛け合わせ (store_id) rides the report switch
+    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_overview', store_id: 1, from: '2026-10-05', to: '2026-10-11' })
+    expect(detail.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
   })
 })

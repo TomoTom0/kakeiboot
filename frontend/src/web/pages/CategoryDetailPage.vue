@@ -22,6 +22,7 @@ import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
+import { currentTrendKey, dailyRows, trendGranularity, weeklyRows } from '../composables/trend'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
 import { usePageReady } from '../composables/usePageReady'
 import { useCatalogStore } from '../stores/catalog'
@@ -147,6 +148,9 @@ const error = ref('')
 const loading = ref(false)
 
 let seq = 0
+/** TASK-55: the trend granularity of the selected period. */
+const gran = computed(() => trendGranularity(period.mode, ...period.range))
+
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid || !view.value) return
@@ -186,7 +190,12 @@ async function load(id?: number): Promise<void> {
         ...(storeCategoryQuery.value ? { store_category: storeCategoryQuery.value } : {}),
         ...labels,
       }),
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...base }),
+      // TASK-55: month granularity keeps its own monthly_trend call; the
+      // other granularities reuse the overview response below (the daily
+      // rows ride daily_cumulative, so a second identical call is waste)
+      gran.value === 'month'
+        ? api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...base })
+        : Promise.resolve(null),
       api.getStats(l, { report: 'monthly_overview', ...period.query(), ...base }),
     ])
     const [itemRows, recentRes] = await Promise.all([
@@ -205,7 +214,7 @@ async function load(id?: number): Promise<void> {
     if (n !== seq) return
     subsResult.value = subs
     byStoreResult.value = byStore
-    trend.value = trendRes
+    trend.value = trendRes ?? ov
     overview.value = ov
     items.value = itemRows?.items ?? []
     recent.value = recentRes.receipts
@@ -258,6 +267,21 @@ watch(
 )
 
 // --- derived -----------------------------------------------------------------
+const trendRows = computed<StatsRow[]>(() => {
+  if (gran.value === 'month') return trend.value?.sections[0]?.rows ?? []
+  const cum = trend.value?.daily_cumulative ?? []
+  const [from, to] = period.range
+  return gran.value === 'day' ? dailyRows(cum, from, to) : weeklyRows(cum, from, to)
+})
+
+const trendCurrent = computed(() => currentTrendKey(gran.value, period.mode, ...period.range, period.month))
+
+/** A bar press moves the period to that granularity's unit (TASK-55). */
+function onTrendSelect(key: string): void {
+  if (gran.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
+
 const totals = computed(() => overview.value?.totals ?? null)
 const totalText = computed(() => (totals.value ? formatYen(totals.value.value) : undefined))
 /** the store cross-section: その他 excluded, top 5 (§3-3 案A) */
@@ -463,9 +487,11 @@ const backLabel = computed(() => view.value?.parentName ?? 'カテゴリ一覧')
           <h2>支出の推移</h2>
           <TrendBars
             v-if="trend"
-            :rows="trend.sections[0]?.rows ?? []"
-            :current="period.mode === 'month' ? period.month : null"
-            @select="period.setMonth"
+            :rows="trendRows"
+            :granularity="gran"
+            :span="period.range"
+            :current="trendCurrent"
+            @select="onTrendSelect"
           />
         </section>
 

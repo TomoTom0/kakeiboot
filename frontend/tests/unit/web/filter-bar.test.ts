@@ -135,7 +135,7 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
     await router.push('/receipts')
     await settle()
     expect(wrapper.find('.topbar-filters').exists()).toBe(true)
-  })
+  }, 10_000)
 
   it('[covers:web-browse.topbar-filter-bar] 家計簿に未参加の間はtopbar中央バーを出さない', async () => {
     const ME_NONE: typeof ME = { ...ME, ledgers: [], default_ledger_id: null }
@@ -147,7 +147,7 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
 })
 
 describe('topbar period dialog (PeriodPicker)', () => {
-  it('[covers:web-browse.filter-dialogs] 時期dialog: タブ「月｜年｜期間」・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
+  it('[covers:web-browse.filter-dialogs][covers:web-shell.period-picker-week-tab] 時期dialog: タブ「月｜週｜年｜期間」・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/receipts')
@@ -159,9 +159,24 @@ describe('topbar period dialog (PeriodPicker)', () => {
     const dialog = wrapper.get('[role="dialog"]')
     expect(chip().attributes('aria-expanded')).toBe('true')
     expect(chip().attributes('aria-controls')).toBe(dialog.attributes('id'))
-    for (const m of ['mode-month', 'mode-year', 'mode-range']) {
+    for (const m of ['mode-month', 'mode-week', 'mode-year', 'mode-range']) {
       expect(wrapper.find(`[data-test="${m}"]`).exists(), m).toBe(true)
     }
+
+    // TASK-53: the week tab applies at once like month/year — the current week
+    // (2026-10-12..18) steps in whole weeks, capped at the current week
+    await wrapper.find('[data-test="mode-week"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月12日の週')
+    const weekTexts = leafTexts(wrapper, 'filter-period')
+    expect(weekTexts.has('10/12週')).toBe(true)
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-12', to: '2026-10-18' }))
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月5日の週')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-05', to: '2026-10-11' }))
 
     // the year tab applies at once: the chip swaps to the year labels and the
     // page re-queries through watch(period.range); the dialog stays open

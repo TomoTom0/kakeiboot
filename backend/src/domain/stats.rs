@@ -195,6 +195,10 @@ pub struct Filters {
     /// still rejects it as an unknown key) and out of the echo.
     #[serde(skip)]
     pub store_id: Option<i64>,
+    /// Web-only exact payment-method match (TASK-65, the store_id pattern:
+    /// not in the MCP summarize filters, not in the echo).
+    #[serde(skip)]
+    pub payment_method: Option<String>,
 }
 
 impl Filters {
@@ -214,6 +218,7 @@ impl Filters {
             && self.item_query.is_none()
             && self.label_colors.is_none()
             && self.store_id.is_none()
+            && self.payment_method.is_none()
     }
 }
 
@@ -275,6 +280,11 @@ pub async fn filter_sql(
         let (frag, b) = item_match("f.item_id", q)?;
         sql.push_str(&frag);
         binds.extend(b);
+    }
+    // web-only exact payment-method match (TASK-65)
+    if let Some(pm) = &f.payment_method {
+        sql.push_str(" AND f.payment_method = ?");
+        binds.push(Bind::S(pm.clone()));
     }
     if let Some(colors) = f.label_colors.as_ref().filter(|c| !c.is_empty()) {
         let placeholders = vec!["?"; colors.len()].join(", ");

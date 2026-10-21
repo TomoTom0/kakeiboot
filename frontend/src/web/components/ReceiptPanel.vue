@@ -383,10 +383,16 @@ const labelSlotProps = computed(() => ({
             {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}
           </p>
           <div class="tags">
-            <span
+            <!-- TASK-65: the payment tag filters the receipts list (the
+                 store-category tag pattern: the purchase month rides along) -->
+            <RouterLink
               v-if="receipt.payment_method"
-              class="tag"
-            >{{ PAYMENT_LABEL[receipt.payment_method] }}</span>
+              class="tag tag-link"
+              :to="{ path: '/receipts', query: { payment_method: receipt.payment_method, ...linkQuery } }"
+              data-test="payment-method"
+            >
+              {{ PAYMENT_LABEL[receipt.payment_method] }}
+            </RouterLink>
             <RouterLink
               v-if="receipt.store?.category"
               class="tag tag-link"

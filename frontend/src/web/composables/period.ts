@@ -56,6 +56,25 @@ export function shortDate(d: string | null | undefined): string {
   return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
 }
 
+/** "2026-10-05" ± n days -> "YYYY-MM-DD" (UTC math, no TZ drift). */
+export function shiftDate(d: string, days: number): string {
+  return new Date(Date.parse(d) + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** Monday of the week containing d ("YYYY-MM-DD"; Sunday joins the previous
+ *  Monday). Weeks are Monday-anchored (TASK-53, the JST calendar standard). */
+export function weekStart(d: string): string {
+  const day = new Date(Date.parse(d)).getUTCDay() // 0 = Sunday
+  return shiftDate(d, -((day + 6) % 7))
+}
+
+/** "18:30"/"09:05:30" -> "18:30"/"09:05"; null -> "-" (TASK-63/57: the day
+ *  group rows show the time — the group head already carries the date). */
+export function shortTime(t: string | null | undefined): string {
+  if (!t) return '-'
+  return t.slice(0, 5)
+}
+
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土']
 
 /** "2026-10-05" -> "10月5日（月）". */

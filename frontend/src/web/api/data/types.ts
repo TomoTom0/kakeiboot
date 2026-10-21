@@ -82,6 +82,8 @@ export interface ReceiptListQuery {
   category?: string
   /** item name (partial match) */
   item_query?: string
+  /** exact payment-method filter (web only, TASK-65) */
+  payment_method?: PaymentMethod
   /** label filter: receipts having ANY of these colors (OR, TASK-17) */
   label_colors?: LabelColor[]
   include_deleted?: boolean
@@ -285,6 +287,8 @@ export interface StatsQuery {
   /** store category path ("大分類" or "大分類/小分類", TASK-74 A1) */
   store_category?: string
   item_query?: string
+  /** exact payment-method filter (web only, TASK-65; not in the MCP filters) */
+  payment_method?: PaymentMethod
   /** label filter: receipts having ANY of these colors (OR, TASK-17) */
   label_colors?: LabelColor[]
 }

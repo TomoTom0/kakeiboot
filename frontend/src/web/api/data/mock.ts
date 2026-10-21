@@ -18,6 +18,7 @@ import type {
 } from './types'
 import { LABEL_COLORS, MAX_LABEL_TITLE_CHARS, isLabelColor, labelColorsOf } from '@/shared/labels'
 import type { LabelColor } from '@/shared/labels'
+import { PAYMENT_LABEL } from '../../composables/labels'
 
 interface Cat {
   id: number
@@ -436,6 +437,8 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
           .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
           .filter((r) => !q.store_category || (r.store?.category ?? '') === q.store_category || (r.store?.category ?? '').startsWith(`${q.store_category}/`))
           .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
+          // web-only exact payment-method filter (TASK-65)
+          .filter((r) => !q.payment_method || r.payment_method === q.payment_method)
           .flatMap((r) => r.items.map((it) => ({ r, it, top: (it.category ?? '未分類').split('/')[0]! })))
           .filter((x) =>
             !q.category
@@ -510,7 +513,8 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
             share: total ? v / total : 0,
           })
         }
-        return { id, title, dims: [id], chart: 'bar_h', rows }
+        // backend ranked_section parity: truncated_rows counts the folded rows
+        return { id, title, dims: [id], chart: 'bar_h', rows, ...(rest.length ? { truncated_rows: rest.length } : {}) }
       }
       // key selectors: the numeric ids come off the ledger's own trees
       const topSel = (x: (typeof cur)[number]) => ({
@@ -558,7 +562,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
       } else if (report === 'by_store') {
         sections = [ranked('stores', '店別', storeSel)]
       } else if (report === 'by_payment_method') {
-        sections = [ranked('payment_methods', '支払方法別', (x) => ({ group: x.r.payment_method ?? '支払方法不明', key: x.r.payment_method ?? null, label: x.r.payment_method === 'cash' ? '現金' : x.r.payment_method ?? '支払方法不明' }))]
+        sections = [ranked('payment_methods', '支払方法別', (x) => ({ group: x.r.payment_method ?? '支払方法不明', key: x.r.payment_method ?? null, label: x.r.payment_method ? PAYMENT_LABEL[x.r.payment_method] : '支払方法不明' }))]
       } else if (report === 'monthly_trend') {
         sections = [{ id: 'trend', title: '月別合計', dims: ['month'], chart: 'bar_v', rows: trendRows(months(from, to), from, to) }]
       } else if (report === 'item_price_history') {
@@ -614,6 +618,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
         )
         .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
         .filter((r) => !q.item_query || r.items.some((it) => it.name.includes(q.item_query!)))
+        .filter((r) => !q.payment_method || r.payment_method === q.payment_method)
         .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
         .filter((r) =>
           !q.category
@@ -624,12 +629,21 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
                   : it.category === q.category || (it.category ?? '').startsWith(`${q.category}/`),
               ),
         )
-        .sort((a, b) => (b.purchased_on ?? '').localeCompare(a.purchased_on ?? '') || b.receipt_id - a.receipt_id)
+        // backend ordering parity (TASK-63): date desc, then time desc within
+        // a day (a missing time sorts last), then id desc
+        .sort(
+          (a, b) =>
+            (b.purchased_on ?? '').localeCompare(a.purchased_on ?? '') ||
+            (b.purchased_time ?? '').localeCompare(a.purchased_time ?? '') ||
+            b.receipt_id - a.receipt_id,
+        )
       const limit = q.limit ?? 20
       const page = rows.slice(0, limit)
       return {
         total_count: rows.length,
-        sum_amount: rows.filter((r) => r.deleted_at === null).reduce((a, r) => a + receiptAmount(r), 0),
+        // backend parity (TASK-57 A19): with include_deleted the sum counts
+        // the deleted rows too (the totals query filters like the list)
+        sum_amount: rows.reduce((a, r) => a + receiptAmount(r), 0),
         receipts: page.map(summary),
         next_cursor: null,
       }
@@ -674,10 +688,17 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
               }),
             ),
         )
-        .sort(
-          (a, b) =>
-            (b.purchased_on ?? '').localeCompare(a.purchased_on ?? '') || b.receipt_id - a.receipt_id || b.item_id - a.item_id,
-        )
+        .sort((a, b) => {
+          // TASK-63 parity: the item rows follow their receipt's time within
+          // a day (ItemSummary itself carries the date only)
+          const timeOf = new Map(lg.receipts.map((r) => [r.receipt_id, r.purchased_time ?? '']))
+          return (
+            (b.purchased_on ?? '').localeCompare(a.purchased_on ?? '') ||
+            (timeOf.get(b.receipt_id) ?? '').localeCompare(timeOf.get(a.receipt_id) ?? '') ||
+            b.receipt_id - a.receipt_id ||
+            b.item_id - a.item_id
+          )
+        })
       return {
         total_count: rows.length,
         sum_amount: rows.reduce((a, r) => a + r.amount_incl, 0),

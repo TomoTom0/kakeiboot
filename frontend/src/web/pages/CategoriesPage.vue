@@ -13,6 +13,7 @@ import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { firstString } from '../composables/receiptContext'
+import { currentTrendKey, dailyRows, trendGranularity, weeklyRows } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
 import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
@@ -37,6 +38,9 @@ const catalog = useCatalogStore()
 const { markReady } = usePageReady()
 period.fromQuery(route.query)
 
+/** TASK-55: the trend granularity of the selected period. */
+const gran = computed(() => trendGranularity(period.mode, ...period.range))
+
 const overall = ref<StatsResult | null>(null)
 const trend = ref<StatsResult | null>(null)
 const error = ref('')
@@ -51,9 +55,15 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   try {
     // the trend query goes first so the primary by_category call (the one
-    // carrying the selected month/year key) is the load's last stats call
+    // carrying the selected month/year key) is the load's last stats call.
+    // TASK-55: month granularity keeps monthly_trend; day/week (week mode,
+    // shorter ranges) switch to monthly_overview and build the bars from its
+    // daily_cumulative
     const [tr, o] = await Promise.all([
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery() }),
+      api.getStats(l, {
+        report: gran.value === 'month' ? 'monthly_trend' : 'monthly_overview',
+        ...period.trendQuery(),
+      }),
       api.getStats(l, { report: 'by_category', ...period.query() }),
     ])
     if (n !== seq) return
@@ -121,6 +131,31 @@ const menuItems = computed<PageMenuItem[]>(() => {
 
 const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
 const totals = computed(() => overall.value?.totals ?? null)
+
+/** TASK-57 A4: real categories only — 未分類 counts, the folded その他 row
+ *  does not (truncated_rows carries how many folded). */
+const categoryCount = computed(() => {
+  const sec = overall.value?.sections[0]
+  return (
+    (sec?.rows ?? []).filter((r) => typeof r.keys[0] === 'number' || r.labels[0] === '未分類').length +
+    (sec?.truncated_rows ?? 0)
+  )
+})
+
+const trendRows = computed<StatsRow[]>(() => {
+  if (gran.value === 'month') return trend.value?.sections[0]?.rows ?? []
+  const cum = trend.value?.daily_cumulative ?? []
+  const [from, to] = period.range
+  return gran.value === 'day' ? dailyRows(cum, from, to) : weeklyRows(cum, from, to)
+})
+
+const trendCurrent = computed(() => currentTrendKey(gran.value, period.mode, ...period.range, period.month))
+
+/** A bar press moves the period to that granularity's unit (TASK-55). */
+function onTrendSelect(key: string): void {
+  if (gran.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
 
 /** The context the row links carry down a level: the period in its URL form
  * plus the labels (§4-2 — everything passes down). */
@@ -202,7 +237,7 @@ function diffText(d: number | null | undefined): string {
         <!-- the 最多 name keeps the full-text title (review L2): the summary
              line ellipsizes, the title is the one way to see the whole name -->
         <p class="kpi-sub">
-          カテゴリ数 {{ rows.length }} ・ 最多 <span :title="rows[0]?.labels[0] ?? undefined">{{ rows[0]?.labels[0] ?? '-' }}</span> ・ レシート {{ totals.receipts }}件
+          カテゴリ数 {{ categoryCount }} ・ 最多 <span :title="rows[0]?.labels[0] ?? undefined">{{ rows[0]?.labels[0] ?? '-' }}</span> ・ レシート {{ totals.receipts }}件
         </p>
       </section>
 
@@ -213,9 +248,11 @@ function diffText(d: number | null | undefined): string {
         <h2>支出の推移</h2>
         <TrendBars
           v-if="trend"
-          :rows="trend.sections[0]?.rows ?? []"
-          :current="period.mode === 'month' ? period.month : null"
-          @select="period.setMonth"
+          :rows="trendRows"
+          :granularity="gran"
+          :span="period.range"
+          :current="trendCurrent"
+          @select="onTrendSelect"
         />
       </section>
 

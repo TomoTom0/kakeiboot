@@ -19,9 +19,11 @@ const props = withDefaults(
   defineProps<{
     rows: StatsRow[]
     to?: (row: StatsRow) => RouteLocationRaw | null
+    /** in-place row action for rows without a destination (no chevron) */
+    select?: (row: StatsRow) => void
     colors?: boolean
   }>(),
-  { to: undefined, colors: false },
+  { to: undefined, select: undefined, colors: false },
 )
 
 const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
@@ -36,6 +38,7 @@ const items = computed(() => {
     fill: Math.max(Math.round((r.value / max) * 100), 1),
     color: props.colors ? (PALETTE[i] ?? 'var(--c-rest)') : 'var(--bb-accent)',
     to: props.to ? props.to(r) : null,
+    onSelect: props.select ? () => props.select!(r) : null,
   }))
 })
 
@@ -55,10 +58,10 @@ function diffText(d: number | null): string {
       :key="r.label"
     >
       <component
-        :is="r.to ? RouterLink : 'span'"
+        :is="r.to ? RouterLink : r.onSelect ? 'button' : 'span'"
         class="ranked-row"
-        :class="{ 'is-link': !!r.to }"
-        v-bind="r.to ? { to: r.to } : {}"
+        :class="{ 'is-link': !!r.to || !!r.onSelect }"
+        v-bind="r.to ? { to: r.to } : r.onSelect ? { type: 'button', onClick: r.onSelect } : {}"
         :data-test="`row-${r.label}`"
         :style="{ '--rank-fill': `${r.fill}%`, '--rank-color': r.color }"
       >

@@ -34,15 +34,21 @@ pub struct SearchQuery {
     pub include_deleted: bool,
 }
 
-pub fn encode_cursor(date: &str, id: i64) -> String {
-    b64url_encode(format!("{date}|{id}").as_bytes())
+/// TASK-63: the keyset cursor carries the full sort key (purchased_on,
+/// COALESCE(purchased_time, ''), id) — a missing time encodes as the empty
+/// string so the lexicographic comparison matches the SQL exactly.
+pub fn encode_cursor(date: &str, time: &str, id: i64) -> String {
+    b64url_encode(format!("{date}|{time}|{id}").as_bytes())
 }
 
-pub fn decode_cursor(c: &str) -> Option<(String, i64)> {
+pub fn decode_cursor(c: &str) -> Option<(String, String, i64)> {
     let raw = String::from_utf8(b64url_decode(c)?).ok()?;
-    let (d, id) = raw.split_once('|')?;
+    let mut parts = raw.splitn(3, '|');
+    let d = parts.next()?;
+    let t = parts.next()?;
+    let id = parts.next()?.parse().ok()?;
     super::util::parse_date(d)?;
-    Some((d.to_string(), id.parse().ok()?))
+    Some((d.to_string(), t.to_string(), id))
 }
 
 /// TASK-73: free-text search query length cap (spec_mcp-tools.md 3-5).
@@ -193,7 +199,7 @@ pub async fn search_receipts(
     range: Option<&Range>,
     q: &SearchQuery,
     limit: i64,
-    cursor: Option<(String, i64)>,
+    cursor: Option<(String, String, i64)>,
 ) -> Result<SearchResult, FilterError> {
     let (rsql, rb) = receipt_conditions(ledger_id, range, q);
     let text = q
@@ -226,10 +232,14 @@ pub async fn search_receipts(
             .await?;
     let mut page_binds = binds.clone();
     let mut cur_sql = String::new();
-    if let Some((d, id)) = &cursor {
-        cur_sql = " AND (r.purchased_on < ? OR (r.purchased_on = ? AND r.id < ?))".into();
+    if let Some((d, t, id)) = &cursor {
+        cur_sql = " AND (r.purchased_on < ? OR (r.purchased_on = ? AND \
+                   (COALESCE(r.purchased_time, '') < ? OR (COALESCE(r.purchased_time, '') = ? AND r.id < ?))))"
+            .into();
         page_binds.push(Bind::S(d.clone()));
         page_binds.push(Bind::S(d.clone()));
+        page_binds.push(Bind::S(t.clone()));
+        page_binds.push(Bind::S(t.clone()));
         page_binds.push(Bind::I(*id));
     }
     page_binds.push(Bind::I(limit + 1));
@@ -240,7 +250,7 @@ pub async fn search_receipts(
                 r.deleted_at IS NOT NULL, r.deleted_at
          FROM receipts r LEFT JOIN stores s ON s.id = r.store_id
          WHERE {rsql}{text_clause}{item_exists}{cur_sql}
-         ORDER BY r.purchased_on DESC, r.id DESC LIMIT ?"
+         ORDER BY r.purchased_on DESC, COALESCE(r.purchased_time, '') DESC, r.id DESC LIMIT ?"
     );
     #[allow(clippy::type_complexity)]
     type Row = (
@@ -259,7 +269,9 @@ pub async fn search_receipts(
         .await?;
     let next_cursor = if rows.len() as i64 > limit {
         rows.truncate(limit as usize);
-        rows.last().map(|r| encode_cursor(&r.1, r.0))
+        // r.2 is purchased_time; NULL sorts as the empty string (COALESCE)
+        rows.last()
+            .map(|r| encode_cursor(&r.1, r.2.as_deref().unwrap_or(""), r.0))
     } else {
         None
     };
@@ -319,7 +331,7 @@ pub async fn search_items(
     range: Option<&Range>,
     q: &SearchQuery,
     limit: i64,
-    cursor: Option<(String, i64)>,
+    cursor: Option<(String, String, i64)>,
 ) -> Result<SearchResult, FilterError> {
     let (rsql, rb) = receipt_conditions(ledger_id, range, q);
     let (isql, ib) = item_conditions(conn, ledger_id, q, q.text.as_deref()).await?;
@@ -339,10 +351,14 @@ pub async fn search_items(
     .await?;
     let mut page_binds = binds.clone();
     let mut cur_sql = String::new();
-    if let Some((d, id)) = &cursor {
-        cur_sql = " AND (r.purchased_on < ? OR (r.purchased_on = ? AND i.id < ?))".into();
+    if let Some((d, t, id)) = &cursor {
+        cur_sql = " AND (r.purchased_on < ? OR (r.purchased_on = ? AND \
+                   (COALESCE(r.purchased_time, '') < ? OR (COALESCE(r.purchased_time, '') = ? AND i.id < ?))))"
+            .into();
         page_binds.push(Bind::S(d.clone()));
         page_binds.push(Bind::S(d.clone()));
+        page_binds.push(Bind::S(t.clone()));
+        page_binds.push(Bind::S(t.clone()));
         page_binds.push(Bind::I(*id));
     }
     page_binds.push(Bind::I(limit + 1));
@@ -351,6 +367,7 @@ pub async fn search_items(
         i64,
         i64,
         String,
+        Option<String>,
         Option<i64>,
         Option<String>,
         String,
@@ -362,9 +379,9 @@ pub async fn search_items(
     );
     let mut rows: Vec<Row> = bind_all(
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT i.id, r.id, r.purchased_on, r.store_id, COALESCE(s.name, r.store_name_raw), i.name, i.quantity, i.unit,
+            "SELECT i.id, r.id, r.purchased_on, r.purchased_time, r.store_id, COALESCE(s.name, r.store_name_raw), i.name, i.quantity, i.unit,
                     i.unit_price, i.amount_incl, i.category_id
-             {base}{cur_sql} ORDER BY r.purchased_on DESC, i.id DESC LIMIT ?"
+             {base}{cur_sql} ORDER BY r.purchased_on DESC, COALESCE(r.purchased_time, '') DESC, i.id DESC LIMIT ?"
         ))),
         &page_binds,
     )
@@ -372,13 +389,29 @@ pub async fn search_items(
     .await?;
     let next_cursor = if rows.len() as i64 > limit {
         rows.truncate(limit as usize);
-        rows.last().map(|r| encode_cursor(&r.2, r.0))
+        // r.3 is the receipt's purchased_time (r.2 is the date)
+        rows.last()
+            .map(|r| encode_cursor(&r.2, r.3.as_deref().unwrap_or(""), r.0))
     } else {
         None
     };
     let mut out = Vec::with_capacity(rows.len());
-    for (item_id, receipt_id, date, store_id, store, name, qty, unit, unit_price, incl, cat) in rows
+    for (
+        item_id,
+        receipt_id,
+        date,
+        time,
+        store_id,
+        store,
+        name,
+        qty,
+        unit,
+        unit_price,
+        incl,
+        cat,
+    ) in rows
     {
+        let _ = time; // only the cursor keyset above reads it
         let category = match cat {
             Some(c) => catalog::path_of(conn, CatKind::Item, c).await?,
             None => None,
@@ -403,10 +436,20 @@ pub async fn search_items(
 mod tests {
     use super::*;
 
+    // [covers:web-data-api.receipt-time-ordering]
     #[test]
     fn cursor_roundtrip() {
-        let c = encode_cursor("2026-10-01", 42);
-        assert_eq!(decode_cursor(&c), Some(("2026-10-01".into(), 42)));
+        let c = encode_cursor("2026-10-01", "09:30", 42);
+        assert_eq!(
+            decode_cursor(&c),
+            Some(("2026-10-01".into(), "09:30".into(), 42))
+        );
+        // a missing time encodes as the empty string (COALESCE parity)
+        let c = encode_cursor("2026-10-01", "", 7);
+        assert_eq!(
+            decode_cursor(&c),
+            Some(("2026-10-01".into(), String::new(), 7))
+        );
         assert_eq!(decode_cursor("garbage!"), None);
     }
 
