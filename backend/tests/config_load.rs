@@ -369,3 +369,28 @@ fn register_ttl_hours_config() {
         "register_ttl_hours = 0 must be a config error"
     );
 }
+
+// [covers:app-config.data-io]
+#[test]
+fn data_io_section_in_every_env() {
+    // 1. every environment's app.toml carries the TASK-58 [data_io] caps
+    //    (deny_unknown_fields: the section is mandatory once the code knows it)
+    for env in ["dev", "stg", "prod"] {
+        let dir = common::repo_config_dir().join(format!("../{env}"));
+        let cfg = Config::load(&dir).unwrap_or_else(|e| panic!("configs/{env}: {e}"));
+        assert_eq!(cfg.app.data_io.max_payload_bytes, 67_108_864, "{env}");
+        assert_eq!(cfg.app.data_io.max_receipts, 5000, "{env}");
+        assert_eq!(cfg.app.data_io.max_items_total, 50_000, "{env}");
+    }
+
+    // 2. startup validation: max_receipts = 0 is a config error
+    let base = std::fs::read_to_string(common::repo_config_dir().join("app.toml")).unwrap();
+    let bad = base.replace("max_receipts = 5000", "max_receipts = 0");
+    assert!(
+        matches!(
+            budget_book::config::parse_app(&bad),
+            Err(budget_book::config::ConfigError::Invalid(_))
+        ),
+        "max_receipts = 0 must be rejected"
+    );
+}

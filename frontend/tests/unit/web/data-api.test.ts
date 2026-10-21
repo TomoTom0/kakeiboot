@@ -103,4 +103,28 @@ describe('web/api/data', () => {
     const mock = createMockDataApi()
     await expect(mock.renameLedger(3, { name: '新しい家計' })).resolves.toEqual({ id: 3, name: '新しい家計' })
   })
+
+  it('[covers:web-settings.data-export-import] export/import の接続契約（TASK-58）: blob download と import POST', async () => {
+    const outcome = {
+      ledger: { id: 5, name: '復元' },
+      counts: { receipts: 1, items: 2, images: 0, stores: 1, item_categories: 1, store_categories: 0 },
+    }
+    const f = mockFetch({
+      'POST /api/ledgers/3/export': { body: { format: 'kakeiboot-ledger-export', version: 1 } },
+      'POST /api/ledgers/import': { body: outcome },
+    })
+    const api = createDataApi()
+    // export: POST, no request body, the answer is the file itself (Blob)
+    const blob = await api.exportLedger(3)
+    expect(blob).toBeInstanceOf(Blob)
+    expect(f.calls[0]!.method).toBe('POST')
+    expect(f.calls[0]!.path).toBe('/api/ledgers/3/export')
+    expect(f.calls[0]!.body).toBeUndefined()
+    // import: POST with the parsed file body, the outcome typed back
+    const payload = { format: 'kakeiboot-ledger-export', version: 1, ledger: { id: 3, name: '家計' } }
+    await expect(api.importLedger(payload)).resolves.toEqual(outcome)
+    expect(f.calls[1]!.method).toBe('POST')
+    expect(f.calls[1]!.path).toBe('/api/ledgers/import')
+    expect(f.calls[1]!.body).toEqual(payload)
+  })
 })

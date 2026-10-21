@@ -16,7 +16,7 @@
 
 ## テスト設計条件書（tests/design/）
 
-- `tests/design/conditions.toml` — 条件書（単一ファイルに全領域の条件を置く運用。feature 名とファイル stem は一致しない）。各条件の `source` が docs/spec_*.md の該当節を正本として指す。検証は `scripts/design/verify-conditions.py`（test-structure skill 準拠、`source_lines` の自動同期のみ書き込み）。統合後は web-data-api 条件が backend の REST adapter 実機検証、画面部品はモック DataApi で検証する。
+- `tests/design/conditions.toml` — 条件書（単一ファイルに全領域の条件を置く運用。feature 名とファイル stem は一致しない）。各条件の `source` が docs/spec_*.md・docs/deploy.md の該当節を正本として指す。検証は `scripts/design/verify-conditions.py`（test-structure skill 準拠、`source_lines` の自動同期のみ書き込み）。統合後は web-data-api 条件が backend の REST adapter 実機検証、画面部品はモック DataApi で検証する。
 
 ## テスト一覧
 
@@ -44,7 +44,7 @@
 | `backend/src/mcp/tools/catalog.rs`（`mod tests`） | 単体 | manage_store の category 三値・get_catalog の include 値 |
 | `backend/src/mcp/tools/stats.rs`（`mod tests`） | 単体 | summarize_spending の要約 text・_meta ゲート・既定期間 |
 | `backend/src/mcp/tools/widget.rs`（`mod tests`） | 単体 | refresh_widget_images の ref キー |
-| `backend/tests/config_load.rs` | 結合 | 実 `configs/` 読込・全環境 mcp.toml の一括 tool キーと `[limits]` 検証 [TASK-73] [TASK-20]・port 固定割当・config dir 解決 |
+| `backend/tests/config_load.rs` | 結合 | 実 `configs/` 読込・全環境 mcp.toml の一括 tool キーと `[limits]` 検証 [TASK-73] [TASK-20]・app.toml `[data_io]` 上限検証 [TASK-58]・port 固定割当・config dir 解決 |
 | `backend/tests/healthz.rs` | 結合 | `/healthz`・DB 停止時 503・SQLite 作成と migration 適用 |
 | `backend/tests/request_log.rs` | 結合 | 運用ログ（request INFO・429 WARN・login_mismatch・tool 呼び出し・TTL） [TASK-15] |
 | `backend/tests/mcp_ping.rs` | 結合 | `/mcp` の initialize・tools/list・tools/call・Host/認証 401 |
@@ -63,6 +63,7 @@
 | `backend/tests/mcp_tools_drafts_batch.rs` | 結合 | 一括 tool（create/approve_receipt_drafts） [TASK-18]・障害注入 [TASK-25] |
 | `backend/tests/rate_limit.rs` | 結合 | アプリ内 rate limit の経路別 429 |
 | `backend/tests/web_data_api.rs` | 結合 | web 補助データ REST と静的配信（catalog/stores/receipts/labels・家計簿名変更 [TASK-20]・query 上限 [TASK-73]・SPA 配信） |
+| `backend/tests/web_export_import.rs` | 結合 | データの書き出し・取り込み（export: viewer 含む member の一貫 snapshot・version 1 構造・audit。import: 新規 ledger 復元・ID remap・round-trip 一致。guard: 401・403・非所属 404 同一視。上限: export/import_too_large・413・import_invalid は rollback・画像 file 残存なし [TASK-58]） |
 | `backend/tests/web_media.rs` | 結合 | `GET /media/img/<token>` の配信時再検査と IP rate limit |
 | `backend/tests/admin_cli_phaseb.rs` | 結合 | 運用者 CLI Phase B（grant/session/recovery/resolve/reject/cleanup） |
 | `backend/tests/common/oauth.rs` | 補助 | OAuth テスト用モック（CIMD/JWKS サーバ・RSA 署名・PKCE・grant fixture・フルフロー） |
@@ -83,9 +84,10 @@
 | `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記・画像 URL 検証・ISO 日付ラベル [TASK-68] |
 | `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget/shared の直接通信・不使用 API・HTML 挿入・絵文字の不在 |
 | `frontend/tests/unit/web/helpers.ts` | 補助 | fetch スタブ・memory history での mount・フィード用スクロール test double |
-| `frontend/tests/unit/web/http.test.ts` | 単体 | fetch ラッパ（401・403・204・reauth_required の step-up 再送） |
+| `frontend/tests/unit/web/http.test.ts` | 単体 | fetch ラッパ（401・403・204・reauth_required の step-up 再送・requestBlob の blob 化と error 共有 [TASK-58]） |
 | `frontend/tests/unit/web/webauthn.test.ts` | 単体 | webauthn-rs JSON と navigator.credentials の変換 |
-| `frontend/tests/unit/web/data-api.test.ts` | 単体 | 補助データ API の HTTP 契約（renameLedger [TASK-20]） |
+| `frontend/tests/unit/web/data-api.test.ts` | 単体 | 補助データ API の HTTP 契約（renameLedger [TASK-20]・export/import の POST 2 route と blob [TASK-58]） |
+| `frontend/tests/unit/web/data-export-import.test.ts` | 単体 | 設定データtab の書き出し・取り込み UI（select+download・2step 取り込み・code 別文言・me 再取得 [TASK-58]） |
 | `frontend/tests/unit/web/vite-proxy.test.ts` | 単体 | Vite dev proxy 構成・dev spa fallback・strictPort [TASK-29] |
 | `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター・ログイン・登録受付・同意（色 chip [TASK-20]・me 確定 [TASK-39]） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内の操作部品の非描画・favicon.svg の実色 |

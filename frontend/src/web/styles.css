@@ -1570,6 +1570,16 @@ a.sub-row:hover { background: var(--bb-hover); }
 .ledger-row-editor input { flex: 1 1 12rem; min-width: 0; }
 .ledger-color-row .msg { flex-basis: 100%; margin: 0; }
 
+/* settings data panel: the export / import card (TASK-58). Two stacked
+ * rows, each a label + control inline form that wraps under 480px. */
+.io-row + .io-row { margin-top: 1.2rem; }
+.io-row h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+.io-form { display: flex; flex-wrap: wrap; align-items: end; gap: 0.75rem; }
+.io-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; min-width: 0; }
+.io-field select,
+.io-field input[type='file'] { min-width: 12rem; max-width: 100%; }
+.io-row .msg { width: 100%; margin: 0.75rem 0 0; }
+
 /* receipt detail */
 .receipt-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
 .receipt-head p { margin: 0.1rem 0; }

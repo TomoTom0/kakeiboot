@@ -19,9 +19,11 @@
 // | PATCH  | /api/ledgers/{l}/labels/{color}              | (web only, TASK-17)      |
 // | POST   | /api/ledgers/{l}/receipts/{id}/labels        | label_receipts           |
 // | PATCH  | /api/ledgers/{l}                             | rename_ledger            |
+// | POST   | /api/ledgers/{l}/export                      | (web only, TASK-58)      |
+// | POST   | /api/ledgers/import                          | (web only, TASK-58)      |
 
 import type { LabelColor } from '@/shared/labels'
-import { request } from '../http'
+import { request, requestBlob } from '../http'
 import type { DataApi, ItemListQuery, ReceiptListQuery, StatsQuery } from './types'
 
 function query(params: Record<string, string | number | boolean | undefined>): string {
@@ -65,5 +67,7 @@ export function createHttpDataApi(): DataApi {
     updateLabelTitle: (l, color, input) => request('PATCH', `${base(l)}/labels/${color}`, input),
     setReceiptLabels: (l, r, input) => request('POST', `${base(l)}/receipts/${r}/labels`, input),
     renameLedger: (l, input) => request('PATCH', base(l), input),
+    exportLedger: (l) => requestBlob('POST', `${base(l)}/export`),
+    importLedger: (payload) => request('POST', '/api/ledgers/import', payload),
   }
 }

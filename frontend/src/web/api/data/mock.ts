@@ -17,6 +17,7 @@ import type {
   StoreRow,
 } from './types'
 import { LABEL_COLORS, MAX_LABEL_TITLE_CHARS, isLabelColor, labelColorsOf } from '@/shared/labels'
+import type { LabelColor } from '@/shared/labels'
 
 interface Cat {
   id: number
@@ -823,6 +824,201 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
     // so the rename echoes the contract: the trimmed name back (TASK-20 7-1)
     async renameLedger(l, input) {
       return { id: l, name: input.name.trim() }
+    },
+
+    // TASK-58: the export/import double follows the version-1 file shape at
+    // the fidelity the mock state has (paths instead of category ids, no
+    // image bytes — the mock seeds carry none). Enough for the screens and
+    // for a mock-side round trip.
+    async exportLedger(l) {
+      const lg = ledger(l)
+      const catFile = (kind: CategoryKind) =>
+        lg.cats
+          .filter((c) => c.kind === kind)
+          .map((c) => ({ name: c.name, archived_at: c.archived ? 0 : null }))
+      const file = {
+        format: 'kakeiboot-ledger-export',
+        version: 1,
+        exported_at: Date.now(),
+        ledger: { id: l, name: `家計簿${l}` },
+        labels: clone(lg.labels),
+        item_categories: catFile('item'),
+        store_categories: catFile('store'),
+        stores: lg.stores.map((s) => ({ name: s.name, category: s.category, aliases: [...s.aliases] })),
+        images: [],
+        receipts: lg.receipts
+          .filter((r) => r.deleted_at === null)
+          .map((r) => ({
+            source: r.source,
+            store_name: r.store?.name ?? r.store_name_raw,
+            purchased_on: r.purchased_on,
+            purchased_time: r.purchased_time,
+            tax_mode: r.tax_mode,
+            total_amount: r.total_amount,
+            tax_amount: r.tax_amount,
+            payment_method: r.payment_method,
+            note: r.note,
+            revision: r.revision,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            labels: labelColorsOf(r.labels),
+            items: r.items.map((it) => ({
+              line_no: it.line_no,
+              line_kind: it.line_kind,
+              name: it.name,
+              quantity: it.quantity,
+              unit: it.unit,
+              unit_price: it.unit_price,
+              amount: it.amount,
+              amount_incl: it.amount_incl,
+              tax_rate: it.tax_rate,
+              category: it.category,
+              category_source: it.category_source,
+              bbox: it.bbox,
+            })),
+          })),
+      }
+      return new Blob([JSON.stringify(file)], { type: 'application/json' })
+    },
+
+    async importLedger(payload) {
+      const p = payload as {
+        format?: unknown
+        version?: unknown
+        ledger?: { name?: unknown } | null
+        labels?: { color?: unknown; title?: unknown }[] | null
+        item_categories?: { name?: unknown; archived_at?: unknown }[] | null
+        store_categories?: { name?: unknown; archived_at?: unknown }[] | null
+        stores?: { name?: unknown; category?: unknown; aliases?: unknown }[] | null
+        receipts?:
+          | {
+              revision?: unknown
+              source?: unknown
+              store_name?: unknown
+              purchased_on?: unknown
+              purchased_time?: unknown
+              tax_mode?: unknown
+              total_amount?: unknown
+              payment_method?: unknown
+              note?: unknown
+              labels?: unknown
+              items?:
+                | {
+                    line_no?: unknown
+                    line_kind?: unknown
+                    name?: unknown
+                    quantity?: unknown
+                    unit?: unknown
+                    unit_price?: unknown
+                    amount?: unknown
+                    amount_incl?: unknown
+                    tax_rate?: unknown
+                    category?: unknown
+                    category_source?: unknown
+                    bbox?: unknown
+                  }[]
+                | null
+            }[]
+          | null
+      }
+      const invalid = (): never => {
+        throw new ApiError(400, 'import_invalid')
+      }
+      if (p?.format !== 'kakeiboot-ledger-export' || p?.version !== 1) invalid()
+      const name = typeof p.ledger?.name === 'string' ? p.ledger.name.trim() : ''
+      if (!name) invalid()
+      const cats: Cat[] = []
+      for (const kind of ['item', 'store'] as const) {
+        for (const c of (kind === 'item' ? p.item_categories : p.store_categories) ?? []) {
+          const cname = typeof c?.name === 'string' && c.name ? c.name : invalid()
+          cats.push({ id: seq++, kind, name: cname, parentId: null, archived: c.archived_at != null })
+        }
+      }
+      const stores: Store[] = []
+      for (const s of p.stores ?? []) {
+        const sname = typeof s?.name === 'string' && s.name ? s.name : invalid()
+        stores.push({
+          id: seq++,
+          name: sname,
+          category: typeof s.category === 'string' ? s.category : null,
+          aliases: Array.isArray(s.aliases) ? s.aliases.filter((a): a is string => typeof a === 'string') : [],
+        })
+      }
+      const titles = new Map(
+        (p.labels ?? [])
+          .filter((x): x is { color: LabelColor; title?: unknown } => {
+            const col = x.color
+            return typeof col === 'string' && isLabelColor(col)
+          })
+          .map((x) => [x.color, typeof x.title === 'string' ? x.title : null]),
+      )
+      const labels: Label[] = LABEL_COLORS.map((color) => ({ color, title: titles.get(color) ?? null }))
+      const receipts: ReceiptView[] = []
+      let itemCount = 0
+      for (const rc of p.receipts ?? []) {
+        const store = typeof rc?.store_name === 'string' ? stores.find((s) => s.name === rc.store_name) : undefined
+        const items: ReceiptItem[] = (rc?.items ?? []).map((it, i) => ({
+          item_id: seq++,
+          line_no: typeof it?.line_no === 'number' ? it.line_no : i + 1,
+          line_kind: it?.line_kind === 'discount' ? 'discount' : 'item',
+          parent_item_id: null,
+          name: typeof it?.name === 'string' ? it.name : invalid(),
+          name_raw: null,
+          quantity: typeof it?.quantity === 'number' ? it.quantity : 1,
+          unit: typeof it?.unit === 'string' ? it.unit : null,
+          unit_price: typeof it?.unit_price === 'number' ? it.unit_price : null,
+          amount: typeof it?.amount === 'number' ? it.amount : invalid(),
+          amount_incl: typeof it?.amount_incl === 'number' ? it.amount_incl : invalid(),
+          tax_rate: (typeof it?.tax_rate === 'number' ? it.tax_rate : null) as ReceiptItem['tax_rate'],
+          category: typeof it?.category === 'string' ? it.category : null,
+          category_source: (typeof it?.category_source === 'string' ? it.category_source : null) as ReceiptItem['category_source'],
+          bbox: (Array.isArray(it?.bbox) ? it.bbox : null) as ReceiptItem['bbox'],
+        }))
+        itemCount += items.length
+        const colors = Array.isArray(rc?.labels)
+          ? (rc.labels as unknown[]).filter((c): c is LabelColor => typeof c === 'string' && isLabelColor(c))
+          : []
+        const total = typeof rc?.total_amount === 'number' ? rc.total_amount : items.reduce((a, b) => a + b.amount_incl, 0)
+        const itemsTotal = items.reduce((a, b) => a + b.amount_incl, 0)
+        receipts.push({
+          receipt_id: seq++,
+          revision: typeof rc?.revision === 'number' ? rc.revision : 1,
+          source: rc?.source === 'manual' ? 'manual' : 'image',
+          has_image: false,
+          deleted_at: null,
+          labels: colors.map((color) => ({ color, title: titles.get(color) ?? null })),
+          store: store ? { store_id: store.id, name: store.name, category: store.category } : null,
+          store_name_raw: typeof rc?.store_name === 'string' ? rc.store_name : null,
+          purchased_on: typeof rc?.purchased_on === 'string' ? rc.purchased_on : null,
+          purchased_time: typeof rc?.purchased_time === 'string' ? rc.purchased_time : null,
+          tax_mode: rc?.tax_mode === 'inclusive' || rc?.tax_mode === 'exclusive' ? rc.tax_mode : null,
+          total_amount: total,
+          tax_amount: null,
+          payment_method: (typeof rc?.payment_method === 'string' ? rc.payment_method : null) as ReceiptView['payment_method'],
+          note: typeof rc?.note === 'string' ? rc.note : null,
+          items,
+          items_total: itemsTotal,
+          total_diff: total - itemsTotal,
+          image: null,
+          image_url: null,
+          from_draft_id: null,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        })
+      }
+      const newId = seq++
+      ledgers.set(newId, { cats, stores, receipts, labels })
+      return {
+        ledger: { id: newId, name },
+        counts: {
+          receipts: receipts.length,
+          items: itemCount,
+          images: 0,
+          stores: stores.length,
+          item_categories: cats.filter((c) => c.kind === 'item').length,
+          store_categories: cats.filter((c) => c.kind === 'store').length,
+        },
+      }
     },
   }
   return api

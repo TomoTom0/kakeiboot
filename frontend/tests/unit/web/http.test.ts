@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, configureHttp, request } from '@/web/api/http'
+import { ApiError, configureHttp, request, requestBlob } from '@/web/api/http'
 import { cleanup, mockFetch } from './helpers'
 
 afterEach(() => {
@@ -64,5 +64,40 @@ describe('web/api/http request', () => {
   it('[covers:web-http.no-content] 204 は undefined', async () => {
     mockFetch({ 'POST /api/auth/logout': { status: 204 } })
     await expect(request('POST', '/api/auth/logout')).resolves.toBeUndefined()
+  })
+})
+
+describe('web/api/http requestBlob', () => {
+  // TASK-58: the blob download path shares request's error handling exactly
+  // (401 step-up retry once, unauthorized hook, ApiError with the JSON error
+  // code) — only the success body is a Blob.
+  it('[covers:web-settings.data-export-import] 成功時は応答本文を Blob で返す', async () => {
+    const f = mockFetch({ 'POST /api/ledgers/3/export': { body: { format: 'kakeiboot-ledger-export' } } })
+    const blob = await requestBlob('POST', '/api/ledgers/3/export')
+    expect(blob).toBeInstanceOf(Blob)
+    expect(JSON.parse(await blob.text())).toEqual({ format: 'kakeiboot-ledger-export' })
+    expect(f.calls[0]!.body).toBeUndefined()
+  })
+
+  it('[covers:web-settings.data-export-import] 401 reauth_required は step-up 後に1回だけ再送する', async () => {
+    const f = mockFetch({
+      'POST /api/ledgers/3/export': [
+        { status: 401, body: { error: 'reauth_required' } },
+        { body: { format: 'x' } },
+      ],
+    })
+    const onReauthRequired = vi.fn(async () => {})
+    configureHttp({ onReauthRequired })
+    await expect(requestBlob('POST', '/api/ledgers/3/export')).resolves.toBeInstanceOf(Blob)
+    expect(onReauthRequired).toHaveBeenCalledTimes(1)
+    expect(f.fn).toHaveBeenCalledTimes(2)
+  })
+
+  it('[covers:web-settings.data-export-import] 失敗応答も JSON error code を読み ApiError に載せる', async () => {
+    mockFetch({ 'POST /api/ledgers/3/export': { status: 400, body: { error: 'export_too_large' } } })
+    await expect(requestBlob('POST', '/api/ledgers/3/export')).rejects.toMatchObject({
+      status: 400,
+      code: 'export_too_large',
+    })
   })
 })

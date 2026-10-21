@@ -74,6 +74,37 @@ mise run stg:service -- is-active
 mise run prod:service -- enable --now
 ```
 
+## データの所在とbackup・復元
+
+backendが扱う永続データとその所在（configは相対path指定を運用dir rootで解決。`backend/src/config.rs`）:
+
+| データ | 場所 | 備考 |
+|---|---|---|
+| SQLite DB | `var/<env>/db.sqlite` | WAL + synchronous=NORMAL 運用（`backend/src/db.rs`）。書込直後は `db.sqlite-wal` / `db.sqlite-shm` が併存する |
+| 画像ファイル | `var/<env>/images/YYYY/MM/<ulid>.webp` | `[maintenance] image_root`。DBの `images.storage_path` と対応 |
+| config | `configs/<env>/{app,auth,mcp}.toml` | git管理。deploy時にrsync（`--delete`） |
+
+deployのrsyncは `var/` を対象外とするため、deployでruntimeデータが書き換わることはない（dbへのtouchはrestart時のmigration適用のみ）。
+
+### backup
+
+**自動backup機構は現状存在しない**（timer・cron・admin CLI・app機能のいずれにも無い。2026-10-19時点の実測）。障害時に失えるため、必要になった時点で以下のいずれかで取得する:
+
+- **停止時**: `var/<env>/db.sqlite{,-wal,-shm}` の3点をそのままcopy
+- **稼働中（online）**: `sqlite3 var/<env>/db.sqlite ".backup <dest>"` または `VACUUM INTO`（SQLite公式のonline backup。一貫した単file snapshotになり、WALの併存fileを考慮しなくてよい。sqlite3 CLIが運用機で利用可能）
+- 画像がある場合は `var/<env>/images/` を同一時点にcopy/tar
+
+WAL運用のため **`db.sqlite` 単体のcopyでは未checkpointの書込が失われる**（3点copyかonline backup APIを使う）。DBと画像ファイルは別々のタイミングで更新されるため、**同一時点の組で採らないとDBに登録された画像pathの実ファイルが無い状態（配信404）が起こり得る**。
+
+### 復元
+
+1. `mise run <env>:service -- stop`
+2. `var/<env>/db.sqlite{,-wal,-shm}` をbackupから戻す（3点とも。online backupで取った単fileの場合はdb.sqliteのみでよく、旧 `-wal`/`-shm` が残っていれば削除する）
+3. `var/<env>/images/` を戻す（画像がある場合）
+4. `mise run <env>:service -- start`（起動時migrationが新版を適用）
+
+なおweb設定画面のデータtabの書き出し・取り込み（`spec_mcp-tools.md` §12）は**利用者向けのデータ持ち出し・復帰**であり、運用backup（認証系・全ledgerを含む全体像・世代管理）の代替にはならない。
+
 ## prodの運用
 
 prodはstgと同じ体制で配備・稼働している（unit: enabled・active）。main branchでの運用開始時も `mise run prod:deploy` で main の成果物を prod 運用dirへ配備する。

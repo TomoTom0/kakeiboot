@@ -74,6 +74,35 @@ export async function request<T>(
   body?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
+  const res = await exchange(method, path, body, options)
+  if (res.status === 204) return undefined as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
+}
+
+/**
+ * Blob variant for file downloads (the ledger export): send + error handling
+ * are exactly `request`'s (401 step-up retry, unauthorized hook, ApiError
+ * with the JSON `error` code of a failed response) — only the success body
+ * is read as a Blob instead of parsed JSON.
+ */
+export async function requestBlob(
+  method: HttpMethod,
+  path: string,
+  body?: unknown,
+  options: RequestOptions = {},
+): Promise<Blob> {
+  const res = await exchange(method, path, body, options)
+  return res.blob()
+}
+
+/** Shared send + response checking of `request` and `requestBlob`. */
+async function exchange(
+  method: HttpMethod,
+  path: string,
+  body: unknown,
+  options: RequestOptions,
+): Promise<Response> {
   let res = await send(method, path, body)
   if (res.status === 401) {
     const code = await errorCode(res)
@@ -97,7 +126,5 @@ export async function request<T>(
   if (!res.ok) {
     throw new ApiError(res.status, await errorCode(res))
   }
-  if (res.status === 204) return undefined as T
-  const text = await res.text()
-  return (text ? JSON.parse(text) : undefined) as T
+  return res
 }

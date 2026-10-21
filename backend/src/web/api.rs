@@ -66,6 +66,16 @@ pub fn routes(state: AuthApiState) -> Router {
             "/api/ledgers/{ledger_id}/receipts/{receipt_id}/delete",
             post(delete_receipt),
         )
+        .route("/api/ledgers/{ledger_id}/export", post(export_ledger))
+        // the import body carries embedded images: the route gets its own
+        // body limit from app.toml [data_io] (the axum default 2 MiB would
+        // reject every real export file before the handler runs)
+        .route(
+            "/api/ledgers/import",
+            post(import_ledger).layer(axum::extract::DefaultBodyLimit::max(
+                state.data_io.max_payload_bytes,
+            )),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::api::api_guard,
@@ -162,6 +172,20 @@ impl DataError {
             RenameLedgerError::Forbidden => Self::viewer_only(),
             RenameLedgerError::Invalid(_) | RenameLedgerError::Conflict => Self::invalid(),
             RenameLedgerError::Db(e) => Self::internal(e),
+        }
+    }
+
+    /// TASK-58 export/import: cap and file-validity errors keep the plain
+    /// `{"error": code}` contract (the frontend maps the codes to texts).
+    fn data_io(e: super::data_io::DataIoError) -> Self {
+        use super::data_io::DataIoError;
+        match e {
+            DataIoError::NotFound => Self::not_found(),
+            DataIoError::ExportTooLarge => Self::code(StatusCode::BAD_REQUEST, "export_too_large"),
+            DataIoError::Invalid(_) => Self::code(StatusCode::BAD_REQUEST, "import_invalid"),
+            DataIoError::TooLarge => Self::code(StatusCode::BAD_REQUEST, "import_too_large"),
+            DataIoError::Db(e) => Self::internal(e.into()),
+            DataIoError::Io(e) => Self::internal(e.into()),
         }
     }
 }
@@ -985,4 +1009,92 @@ pub async fn delete_receipt(
             .into_response());
     }
     Ok(Json(body).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// export / import (TASK-58, spec_mcp-tools.md 12: settings data tab)
+
+/// The caps the data_io layer consults: app.toml `[data_io]` plus the shared
+/// mcp.toml limits (the same web/MCP sharing max_query_chars established).
+fn io_limits(state: &AuthApiState) -> super::data_io::IoLimits {
+    super::data_io::IoLimits {
+        max_payload_bytes: state.data_io.max_payload_bytes,
+        max_receipts: state.data_io.max_receipts,
+        max_items_total: state.data_io.max_items_total,
+        max_name_chars: state.tools.limits.max_name_chars,
+        max_ledger_name_chars: state.tools.limits.max_ledger_name_chars,
+        max_label_title_chars: state.tools.limits.max_label_title_chars,
+        max_items_per_receipt: state.tools.limits.max_items,
+    }
+}
+
+/// POST /api/ledgers/{l}/export: one ledger snapshot as a downloadable JSON
+/// file (images embedded). POST — not GET — keeps the request inside the
+/// api_guard's Origin enforcement: a top-level navigation must not be able to
+/// pull the data with the Lax session cookie. Any member (viewer included)
+/// may export; the audit row records who took what out.
+pub async fn export_ledger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(ledger_id): Path<i64>,
+) -> Result<Response, DataError> {
+    let s = session(&state, &headers).await?;
+    member_ledger(&state.db, ledger_id, s.user_id).await?;
+    let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
+    let out = super::data_io::export_ledger(
+        &mut conn,
+        ledger_id,
+        &state.image_root,
+        &actor(&s),
+        &io_limits(&state),
+        now_ms(),
+    )
+    .await
+    .map_err(DataError::data_io)?;
+    let date = crate::domain::util::jst_date(now_ms()).format("%Y%m%d");
+    let mut resp = Response::new(axum::body::Body::from(out.text));
+    *resp.status_mut() = StatusCode::OK;
+    let hs = resp.headers_mut();
+    hs.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    if let Ok(v) = axum::http::HeaderValue::from_str(&format!(
+        "attachment; filename=\"kakeiboot-export-{ledger_id}-{date}.json\""
+    )) {
+        hs.insert(axum::http::header::CONTENT_DISPOSITION, v);
+    }
+    Ok(resp)
+}
+
+/// POST /api/ledgers/import: restore an export file as a NEW ledger owned by
+/// the importing user (no existing ledger is touched, so any active session
+/// may import — the same standing as creating one's ledger at registration).
+pub async fn import_ledger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(file): Json<Value>,
+) -> Result<Json<Value>, DataError> {
+    let s = session(&state, &headers).await?;
+    let out = super::data_io::import_ledger(
+        &state.db,
+        &state.image_root,
+        &file,
+        &actor(&s),
+        &io_limits(&state),
+        now_ms(),
+    )
+    .await
+    .map_err(DataError::data_io)?;
+    Ok(Json(json!({
+        "ledger": { "id": out.ledger_id, "name": out.name },
+        "counts": {
+            "receipts": out.receipts,
+            "items": out.items,
+            "images": out.images,
+            "stores": out.stores,
+            "item_categories": out.item_categories,
+            "store_categories": out.store_categories,
+        },
+    })))
 }

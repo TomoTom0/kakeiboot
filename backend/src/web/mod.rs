@@ -4,5 +4,6 @@
 //! the MCP adapter.
 
 pub mod api;
+pub mod data_io;
 pub mod media;
 pub mod static_files;

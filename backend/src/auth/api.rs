@@ -36,6 +36,11 @@ pub struct AuthApiState {
     pub limits: Arc<crate::ratelimit::RateLimits>,
     /// Shared size / limit settings (configs/mcp.toml) for the web data API.
     pub tools: Arc<crate::config::McpToolsConfig>,
+    /// TASK-58 export / import caps (configs/<env>/app.toml [data_io]).
+    pub data_io: Arc<crate::config::DataIoConfig>,
+    /// Image storage root (app.toml [maintenance]; export reads and import
+    /// writes image files here, like /media does).
+    pub image_root: std::path::PathBuf,
 }
 
 /// Error shape: `{"error": "<code>"}` with a status code.

@@ -136,10 +136,7 @@ async function mainRows(page: Page): Promise<unknown> {
 
 for (const width of WIDTHS) {
   test.describe(`width ${width}`, () => {
-    // capture walks 10+ screens with viewport + fullPage shots per width, so
-    // it sits close to the default 30s budget under concurrent repo load
-    // (parallel verify runs in worktrees); give the capture room to finish
-    test.use({ viewport: { width, height: width >= 900 ? 800 : 780 }, timeout: 120_000 })
+    test.use({ viewport: { width, height: width >= 900 ? 800 : 780 } })
     const dir = `${OUT}/${width}`
 
     test.beforeAll(() => {
@@ -147,6 +144,10 @@ for (const width of WIDTHS) {
     })
 
     test('screens, sidebar, logos', async ({ page, browser }) => {
+      // capture walks 10+ screens with viewport + fullPage shots per width, so
+      // it sits close to the default 30s budget under concurrent repo load
+      // (parallel verify runs in worktrees); give the capture room to finish
+      test.setTimeout(120_000)
       const metrics: Record<string, unknown> = {}
       await installApiStub(page)
       // browser-side errors go to the run log; Vite HMR websocket noise is

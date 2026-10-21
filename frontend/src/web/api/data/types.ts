@@ -346,6 +346,23 @@ export interface DataApi {
   setReceiptLabels(ledgerId: number, receiptId: number, input: SetReceiptLabelsInput): Promise<SetReceiptLabelsResult>
   /** PATCH /api/ledgers/{l}: rename the ledger (editor or above). */
   renameLedger(ledgerId: number, input: { name: string }): Promise<{ id: number; name: string }>
+  /** POST /api/ledgers/{l}/export: one consistent ledger snapshot as a JSON file (TASK-58). */
+  exportLedger(ledgerId: number): Promise<Blob>
+  /** POST /api/ledgers/import: create a fresh ledger from an export file body (TASK-58). */
+  importLedger(payload: unknown): Promise<ImportOutcome>
+}
+
+/** POST /api/ledgers/import result: the new ledger and what landed in it. */
+export interface ImportOutcome {
+  ledger: { id: number; name: string }
+  counts: {
+    receipts: number
+    items: number
+    images: number
+    stores: number
+    item_categories: number
+    store_categories: number
+  }
 }
 
 export interface LabelsResult {

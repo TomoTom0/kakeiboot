@@ -50,6 +50,8 @@ impl AppState {
             fetch,
             limits,
             tools: Arc::new(cfg.tools.clone()),
+            data_io: Arc::new(cfg.app.data_io.clone()),
+            image_root: cfg.image_root(),
         })
     }
 }
