@@ -368,10 +368,10 @@ const labelSlotProps = computed(() => ({
             tabindex="-1"
           >
             <span data-test="store-name"><RouterLink
-              v-if="receipt.store"
-              class="store-link"
-              :to="{ path: `/stores/${receipt.store.store_id}`, query: linkQuery }"
-            >{{ receipt.store.name }}</RouterLink>
+                                           v-if="receipt.store"
+                                           class="store-link"
+                                           :to="{ path: `/stores/${receipt.store.store_id}`, query: linkQuery }"
+                                         >{{ receipt.store.name }}</RouterLink>
               <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
             <span
               v-if="receipt.deleted_at"
@@ -398,7 +398,9 @@ const labelSlotProps = computed(() => ({
               class="tag tag-link"
               :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
               data-test="store-category"
-            >{{ receipt.store.category }}</RouterLink>
+            >
+              {{ receipt.store.category }}
+            </RouterLink>
             <span
               v-if="receipt.has_image"
               class="tag"
@@ -605,7 +607,9 @@ const labelSlotProps = computed(() => ({
                     class="cat-link"
                     :to="row.catTo"
                     :data-test="`item-cat-${row.it.item_id}`"
-                  >{{ row.it.category }}</RouterLink>
+                  >
+                    {{ row.it.category }}
+                  </RouterLink>
                   <span
                     v-else
                     class="muted small block"
