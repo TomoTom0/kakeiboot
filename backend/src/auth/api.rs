@@ -19,6 +19,7 @@ use webauthn_rs_proto::RegisterPublicKeyCredential;
 
 use super::ceremony;
 use super::invitation::{self, InvitationKind};
+use super::ledger;
 use super::register_invitation::{self, RegistrationToken};
 use super::session::{self, ValidSession};
 use super::tokens::TOKEN_LEN;
@@ -189,6 +190,10 @@ pub fn routes(state: AuthApiState) -> Router {
             post(create_register_invitation),
         )
         .route("/api/auth/me", get(me))
+        .route(
+            "/api/auth/me/default-ledger",
+            axum::routing::put(set_default_ledger),
+        )
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/logout-all", post(logout_all))
         .merge(super::oauth::authorize::api_routes())
@@ -470,6 +475,7 @@ async fn register_finish(
         req.label.as_deref(),
         req.use_invited_ledger_as_default.unwrap_or(false),
         user_agent.as_deref(),
+        state.tools.limits.max_ledger_name_chars,
         now,
     )
     .await
@@ -596,7 +602,6 @@ async fn passkey_start(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let (s, _) = require_session(&state, &headers).await?;
-    require_step_up(&s, &state)?;
     let now = session::now_ms();
     let outcome =
         ceremony::passkey_add_start(&state.db, &state.webauthn, &state.auth, &s, now).await?;
@@ -614,7 +619,6 @@ async fn passkey_finish(
     Json(req): Json<RegisterFinishReq>,
 ) -> Result<Response, ApiError> {
     let (s, _) = require_session(&state, &headers).await?;
-    require_step_up(&s, &state)?;
     let now = session::now_ms();
     let Some(ceremony_token) = session::cookie_token(&headers, session::COOKIE_CEREMONY) else {
         return Err(ApiError::bad_request("ceremony_invalid"));
@@ -773,6 +777,10 @@ async fn delete_passkey(
 #[derive(Deserialize)]
 struct CreateInvitationReq {
     role: String,
+    /// Target ledger (TASK-78): the issuer must own it. Absent = the
+    /// issuer's default ledger (the pre-TASK-78 shape).
+    #[serde(default)]
+    ledger_id: Option<i64>,
     #[serde(default)]
     inviter_note: Option<String>,
 }
@@ -783,7 +791,6 @@ async fn create_invitation(
     Json(req): Json<CreateInvitationReq>,
 ) -> Result<Response, ApiError> {
     let (s, _) = require_session(&state, &headers).await?;
-    require_step_up(&s, &state)?;
     if !matches!(req.role.as_str(), "editor" | "viewer") {
         return Err(ApiError::bad_request("invalid_role"));
     }
@@ -793,27 +800,52 @@ async fn create_invitation(
         return Err(ApiError::bad_request("inviter_note_too_long"));
     }
     let now = session::now_ms();
-    // the ledger to join is the inviter's default ledger; owner only.
-    let default_ledger: Option<Option<i64>> = sqlx::query_scalar(
-        "SELECT default_ledger_id FROM users WHERE id = ? AND disabled_at IS NULL",
-    )
-    .bind(s.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::sqlx)?;
-    let Some(Some(ledger_id)) = default_ledger else {
-        return Err(ApiError::bad_request("no_default_ledger"));
-    };
-    let role: Option<String> =
-        sqlx::query_scalar("SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?")
+    // Resolve the target ledger: an explicit ledger_id the issuer must own
+    // (TASK-78; membership and ownership distinguish 404 from 403 — a
+    // non-member ledger is indistinguishable from a missing one), else the
+    // inviter's default ledger (owner only, the pre-TASK-78 shape).
+    let ledger_id = match req.ledger_id {
+        Some(explicit) => {
+            let membership: Option<String> = sqlx::query_scalar(
+                "SELECT m.role FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
+                 WHERE m.ledger_id = ? AND m.user_id = ?",
+            )
+            .bind(explicit)
+            .bind(s.user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::sqlx)?;
+            match membership.as_deref() {
+                None => return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
+                Some("owner") => explicit,
+                Some(_) => return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required")),
+            }
+        }
+        None => {
+            let default_ledger: Option<Option<i64>> = sqlx::query_scalar(
+                "SELECT default_ledger_id FROM users WHERE id = ? AND disabled_at IS NULL",
+            )
+            .bind(s.user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::sqlx)?;
+            let Some(Some(ledger_id)) = default_ledger else {
+                return Err(ApiError::bad_request("no_default_ledger"));
+            };
+            let role: Option<String> = sqlx::query_scalar(
+                "SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?",
+            )
             .bind(ledger_id)
             .bind(s.user_id)
             .fetch_one(&state.db)
             .await
             .map_err(ApiError::sqlx)?;
-    if role.as_deref() != Some("owner") {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required"));
-    }
+            if role.as_deref() != Some("owner") {
+                return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required"));
+            }
+            ledger_id
+        }
+    };
     let ttl = state.auth.invitation.invite_ttl_hours * 3_600_000;
     let expires_at = now + ttl;
     let token = invitation::issue(
@@ -871,7 +903,6 @@ async fn create_register_invitation(
     Json(req): Json<CreateRegisterInvitationReq>,
 ) -> Result<Response, ApiError> {
     let (s, _) = require_session(&state, &headers).await?;
-    require_step_up(&s, &state)?;
     let note = req.inviter_note.trim();
     if note.is_empty() {
         return Err(ApiError::bad_request("inviter_note_required"));
@@ -947,6 +978,40 @@ async fn me(
         "ledgers": ledgers,
         "auth_at": s.auth_at,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// default ledger (TASK-13, spec_auth.md sections 3-2, 6-1)
+
+#[derive(Deserialize)]
+struct SetDefaultLedgerReq {
+    ledger_id: i64,
+}
+
+/// `PUT /api/auth/me/default-ledger {ledger_id}` — change the session user's
+/// own `users.default_ledger_id` (the web screens' initial selection and the
+/// initial active ledger of future grants). Memberships only; the grant
+/// selection itself is untouched (the settings-screen variant of
+/// `switch_ledger`, which stays per-grant).
+async fn set_default_ledger(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<SetDefaultLedgerReq>,
+) -> Result<Response, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    let now = session::now_ms();
+    let out = crate::auth::ledger::set_default_ledger(&state.db, s.user_id, req.ledger_id, now)
+        .await
+        .map_err(|e| match e {
+            ledger::DefaultLedgerError::NotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "not_found")
+            }
+            ledger::DefaultLedgerError::Db(err) => ApiError::internal(err),
+        })?;
+    Ok(Json(json!({
+        "ledger": { "id": out.ledger_id, "name": out.name, "role": out.role.as_str() },
+    }))
+    .into_response())
 }
 
 async fn logout(

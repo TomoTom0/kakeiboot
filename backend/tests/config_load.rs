@@ -332,10 +332,12 @@ note_total_max_chars = 1000
 }
 
 // [covers:auth-invitation.register-ttl-config]
+// [covers:auth-invitation.invite-ttl-config]
 #[test]
 fn register_ttl_hours_config() {
-    // 1. every environment's auth.toml carries register_ttl_hours = 24
-    //    (deny_unknown_fields: the key is mandatory once the code knows it)
+    // 1. every environment's auth.toml carries the web-issued TTLs extended
+    //    by TASK-46 (register 24 -> 168, invite 72 -> 168)
+    //    (deny_unknown_fields: the keys are mandatory once the code knows them)
     let tomls = env_auth_tomls();
     assert_eq!(tomls.len(), 3, "dev / stg / prod");
     for (env, text) in &tomls {
@@ -351,7 +353,15 @@ fn register_ttl_hours_config() {
             .unwrap_or_else(|| {
                 panic!("configs/{env}/auth.toml register_ttl_hours is not an integer")
             });
-        assert_eq!(hours, 24, "{env}");
+        assert_eq!(hours, 168, "register ttl in {env}");
+        let invite = invitation
+            .get("invite_ttl_hours")
+            .unwrap_or_else(|| panic!("configs/{env}/auth.toml is missing invite_ttl_hours"))
+            .as_integer()
+            .unwrap_or_else(|| {
+                panic!("configs/{env}/auth.toml invite_ttl_hours is not an integer")
+            });
+        assert_eq!(invite, 168, "invite ttl in {env}");
     }
 
     // 2. the key is a known field and the default 24 resolves cleanly

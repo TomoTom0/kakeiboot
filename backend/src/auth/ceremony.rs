@@ -310,6 +310,7 @@ pub async fn register_finish(
     label: Option<&str>,
     use_invited_ledger_as_default: bool,
     user_agent: Option<&str>,
+    max_ledger_name_chars: usize,
     now: i64,
 ) -> Result<FinishOutcome, RegisterFinishError> {
     let mut conn = pool.acquire().await.map_err(anyhow::Error::from)?;
@@ -379,6 +380,7 @@ pub async fn register_finish(
             &display_name,
             &reg.user_origin(),
             use_invited_ledger_as_default,
+            max_ledger_name_chars,
             now,
         )
         .await?
@@ -465,13 +467,16 @@ pub async fn register_finish(
 /// `use_invited_ledger_as_default` may make it the default instead. Setup
 /// and register (no join) behave identically. `handle` is the uuid from the
 /// register/start challenge — the value the credential will present at every
-/// login, so it must be the stored `webauthn_user_handle` verbatim.
+/// login, so it must be the stored `webauthn_user_handle` verbatim. The
+/// personal ledger is named `<表示名>の家計簿` (TASK-79), capped to
+/// `max_ledger_name_chars` by `store::personal_ledger_name`.
 async fn create_user_with_personal_ledger(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     handle: &Uuid,
     display_name: &str,
     origin: &UserOrigin,
     use_invited_ledger_as_default: bool,
+    max_ledger_name_chars: usize,
     now: i64,
 ) -> Result<i64, RegisterFinishError> {
     let account_number = generate_unique_account_number(tx).await?;
@@ -495,7 +500,10 @@ async fn create_user_with_personal_ledger(
     let ledger_id: i64 = sqlx::query_scalar(
         "INSERT INTO ledgers (name, created_at, updated_at) VALUES (?, ?, ?) RETURNING id",
     )
-    .bind(store::DEFAULT_LEDGER_NAME)
+    .bind(store::personal_ledger_name(
+        display_name,
+        max_ledger_name_chars,
+    ))
     .bind(now)
     .bind(now)
     .fetch_one(&mut **tx)

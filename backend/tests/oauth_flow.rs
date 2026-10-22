@@ -408,10 +408,10 @@ async fn consent_info_payload_shape() {
             .contains("家計簿の参照"),
         "{scopes:?}"
     );
-    // the initial ledger is the user's default ledger; TASK-16 renamed the
-    // auto-created personal ledger to the shared "default book"
+    // the initial ledger is the user's default ledger; TASK-79 names the
+    // auto-created personal ledger "<表示名>の家計簿"
     let ledger_name = body["ledger_name"].as_str().expect("ledger_name");
-    assert_eq!(ledger_name, "default book");
+    assert_eq!(ledger_name, "Flow Userの家計簿");
     // TASK-20: the initial ledger also reports the user's palette color
     // (ledger_members.color; registration assigns the first palette key)
     assert_eq!(body["ledger_color"], "teal");

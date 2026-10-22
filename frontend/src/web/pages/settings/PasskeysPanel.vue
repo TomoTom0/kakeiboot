@@ -3,23 +3,26 @@ import { onMounted, ref } from 'vue'
 import { authApi, type Passkey } from '../../api/auth'
 import { createPasskey, isCancel } from '../../api/webauthn'
 import { charCount, errorMessage, formatDateTime } from '../../composables/format'
+import FormDialog from '../../components/FormDialog.vue'
 import IconButton from '../../components/IconButton.vue'
 
 // Passkey section (spec_auth.md 2-7), the first card of the auth tab
 // (/settings/auth): list (synced / device-bound), add, rename and delete.
-// Add and delete go through step-up; the last passkey cannot be deleted
-// (the API answers 409). Moved from SettingsPage when the settings screen
-// split into panels (TASK-36). TASK-47: the row actions, the add submit and
-// the rename editor's pair are icon-only buttons (the row's own name rides
-// as the accessible name); the destructive confirm keeps its words.
+// TASK-46: the add flow moved off the standing inline form into a small
+// dialog — the card is a list plus one button; add needs no step-up any
+// more, delete still does (the last passkey cannot be deleted, 409). Moved
+// from SettingsPage when the settings screen split into panels (TASK-36).
 const passkeys = ref<Passkey[]>([])
 const error = ref('')
 const info = ref('')
 const busy = ref(false)
-const newLabel = ref('')
 const editingId = ref<number | null>(null)
 const editingLabel = ref('')
 const deletingId = ref<number | null>(null)
+
+const addOpen = ref(false)
+const newLabel = ref('')
+const addError = ref('')
 
 function backupLabel(p: Passkey): string {
   if (p.backup_state === true) return '同期済み'
@@ -55,17 +58,23 @@ async function run(task: () => Promise<void>): Promise<void> {
   }
 }
 
+function openAdd(): void {
+  newLabel.value = ''
+  addError.value = ''
+  addOpen.value = true
+}
+
 function addPasskey(): Promise<void> {
   return run(async () => {
     const label = newLabel.value.trim()
     if (charCount(label) > 100) {
-      error.value = 'パスキーの名前は100文字以内で入力してください。'
+      addError.value = 'パスキーの名前は100文字以内で入力してください。'
       return
     }
     const ccr = await authApi.passkeyStart()
     const credential = await createPasskey(ccr)
     await authApi.passkeyFinish(credential, label || undefined)
-    newLabel.value = ''
+    addOpen.value = false
     info.value = 'パスキーを追加しました。'
     await reload()
   })
@@ -188,23 +197,6 @@ function confirmDelete(id: number): Promise<void> {
         </div>
       </li>
     </ul>
-    <div class="inline-form">
-      <input
-        v-model="newLabel"
-        type="text"
-        placeholder="追加するパスキーの名前（任意）"
-        aria-label="追加するパスキーの名前"
-        data-test="new-label"
-      >
-      <IconButton
-        icon="key-plus"
-        label="パスキーを追加"
-        variant="primary"
-        :disabled="busy"
-        test="add-passkey"
-        @click="addPasskey"
-      />
-    </div>
     <p
       v-if="error"
       class="msg msg-error"
@@ -220,5 +212,59 @@ function confirmDelete(id: number): Promise<void> {
     >
       {{ info }}
     </p>
+    <FormDialog
+      v-model:open="addOpen"
+      label="パスキーを追加"
+      test="add-passkey-dialog"
+    >
+      <template #trigger>
+        <IconButton
+          icon="key-plus"
+          label="パスキーを追加"
+          variant="primary"
+          :disabled="busy"
+          aria-haspopup="dialog"
+          :aria-expanded="addOpen"
+          test="add-passkey"
+          @click="openAdd"
+        />
+      </template>
+      <h3>パスキーを追加</h3>
+      <div class="inline-form">
+        <input
+          v-model="newLabel"
+          type="text"
+          placeholder="追加するパスキーの名前（任意）"
+          aria-label="追加するパスキーの名前"
+          maxlength="100"
+          data-autofocus
+          data-test="new-label"
+        >
+      </div>
+      <p
+        v-if="addError"
+        class="msg msg-error"
+        role="alert"
+      >
+        {{ addError }}
+      </p>
+      <div class="actions">
+        <button
+          class="btn btn-primary"
+          :disabled="busy"
+          data-test="add-passkey-submit"
+          @click="addPasskey"
+        >
+          追加
+        </button>
+        <button
+          class="btn"
+          :disabled="busy"
+          @click="addOpen = false"
+        >
+          やめる
+        </button>
+      </div>
+    </FormDialog>
   </section>
 </template>

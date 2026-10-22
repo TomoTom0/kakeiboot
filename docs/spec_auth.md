@@ -37,11 +37,11 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 | kind | 発行者 | 既定 TTL | できること |
 |---|---|---|---|
 | `setup` | 運用者 CLI（`admin token issue --kind setup --note`） | 24時間 | 新規 user と個人 ledger の作成 |
-| `invite` | ledger の owner が web 画面から（step-up 必須） | 72時間 | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer） |
+| `invite` | 対象 ledger の owner が web 画面から（対象 ledger は発行時に選択。TASK-78） | 168時間（`invite_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer） |
 | `recovery` | 運用者 CLI（`admin token issue --kind recovery` / `admin recovery resolve`） | 1時間（`--ttl` で最大24時間） | 対象 user へのパスキー追加のみ |
-| `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（step-up 必須・メモ必須） | 24時間（`register_ttl_hours`） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
+| `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（メモ必須） | 168時間（`register_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
 
-- web 画面（設定の認証tab）での呼称: invite の発行 UI は「<既定の家計簿名>を共有」の共有語（家計簿名を明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
+- invite の対象 ledger は発行時に選ぶ（自分が owner の ledger のみ。無指定なら発行者の既定 ledger）。web 画面（設定の認証tab）での呼称: invite の発行 UI は「家計簿を共有」の共有語（対象家計簿名は発行 dialog で明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
 
 - URL は `https://<host>/register?token=<T>`。frontend は URL から token を読んだ直後に `history.replaceState` で消し、以降は POST body で送る。
 - 未使用の register token は発行者ごとに5本まで（超過時 400 `register_open_limit`）。
@@ -92,13 +92,13 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 
 ### 2-6 step-up 再認証
 
-- 対象操作: パスキーの追加・削除、招待発行（invite / 登録招待）。条件は直近 10分以内のパスキー認証（`web_sessions.auth_at`）。
+- 対象操作: パスキーの削除のみ（TASK-46 で追加・発行系からは外れた。条件は直近 10分以内のパスキー認証 `web_sessions.auth_at`）。
 - 満たさない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
 - step-up は非 discoverable 認証（`start_passkey_authentication(当該 user の credential 全件)`）とし、他 user のパスキーで step-up できないようにする。成功時は同じ session 行の `auth_at` を更新する。
 
 ### 2-7 パスキー管理
 
-- 設定画面から追加・一覧・改名・削除。追加・削除は step-up 必須。
+- 設定画面から追加・一覧・改名・削除。削除は step-up 必須（追加は不要。TASK-46）。追加は「パスキーを追加」button から小さな dialog で名前を入力して行う（常設の入力欄は持たない）。
 - web 画面では最後の1本は削除不可（409）。
 - 2本目のパスキーを勧める表示は出さない。
 
@@ -141,13 +141,14 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | `POST /api/webauthn/login/start` | `{req?}` | 200 RequestChallengeResponse + ceremony cookie |
 | `POST /api/webauthn/login/finish` | `{credential}` | 200 `{next}` + session cookie |
 | `POST /api/webauthn/reauth/start` / `finish` | session | 200（`auth_at` 更新） |
-| `POST /api/passkeys/start` / `finish` | session + step-up | 200 |
+| `POST /api/passkeys/start` / `finish` | session（TASK-46 で step-up 廃止） | 200 |
 | `GET /api/passkeys` | session | `[{id, label, created_at, last_used_at, backup_state}]` |
 | `PATCH /api/passkeys/{id}` | session、`{label}` | 200 |
 | `DELETE /api/passkeys/{id}` | session + step-up | 204 / 409（最後の1本） |
-| `POST /api/invitations` | session、ledger owner + step-up、`{role, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す） |
-| `POST /api/register-invitations` | session + step-up（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
+| `POST /api/invitations` | session、対象 ledger の owner（`ledger_id` で指定。無指定は既定 ledger。TASK-78）、`{role, ledger_id?, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す。対象が editor 以下なら 403 `owner_required`・非所属/不在は 404） |
+| `POST /api/register-invitations` | session（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
 | `GET /api/auth/me` | session | `{user_id, account_number, display_name, default_ledger_id, ledgers, auth_at}`（`ledgers` は `[{id, name, role, color}]`。`default_ledger_id` は所属している ledger のみ。所属していなければ null） |
+| `PUT /api/auth/me/default-ledger` | session、`{ledger_id}`（自分の所属 ledger。role 不問） | 200 `{ledger: {id, name, role}}`（非所属/不在は同一視の 404。TASK-13） |
 | `POST /api/auth/logout` / `logout-all` | session | 204 |
 
 - 文字数上限は文字数で数える（バイト数ではない）: 表示名とパスキーラベルは 100 文字まで、`inviter_note` は 200 文字まで（register 発行では必須）。超過は 400。
@@ -405,7 +406,7 @@ MCP の対象 ledger は grant 単位の選択状態 `oauth_grants.active_ledger
 - grant の失効で選択状態も一緒に消える。refresh rotation では維持される。
 - web 画面で `default_ledger_id` を変えても既存 grant の選択は変わらない。「接続中のアプリ」一覧に各接続の選択中 ledger 名を表示する。
 - ledger の削除で未選択になる（FK `ON DELETE SET NULL`）。メンバーから外れた場合も DB トリガで未選択に戻る。default へ自動では戻さない。
-- web 画面の初期選択（および選択中 ledger が所属から消えたときの再選択）は `default_ledger_id`（`GET /api/auth/me` が所属しているもののみ返す）→ 所属の先頭の順。選択は画面内の一時状態で、`default_ledger_id` 自体を変更する API は無い。
+- web 画面の初期選択（および選択中 ledger が所属から消えたときの再選択）は `default_ledger_id`（`GET /api/auth/me` が所属しているもののみ返す）→ 所属の先頭の順。選択は画面内の一時状態。`default_ledger_id` 自体は設定画面（一般tab の家計簿一覧の「既定の家計簿にする」）から `PUT /api/auth/me/default-ledger` で変更する（TASK-13。role は不問で、既存 grant の選択と現在の web 画面の選択は動かさない）。
 
 ### 6-2 MCP tool
 

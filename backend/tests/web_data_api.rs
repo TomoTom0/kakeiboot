@@ -1908,7 +1908,7 @@ async fn ledger_rename_rules() {
     .unwrap();
     assert_eq!(audit.0, "web");
     assert!(audit.1.is_none(), "web actors carry no client_id");
-    assert_eq!(audit.2, r#"{"name":"default book"}"#);
+    assert_eq!(audit.2, r#"{"name":"userの家計簿"}"#);
     assert_eq!(audit.3, r#"{"name":"本家"}"#);
 
     // [covers:auth-ledger.rename-ledger] the same name again: 200 no-op, no

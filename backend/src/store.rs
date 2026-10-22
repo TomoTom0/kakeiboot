@@ -35,10 +35,33 @@ pub fn normalize_text(s: &str) -> String {
 // ---------------------------------------------------------------------------
 // ledger name and per-user ledger color (section 4, migration 0008)
 
-/// Name of the personal ledger created at registration (section 4). The
-/// same literal is written in migration 0008, which renames the ledgers
-/// created under the old naming rule.
+/// Fallback name for the personal ledger created at registration (section 4):
+/// used when the display name is empty after trimming (unreachable through
+/// the register API, which requires one) or when `max_ledger_name_chars` is
+/// too small to hold the suffix. Migration 0008 renamed the ledgers created
+/// under the earlier naming rule to this literal (TASK-16); TASK-79 brought
+/// registration back to the display-name formula.
 pub const DEFAULT_LEDGER_NAME: &str = "default book";
+
+/// The suffix of the auto-created personal ledger name (TASK-79; the same
+/// formula migration 0008 matched for its rename backfill).
+const PERSONAL_LEDGER_SUFFIX: &str = "の家計簿";
+
+/// Name of the personal ledger created at registration (section 4, TASK-79):
+/// `"<表示名>の家計簿"`. The display name is trimmed and cut on a character
+/// boundary to `max_chars` minus the suffix length so the whole name fits the
+/// rename rule (`max_ledger_name_chars`); an empty display name or a cap too
+/// small for the suffix falls back to [`DEFAULT_LEDGER_NAME`].
+pub fn personal_ledger_name(display_name: &str, max_chars: usize) -> String {
+    let display = display_name.trim();
+    let suffix_chars = PERSONAL_LEDGER_SUFFIX.chars().count();
+    if display.is_empty() || max_chars <= suffix_chars {
+        return DEFAULT_LEDGER_NAME.to_string();
+    }
+    let keep = max_chars - suffix_chars;
+    let head: String = display.chars().take(keep).collect();
+    format!("{head}{PERSONAL_LEDGER_SUFFIX}")
+}
 
 /// Ledger color palette (`ledger_members.color` CHECK, migration 0008), in
 /// assignment order. The first key is the column DEFAULT.
@@ -1213,4 +1236,29 @@ where
         "cleanup sweep finished"
     );
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [covers:auth-register.personal-ledger-name]
+    #[test]
+    fn personal_ledger_name_rules() {
+        // the formula matches migration 0008's match pattern
+        assert_eq!(personal_ledger_name("花子", 100), "花子の家計簿");
+        // surrounding whitespace is trimmed off the display name
+        assert_eq!(personal_ledger_name("  太郎\t", 100), "太郎の家計簿");
+        // an empty (or blank) display name falls back to the shared constant
+        assert_eq!(personal_ledger_name("", 100), DEFAULT_LEDGER_NAME);
+        assert_eq!(personal_ledger_name("   ", 100), DEFAULT_LEDGER_NAME);
+        // a display name that would push the whole name past the cap is cut
+        // on the display side so the suffix survives (TASK-79 review #13)
+        let display100: String = "あ".repeat(100);
+        let name = personal_ledger_name(&display100, 100);
+        assert_eq!(name.chars().count(), 100, "fits max_ledger_name_chars");
+        assert!(name.ends_with("の家計簿"), "suffix kept: {name}");
+        // a cap too small to hold the suffix falls back to the constant
+        assert_eq!(personal_ledger_name("花子", 4), DEFAULT_LEDGER_NAME);
+    }
 }

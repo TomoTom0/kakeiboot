@@ -858,6 +858,11 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   padding: 1.25rem;
 }
 
+/* FormDialog (TASK-46): the host and the trigger wrap are layout-transparent
+   so the opening button stays in the card flow; the dialog itself is the
+   fixed overlay above. */
+.form-dialog-host, .form-dialog-trigger { display: contents; }
+
 /* -------------------------------------------------------------- dashboard */
 
 .dash-grid {

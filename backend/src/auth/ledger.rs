@@ -317,6 +317,100 @@ pub async fn rename_ledger(
     })
 }
 
+/// Failures of `set_default_ledger` (TASK-13): membership only — a ledger
+/// the user does not belong to and a missing one are indistinguishable by
+/// design.
+#[derive(Debug, thiserror::Error)]
+pub enum DefaultLedgerError {
+    #[error("ledger not found for user")]
+    NotFound,
+    #[error(transparent)]
+    Db(#[from] anyhow::Error),
+}
+
+impl From<sqlx::Error> for DefaultLedgerError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e.into())
+    }
+}
+
+pub struct DefaultLedgerOutcome {
+    pub ledger_id: i64,
+    pub name: String,
+    pub role: LedgerRole,
+}
+
+/// Change the user's own `users.default_ledger_id` (spec_auth.md 6-1,
+/// TASK-13) in one BEGIN IMMEDIATE transaction: membership re-checked inside
+/// the tx (any role qualifies — the default picks the initial view, it is
+/// not a permission), the previous value captured, then UPDATE + one audit
+/// row. The per-grant `active_ledger_id` selections are independent and stay
+/// untouched.
+pub async fn set_default_ledger(
+    pool: &SqlitePool,
+    user_id: i64,
+    ledger_id: i64,
+    now: i64,
+) -> Result<DefaultLedgerOutcome, DefaultLedgerError> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    // membership + role re-check inside the tx (the switch_ledger flow);
+    // missing ledger and non-member look the same
+    let role_str: Option<String> = sqlx::query_scalar(
+        "SELECT m.role FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
+         WHERE m.ledger_id = ? AND m.user_id = ?",
+    )
+    .bind(ledger_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(role) = role_str.as_deref().and_then(LedgerRole::parse) else {
+        return Err(DefaultLedgerError::NotFound);
+    };
+    let name: String = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+        .bind(ledger_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let previous_ledger_id: Option<i64> =
+        sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let updated =
+        sqlx::query("UPDATE users SET default_ledger_id = ?, updated_at = ? WHERE id = ?")
+            .bind(ledger_id)
+            .bind(now)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if updated != 1 {
+        return Err(DefaultLedgerError::Db(anyhow::anyhow!(
+            "user {user_id} vanished during default-ledger switch"
+        )));
+    }
+    super::audit(
+        &mut tx,
+        "web",
+        "user",
+        user_id,
+        "default_ledger",
+        Some(user_id),
+        &json!({
+            "before_ledger_id": previous_ledger_id,
+            "after_ledger_id": ledger_id,
+        }),
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(DefaultLedgerOutcome {
+        ledger_id,
+        name,
+        role,
+    })
+}
+
 /// The `whoami` view (spec_auth.md 7-1, spec_mcp-tools.md 7-16).
 pub struct Whoami {
     pub account_number: String,

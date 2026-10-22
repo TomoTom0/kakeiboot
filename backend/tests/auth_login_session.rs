@@ -570,8 +570,8 @@ async fn me_returns_user_info() {
     assert_eq!(body["display_name"], "me-user");
     let ledgers = body["ledgers"].as_array().unwrap();
     assert_eq!(ledgers.len(), 1);
-    // TASK-16: auto-created ledger name, per-user color and default_ledger_id
-    assert_eq!(ledgers[0]["name"], "default book");
+    // TASK-79: the auto-created ledger carries the display-name formula
+    assert_eq!(ledgers[0]["name"], "me-userの家計簿");
     assert_eq!(ledgers[0]["role"], "owner");
     assert_eq!(ledgers[0]["color"], "teal");
     assert!(ledgers[0]["id"].is_i64());
@@ -592,6 +592,133 @@ async fn me_returns_user_info() {
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
     assert!(body["default_ledger_id"].is_null());
+}
+
+// [covers:auth-ledger.default-ledger-api]
+#[tokio::test]
+async fn default_ledger_switch_api_updates_users_and_audits() {
+    let (router, pool) = setup().await;
+    let mut client = Client::new();
+    let user = register_setup_user(&mut client, &router, &pool, "dl-user").await;
+    let first: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // a second ledger the user edits, and a live grant pinned to the first
+    // (the user-level default and the grant selection are independent,
+    // spec_auth.md section 6-1)
+    let second: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('実家', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'editor', 0)")
+        .bind(second)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO oauth_clients (client_id, metadata_json, redirect_uris_json,
+            token_endpoint_auth_method, fetched_at, expires_at)
+         VALUES ('https://chatgpt.com/dl', '{}', '[]', 'none', 0, 4102444800000)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO oauth_grants (user_id, client_id, scope, resource, active_ledger_id,
+            created_at, absolute_expires_at)
+         VALUES (?, 'https://chatgpt.com/dl', 'ledger.read', 'http://localhost:40281/mcp', ?, 0, 4102444800000)",
+    )
+    .bind(user)
+    .bind(first)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // no session -> 401
+    let resp = Client::new()
+        .put(
+            &router,
+            "/api/auth/me/default-ledger",
+            serde_json::json!({ "ledger_id": second }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // switch to the second ledger (an editor membership is fine: the default
+    // picks the initial view, it is not a permission)
+    let resp = client
+        .put(
+            &router,
+            "/api/auth/me/default-ledger",
+            serde_json::json!({ "ledger_id": second }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body_text(resp).await);
+    let body = body_json(resp).await;
+    assert_eq!(body["ledger"]["id"].as_i64(), Some(second));
+    assert_eq!(body["ledger"]["name"], "実家");
+    assert_eq!(body["ledger"]["role"], "editor");
+    let stored: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, second, "users.default_ledger_id updated");
+    let grant_ledger: i64 =
+        sqlx::query_scalar("SELECT active_ledger_id FROM oauth_grants WHERE user_id = ?")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(grant_ledger, first, "the grant selection is untouched");
+    let audit: Option<(String, String)> = sqlx::query_as(
+        "SELECT actor_kind, after_json FROM audit_events
+         WHERE entity_type = 'user' AND action = 'default_ledger' AND user_id = ?",
+    )
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    let (actor, after) = audit.expect("audited");
+    assert_eq!(actor, "web");
+    assert!(
+        after.contains(&format!(r#""before_ledger_id":{first}"#))
+            && after.contains(&format!(r#""after_ledger_id":{second}"#)),
+        "before/after ledger ids: {after}"
+    );
+
+    // a ledger the user does not belong to and an unknown id look the same
+    let mut stranger = Client::new();
+    let stranger_user = register_setup_user(&mut stranger, &router, &pool, "dl-stranger").await;
+    let stranger_ledger: i64 =
+        sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+            .bind(stranger_user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    for unknown in [stranger_ledger, 999_999] {
+        let resp = client
+            .put(
+                &router,
+                "/api/auth/me/default-ledger",
+                serde_json::json!({ "ledger_id": unknown }),
+            )
+            .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "ledger {unknown}");
+        assert_eq!(body_json(resp).await["error"], "not_found");
+    }
+    let stored: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, second, "unchanged by the rejected requests");
 }
 
 // [covers:auth-session.logout-clears-cookie]

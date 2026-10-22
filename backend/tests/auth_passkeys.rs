@@ -35,25 +35,45 @@ async fn passkey_list_requires_session() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-// [covers:auth-passkey.add-requires-step-up]
+// [covers:auth-passkey.add-without-stepup]
 #[tokio::test]
-async fn passkey_add_requires_step_up() {
+async fn passkey_add_works_without_step_up() {
     let (router, pool) = setup().await;
     let mut client = Client::new();
     let user = register_setup_user(&mut client, &router, &pool, "adder").await;
 
+    // TASK-46: passkey add no longer demands step-up — a session whose
+    // auth_at is well past the 10-minute window still starts and finishes.
     stale_auth_at(&pool, user).await;
     let resp = client
         .post(&router, "/api/passkeys/start", serde_json::json!({}))
         .await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(body_json(resp).await["error"], "reauth_required");
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body_text(resp).await);
+    client.store_cookies(&resp);
+    let ccr: webauthn_rs::prelude::CreationChallengeResponse =
+        serde_json::from_value(body_json(resp).await).unwrap();
+    let cred = client.register(ccr);
+    let resp = client
+        .post(
+            &router,
+            "/api/passkeys/finish",
+            serde_json::json!({ "credential": cred, "label": "second key" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body_text(resp).await);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 2, "the add completed without any reauth");
 }
 
 // [covers:auth-reauth.renews-auth-at]
 // [covers:auth-passkey.add-finish-inserts-credential]
 #[tokio::test]
-async fn reauth_renews_auth_at_and_unlocks_passkey_add() {
+async fn reauth_renews_auth_at_and_unlocks_passkey_delete() {
     let (router, pool) = setup().await;
     let mut client = Client::new();
     let user = register_setup_user(&mut client, &router, &pool, "stepper").await;
@@ -88,7 +108,9 @@ async fn reauth_renews_auth_at_and_unlocks_passkey_add() {
         "auth_at renewed"
     );
 
-    // passkey add now works (same client = second credential on the soft token)
+    // passkey add needs no step-up anymore (TASK-46): the second credential
+    // lands on the renewed session all the same (same client = second
+    // credential on the soft token)
     let resp = client
         .post(&router, "/api/passkeys/start", serde_json::json!({}))
         .await;
@@ -124,6 +146,20 @@ async fn reauth_renews_auth_at_and_unlocks_passkey_add() {
     .await
     .unwrap();
     assert_eq!(audited, 1, "passkey add audited");
+
+    // the step-up gate now guards deletion only (TASK-46): the renewed
+    // auth_at lets the delete through — the gated operation is unlocked
+    let resp = client
+        .delete(&router, &format!("/api/passkeys/{}", creds[0].0))
+        .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let left: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(left, 1);
 }
 
 // [covers:auth-reauth.rejects-other-user-and-ceremony-mismatch]
@@ -416,14 +452,22 @@ async fn passkey_delete_requires_step_up() {
     assert_eq!(body_json(resp).await["error"], "reauth_required");
 }
 
-// [covers:auth-invitation.web-issue-owner-and-stepup]
+// [covers:auth-invitation.web-issue-owner]
+// [covers:auth-invitation.web-issue-ledger]
+// [covers:auth-invitation.invite-ttl-config]
 #[tokio::test]
-async fn web_invitation_issue_requires_owner_and_step_up() {
+async fn web_invitation_issue_owner_and_ledger_choice() {
     let (router, pool) = setup().await;
     let mut a = Client::new();
     let a_user = register_setup_user(&mut a, &router, &pool, "inv-Owner").await;
+    let a_ledger: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(a_user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    // fresh auth_at from registration -> step-up ok, owner of default ledger
+    // no ledger_id: the default ledger (legacy shape). The invite TTL is
+    // 168 hours since TASK-46 (was 72).
     let resp = a
         .post(
             &router,
@@ -443,16 +487,34 @@ async fn web_invitation_issue_requires_owner_and_step_up() {
         url.starts_with("http://localhost:40281/register?token="),
         "{url}"
     );
-    assert!(body["expires_at"].as_i64().unwrap() > budget_book::auth::session::now_ms());
+    let now = budget_book::auth::session::now_ms();
+    let expires_at = body["expires_at"].as_i64().unwrap();
+    assert!(
+        expires_at > now + 167 * 3_600_000 && expires_at <= now + 169 * 3_600_000,
+        "168h ttl: {expires_at}"
+    );
 
-    // viewer of someone else's ledger -> forbidden
+    // issuance no longer requires step-up (TASK-46): a stale auth_at issues
+    let mut stale = Client::new();
+    let stale_user = register_setup_user(&mut stale, &router, &pool, "inv-stale").await;
+    stale_auth_at(&pool, stale_user).await;
+    let resp = stale
+        .post(
+            &router,
+            "/api/invitations",
+            serde_json::json!({ "role": "editor" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "{}",
+        body_text(resp).await
+    );
+
+    // viewer of someone else's ledger as the default -> forbidden
     let mut viewer = Client::new();
     let viewer_user = register_setup_user(&mut viewer, &router, &pool, "inv-viewer").await;
-    let a_ledger: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
-        .bind(a_user)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
     sqlx::query("INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'viewer', 0)")
         .bind(a_ledger)
         .bind(viewer_user)
@@ -473,20 +535,90 @@ async fn web_invitation_issue_requires_owner_and_step_up() {
         )
         .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"], "owner_required");
 
-    // stale step-up -> reauth_required
-    let mut stale = Client::new();
-    let stale_user = register_setup_user(&mut stale, &router, &pool, "inv-stale").await;
-    stale_auth_at(&pool, stale_user).await;
-    let resp = stale
+    // TASK-78: an explicit ledger_id targets a ledger the issuer owns
+    let second: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('別荘', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'owner', 0)")
+        .bind(second)
+        .bind(a_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let resp = a
         .post(
             &router,
             "/api/invitations",
-            serde_json::json!({ "role": "editor" }),
+            serde_json::json!({ "role": "viewer", "ledger_id": second }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(body_json(resp).await["error"], "reauth_required");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "{}",
+        body_text(resp).await
+    );
+    let invited: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT role, inviter_note FROM invitations WHERE kind = 'invite' AND ledger_id = ?",
+    )
+    .bind(second)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        invited,
+        vec![("viewer".to_string(), None)],
+        "the invitation joins the chosen ledger with the chosen role"
+    );
+
+    // an editor membership of the target is not enough (owner only)
+    let mut b = Client::new();
+    let b_user = register_setup_user(&mut b, &router, &pool, "inv-editor-target").await;
+    let b_ledger: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(b_user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ledger_members (ledger_id, user_id, role, created_at) VALUES (?, ?, 'editor', 0)")
+        .bind(b_ledger)
+        .bind(a_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let resp = a
+        .post(
+            &router,
+            "/api/invitations",
+            serde_json::json!({ "role": "editor", "ledger_id": b_ledger }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"], "owner_required");
+
+    // a ledger the issuer does not belong to and an unknown id look the same
+    let mut c = Client::new();
+    let c_user = register_setup_user(&mut c, &router, &pool, "inv-outsider").await;
+    let c_ledger: i64 = sqlx::query_scalar("SELECT default_ledger_id FROM users WHERE id = ?")
+        .bind(c_user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for unknown in [c_ledger, 999_999] {
+        let resp = a
+            .post(
+                &router,
+                "/api/invitations",
+                serde_json::json!({ "role": "editor", "ledger_id": unknown }),
+            )
+            .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "ledger {unknown}");
+        assert_eq!(body_json(resp).await["error"], "not_found");
+    }
 
     // invalid role
     let resp = a
@@ -561,7 +693,7 @@ async fn web_register_invitation_issue_for_any_active_user() {
         .await
         .unwrap();
 
-    // issue: 201 { url, expires_at } with the ~24h register TTL
+    // issue: 201 { url, expires_at } with the 168h register TTL (TASK-46)
     let resp = viewer
         .post(
             &router,
@@ -584,8 +716,8 @@ async fn web_register_invitation_issue_for_any_active_user() {
     let now = budget_book::auth::session::now_ms();
     let expires_at = body["expires_at"].as_i64().unwrap();
     assert!(
-        expires_at > now + 23 * 3_600_000 && expires_at <= now + 25 * 3_600_000,
-        "24h ttl: {expires_at}"
+        expires_at > now + 167 * 3_600_000 && expires_at <= now + 169 * 3_600_000,
+        "168h ttl: {expires_at}"
     );
 
     // issuance audited as register_invitation / create by the issuer
@@ -624,7 +756,7 @@ async fn web_register_invitation_issue_for_any_active_user() {
         .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    // stale step-up -> reauth_required
+    // TASK-46: issuance no longer requires step-up — a stale auth_at issues
     stale_auth_at(&pool, viewer_user).await;
     let resp = viewer
         .post(
@@ -633,10 +765,14 @@ async fn web_register_invitation_issue_for_any_active_user() {
             serde_json::json!({ "inviter_note": "x" }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(body_json(resp).await["error"], "reauth_required");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "{}",
+        body_text(resp).await
+    );
 
-    // note validation (fresh step-up on the owner client): required, and
+    // note validation: required, and
     // capped at 200 characters (chars, not bytes)
     for (note, code) in [
         ("", "inviter_note_required"),

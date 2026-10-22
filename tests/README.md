@@ -44,13 +44,13 @@
 | `backend/src/mcp/tools/catalog.rs`（`mod tests`） | 単体 | manage_store の category 三値・get_catalog の include 値 |
 | `backend/src/mcp/tools/stats.rs`（`mod tests`） | 単体 | summarize_spending の要約 text・_meta ゲート・既定期間 |
 | `backend/src/mcp/tools/widget.rs`（`mod tests`） | 単体 | refresh_widget_images の ref キー |
-| `backend/tests/config_load.rs` | 結合 | 実 `configs/` 読込・全環境 mcp.toml の一括 tool キーと `[limits]` 検証 [TASK-73] [TASK-20]・app.toml `[data_io]` 上限検証 [TASK-58]・port 固定割当・config dir 解決 |
+| `backend/tests/config_load.rs` | 結合 | 実 `configs/` 読込・全環境 mcp.toml の一括 tool キーと `[limits]` 検証 [TASK-73] [TASK-20]・app.toml `[data_io]` 上限検証 [TASK-58]・auth.toml 招待/登録 TTL=168h 検証 [TASK-46]・port 固定割当・config dir 解決 |
 | `backend/tests/healthz.rs` | 結合 | `/healthz`・DB 停止時 503・SQLite 作成と migration 適用 |
 | `backend/tests/request_log.rs` | 結合 | 運用ログ（request INFO・429 WARN・login_mismatch・tool 呼び出し・TTL） [TASK-15] |
 | `backend/tests/mcp_ping.rs` | 結合 | `/mcp` の initialize・tools/list・tools/call・Host/認証 401 |
 | `backend/tests/auth_register.rs` | 結合 | 登録フロー（setup/invite/recovery）の token 検証・kind 別完了 tx・ceremony 1回限り |
 | `backend/tests/auth_login_session.rs` | 結合 | ログイン（不正・counter 逆行）・web session・CSRF |
-| `backend/tests/auth_passkeys.rs` | 結合 | パスキー管理・step-up 再認証・web からの招待発行 |
+| `backend/tests/auth_passkeys.rs` | 結合 | パスキー管理（追加は step-up 不要 [TASK-46]・削除は step-up 必須）・step-up 再認証・web からの招待発行（owner 検証・ledger 指定 [TASK-78]） |
 | `backend/tests/admin_cli.rs` | 結合 | 運用者 CLI Phase A（user/token/passkey/disable・audit） |
 | `backend/tests/oauth_flow.rs` | 結合 | OAuth メタデータ・authorize・同意・decision（CIMD/JWKS はローカルモック） |
 | `backend/tests/oauth_token.rs` | 結合 | 認可コード交換・client 認証（private_key_jwt・JWKS キャッシュ）・revoke |
@@ -93,7 +93,7 @@
 | `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター・ログイン・登録受付・同意（色 chip [TASK-20]・me 確定 [TASK-39]） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内の操作部品の非描画・favicon.svg の実色 |
 | `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム（期間追従 [TASK-66]・週モード [TASK-53]・推移粒度 [TASK-55]・時期チップ [TASK-44]・skeleton [TASK-39]・密度 [TASK-75]）とアプリ骨格（drawer・メニュー・route.meta 化 [TASK-74]） |
-| `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の家計簿名変更 [TASK-20]・パスキー・招待・4tab）・接続中のアプリ [TASK-20]・ラベル管理 [TASK-26] |
+| `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の家計簿名変更 [TASK-20]・既定 badge と⋯の「既定の家計簿にする」[TASK-13]・パスキー・共有/登録 dialog（FormDialog）と発行済み行・招待 ledger 選択 [TASK-46] [TASK-78]・4tab）・接続中のアプリ [TASK-20]・ラベル管理 [TASK-26] |
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（階層ドリル [TASK-74]・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・skeleton [TASK-39]・一覧・詳細の推移の週モード日棒とKPI実数 [TASK-55] [TASK-57]） |
