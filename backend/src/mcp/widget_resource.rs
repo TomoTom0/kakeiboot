@@ -16,7 +16,8 @@ const PLACEHOLDER: &str = "<!doctype html><html lang=\"ja\"><head><meta charset=
 pub struct WidgetResource {
     pub uri: String,
     pub html: String,
-    /// public origin of this server (img resourceDomains)
+    /// public origin of this server. Base of the img `resourceDomains` CSP
+    /// and of the receipt web URL lines in tool content text (spec 3-3).
     pub origin: String,
 }
 
@@ -40,6 +41,12 @@ impl WidgetResource {
             html,
             origin: origin.to_string(),
         }
+    }
+
+    /// The web deep link of a receipt shown in tool content text
+    /// (spec_mcp-tools.md 3-3, TASK-80). Same `origin` as `resourceDomains`.
+    pub fn receipt_web_url(&self, receipt_id: i64) -> String {
+        format!("{}/receipts/{receipt_id}", self.origin)
     }
 
     /// Resource `_meta`: CSP (standard + openai twin), border, display modes.
@@ -77,5 +84,21 @@ impl WidgetResource {
                 "_meta": self.meta(),
             }]
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [covers:mcp-tools.receipt-web-url-line]
+    #[test]
+    fn receipt_web_url_joins_origin_and_id() {
+        let w = WidgetResource::from_html("x".into(), "http://localhost:40281");
+        assert_eq!(w.receipt_web_url(7), "http://localhost:40281/receipts/7");
+        assert_eq!(
+            w.receipt_web_url(12345),
+            "http://localhost:40281/receipts/12345"
+        );
     }
 }

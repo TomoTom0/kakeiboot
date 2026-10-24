@@ -117,7 +117,7 @@ const itemRows = computed(() =>
       const parent = node === null ? null : catalog.parentIdOf('item', node.id)
       if (node) {
         catTo = {
-          path: parent === null ? `/categories/${node.id}` : `/categories/${parent}/${node.id}`,
+          path: parent === null ? `/axes/category/${node.id}` : `/axes/category/${parent}/${node.id}`,
           query: linkQuery.value,
         }
       }
@@ -370,7 +370,7 @@ const labelSlotProps = computed(() => ({
             <span data-test="store-name"><RouterLink
                                            v-if="receipt.store"
                                            class="store-link"
-                                           :to="{ path: `/stores/${receipt.store.store_id}`, query: linkQuery }"
+                                           :to="{ path: `/axes/store/${receipt.store.store_id}`, query: linkQuery }"
                                          >{{ receipt.store.name }}</RouterLink>
               <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
             <span

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { LabelColor } from '@/shared/labels'
-import type { StatsQuery } from '../api/data'
+import type { AnalysisQuery } from '../api/data'
 import { jstMonth, jstToday, monthEnd, monthLabel, shiftDate, shiftMonth, shortDate, weekStart } from '../composables/period'
 import { useSessionStore } from './session'
 
@@ -89,16 +89,11 @@ export const usePeriodStore = defineStore('web-period', () => {
     return `${shortDate(from.value)}〜`
   })
 
-  /** "前月" / "前年" / null (custom ranges have no comparison label). */
-  const compareLabel = computed(() =>
-    mode.value === 'month' ? '前月' : mode.value === 'week' ? '前週' : mode.value === 'year' ? '前年' : '前期間',
-  )
-
   const valid = computed(() => mode.value !== 'range' || (!!from.value && !!to.value && from.value <= to.value))
 
-  /** Period part of a stats query for ranked reports. */
-  function query(): StatsQuery {
-    const base: StatsQuery =
+  /** Period part of an analysis query for the ranked endpoints. */
+  function query(): AnalysisQuery {
+    const base: AnalysisQuery =
       mode.value === 'month'
         ? { month: month.value }
         : mode.value === 'week'
@@ -109,11 +104,10 @@ export const usePeriodStore = defineStore('web-period', () => {
     return { ...base, ...(labelQuery.value ? { label_colors: labelQuery.value } : {}) }
   }
 
-  /** Monthly trend window: N months back from the selected month (default 11
-   *  = a 12-month window; Home passes 5 for its 6-month window), or the year /
-   *  range itself in the other modes. */
-  function trendQuery(back = 11): StatsQuery {
-    const base: StatsQuery =
+  /** A window of N months back from the selected month (default 11 = a
+   *  12-month window), or the year / range itself in the other modes. */
+  function trendQuery(back = 11): AnalysisQuery {
+    const base: AnalysisQuery =
       mode.value === 'month'
         ? { from: `${shiftMonth(month.value, -back)}-01`, to: monthEnd(month.value) }
         : query() // week / year / range: the selected period itself
@@ -121,15 +115,17 @@ export const usePeriodStore = defineStore('web-period', () => {
   }
 
   /** URL query form of the period for links (month= / year= / from=&to=). */
-  const urlQuery = computed((): Record<string, string> =>
-    mode.value === 'month'
-      ? { month: month.value }
-      : mode.value === 'week'
-        ? { week: week.value }
-        : mode.value === 'year'
-          ? { year: String(year.value) }
-          : { from: from.value, to: to.value },
-  )
+  const urlQuery = computed((): Record<string, string> => {
+    const base: Record<string, string> =
+      mode.value === 'month'
+        ? { month: month.value }
+        : mode.value === 'week'
+          ? { week: week.value }
+          : mode.value === 'year'
+            ? { year: String(year.value) }
+            : { from: from.value, to: to.value }
+    return base
+  })
 
   const thisWeek = weekStart(jstToday())
   const canNext = computed(() =>
@@ -199,7 +195,6 @@ export const usePeriodStore = defineStore('web-period', () => {
     range,
     label,
     labelShort,
-    compareLabel,
     valid,
     query,
     trendQuery,

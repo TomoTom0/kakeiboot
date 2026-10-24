@@ -263,7 +263,7 @@ describe('one-row page toolbar CSS (TASK-75)', () => {
 })
 
 describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
-  it('[covers:web-home.dashboard-month-overview] KPI カードは padding 12px の2行（1行目 .kpi-head の flex 行・金額 1.5rem / 2行目 .kpi-sub は1行 ellipsis で3列 grid・dt・dd は無い）', () => {
+  it('[covers:web-receipts.kpi-parity] KPI カードは padding 12px の2行（1行目 .kpi-head の flex 行・金額 1.5rem / 2行目 .kpi-sub は1行 ellipsis で3列 grid・dt・dd は無い）', () => {
     // the KPI card itself: 12px padding at every width (§6-4's ~64px card)
     expect(rulesFor('.card.kpi').some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
     // the first row: label + amount + the diff chip pinned right (baseline)
@@ -290,16 +290,15 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
     expect(rulesFor('.kpi .label').some((r) => decl(r.body, 'font-size') === '0.8rem')).toBe(true)
   })
 
-  it('[covers:web-home.dashboard-month-overview] 720px 以下は gap 0.75rem・カード padding 12px・ドーナツ 120px・推移 .bars 96px', () => {
+  it('720px 以下は gap 0.75rem・カード padding 12px・zone の詰まった余白・推移 .bars 96px（ドーナツは廃止）', () => {
     const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
     expect(n720, 'max-width: 720px block').toBeDefined()
     expect(rulesFor('.dash-grid', n720!).some((r) => decl(r.body, 'gap') === '0.75rem')).toBe(true)
     expect(rulesFor('.card', n720!).some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
-    expect(rulesFor('.donut', n720!).some((r) => decl(r.body, 'width') === '120px' && decl(r.body, 'height') === '120px')).toBe(true)
     expect(rulesFor('.bars', n720!).some((r) => decl(r.body, 'height') === '96px')).toBe(true)
-    // the base sizes the narrow band shrinks from
-    expect(rulesFor('.donut').some((r) => decl(r.body, 'width') === '170px')).toBe(true)
-    expect(rulesFor('.bars').some((r) => decl(r.body, 'height') === '150px')).toBe(true)
+    // TASK-89: the reading screens' zone tightens; the donut rules are gone
+    expect(rulesFor('.zone', n720!).some((r) => decl(r.body, 'padding') === '0.85rem 1rem')).toBe(true)
+    expect(css).not.toMatch(/\.donut\b/)
   })
 
   it('[covers:web-receipts.dashboard] レシート行は1行 grid（3.2rem minmax(0,1fr) auto auto）で .recent-icon の規則は無く、日ごと見出しは 28px', () => {
@@ -322,16 +321,15 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
 })
 
 describe('ranked row single line (TASK-75 §6-4)', () => {
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は 10px minmax(0,1fr) auto auto auto 12px の1行44px・下端2pxの linear-gradient・container query で差額を隠す・.meter 規則は無い', () => {
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は minmax(0,1fr) auto auto 12px の1行44px（dot・diff 列なし）・下端2pxの accent 単色 linear-gradient・.meter 規則は無い', () => {
     const rows = rulesFor('.ranked-row')
     expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
     expect(
       rows.some(
         (r) =>
-          decl(r.body, 'grid-template-columns') === '10px minmax(0, 1fr) auto auto auto 12px' &&
+          decl(r.body, 'grid-template-columns') === 'minmax(0, 1fr) auto auto 12px' &&
           decl(r.body, 'gap') === '8px' &&
-          decl(r.body, 'min-height') === '44px' &&
-          decl(r.body, 'container-type') === 'inline-size',
+          decl(r.body, 'min-height') === '44px',
       ),
     ).toBe(true)
     // the share bar rides the row's bottom edge as a 2px gradient (no meter);
@@ -346,16 +344,9 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
           decl(r.body, 'background-position') === 'bottom',
       ),
     ).toBe(true)
-    // the diff column: 0.75rem, danger up / accent down
-    expect(rulesFor('.ranked-diff').some((r) => decl(r.body, 'font-size') === '0.75rem')).toBe(true)
-    expect(rulesFor('.ranked-diff.up').some((r) => decl(r.body, 'color') === 'var(--bb-danger)')).toBe(true)
-    expect(rulesFor('.ranked-diff.down').some((r) => decl(r.body, 'color') === 'var(--bb-accent)')).toBe(true)
-    // through 340px of the row's own container the diff cell folds away
-    const c340 = blockAfter(/@container\s*\(max-width:\s*340px\)/)
-    expect(c340, '@container (max-width: 340px) block').toBeDefined()
-    expect(rulesFor('.ranked-diff', c340!).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
-    // the standalone meter element is gone from the ranked list (and the
-    // stylesheet — Home's rank rows became RankedList rows too)
+    // the compare/diff column is gone with TASK-93 (no .ranked-diff rule at
+    // all); the standalone meter element is gone from the ranked list too
+    expect(rulesFor('.ranked-diff')).toHaveLength(0)
     expect(css).not.toMatch(/\.meter/)
     // the link hover keeps the gradient: background-color, never the shorthand
     for (const r of rulesFor('a.ranked-row.is-link:hover')) {
@@ -378,12 +369,10 @@ describe('shell: topbar over drawer (TASK-27)', () => {
     setDataApi(null)
     cleanup()
 
-    // CSS: the sidebar overlay (every width, TASK-33) and the mobile scrim
-    // start at the topbar's bottom edge
+    // CSS: the sidebar overlay (every width, TASK-33) and the scrim (every
+    // width since TASK-89) start at the topbar's bottom edge
     expect(rulesFor('.sidebar', css).map((r) => decl(r.body, 'top'))).toContain('var(--topbar-h)')
-    const mobile = blockAfter(/@media\s*\(max-width:\s*899px\)/)
-    expect(mobile).toBeDefined()
-    expect(rulesFor('.drawer-open .scrim', mobile!).some((r) => decl(r.body, 'top') === 'var(--topbar-h)')).toBe(true)
+    expect(rulesFor('.scrim', css).map((r) => decl(r.body, 'top'))).toContain('var(--topbar-h)')
     // and the topbar stacks above both
     const zOf = (sel: string, text: string) =>
       rulesFor(sel, text)
@@ -391,7 +380,7 @@ describe('shell: topbar over drawer (TASK-27)', () => {
         .filter((n) => !Number.isNaN(n))
     const topZ = zOf('.topbar', css)
     const sideZ = zOf('.sidebar', css)
-    const scrimZ = zOf('.drawer-open .scrim', css)
+    const scrimZ = zOf('.scrim', css)
     expect(topZ.length, 'topbar z-index').toBeGreaterThan(0)
     expect(sideZ.length, 'sidebar z-index').toBeGreaterThan(0)
     expect(scrimZ.length, 'scrim z-index').toBeGreaterThan(0)
@@ -419,12 +408,11 @@ describe('shell: sidebar overlay at every width (TASK-33 real-device review)', (
     expect(top).not.toMatch(/grid-template-columns:\s*var\(--sidebar-w\)/)
     // the fold mechanism is gone entirely
     expect(css).not.toMatch(/sidebar-collapsed/)
-    // the scrim is a mobile-only layer: display:none at the top level, the
-    // only rule showing it lives inside the 899px block
+    // TASK-89: the scrim shows at every width (the desktop overlay closes
+    // on an outside tap too) — display:none at rest, block under .drawer-open
+    // at the top level, no 899px-only rule
     expect(rulesFor('.scrim', top).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
-    const mobile = blockAfter(/@media\s*\(max-width:\s*899px\)/)!
-    expect(rulesFor('.drawer-open .scrim', mobile).some((r) => decl(r.body, 'display') === 'block')).toBe(true)
-    expect(rulesFor('.drawer-open .scrim', top)).toHaveLength(0)
+    expect(rulesFor('.drawer-open .scrim', top).some((r) => decl(r.body, 'display') === 'block')).toBe(true)
     // reduced motion disables the slide
     const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
     expect(rulesFor('.sidebar', rm).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)

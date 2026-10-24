@@ -9,7 +9,9 @@
 // | GET    | /api/ledgers/{l}/stores?query=               | get_catalog(stores)      |
 // | PATCH  | /api/ledgers/{l}/stores/{id}                 | manage_store             |
 // | POST   | /api/ledgers/{l}/stores/{id}/merge           | (web only)               |
-// | GET    | /api/ledgers/{l}/stats?report=&month=...     | summarize_spending       |
+// | GET    | /api/ledgers/{l}/analysis?axis=&metric=...   | (web only, TASK-89)      |
+// | GET    | /api/ledgers/{l}/analysis/trend              | (web only, TASK-89)      |
+// | GET    | /api/ledgers/{l}/analysis/item               | (web only, TASK-89)      |
 // | GET    | /api/ledgers/{l}/receipts?from=&to=&store=&q=&store_id= | search_receipts |
 // | GET    | /api/ledgers/{l}/items?q=&from=&to=          | search_receipts(mode=items) |
 // | GET    | /api/ledgers/{l}/receipts/{id}               | get_receipt              |
@@ -24,7 +26,14 @@
 
 import type { LabelColor } from '@/shared/labels'
 import { request, requestBlob } from '../http'
-import type { DataApi, ItemListQuery, ReceiptListQuery, StatsQuery } from './types'
+import type {
+  AnalysisItemQuery,
+  AnalysisQuery,
+  AnalysisTrendQuery,
+  DataApi,
+  ItemListQuery,
+  ReceiptListQuery,
+} from './types'
 
 function query(params: Record<string, string | number | boolean | undefined>): string {
   const q = new URLSearchParams()
@@ -54,8 +63,12 @@ export function createHttpDataApi(): DataApi {
     updateStore: (l, id, input) => request('PATCH', `${base(l)}/stores/${id}`, input),
     mergeStores: (l, sourceId, intoId) =>
       request('POST', `${base(l)}/stores/${sourceId}/merge`, { into_store_id: intoId }),
-    getStats: (l, q: StatsQuery) =>
-      request('GET', `${base(l)}/stats${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
+    getAnalysis: (l, q: AnalysisQuery) =>
+      request('GET', `${base(l)}/analysis${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
+    getAnalysisTrend: (l, q: AnalysisTrendQuery) =>
+      request('GET', `${base(l)}/analysis/trend${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
+    getAnalysisItem: (l, q: AnalysisItemQuery) =>
+      request('GET', `${base(l)}/analysis/item${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
     listReceipts: (l, q: ReceiptListQuery) =>
       request('GET', `${base(l)}/receipts${query({ ...q, label_colors: labelQuery(q.label_colors) })}`),
     searchItems: (l, q: ItemListQuery) =>

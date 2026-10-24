@@ -381,6 +381,15 @@ async fn labels_carry_over_to_the_receipt() {
         .collect();
     got.sort();
     assert_eq!(got, ["blue", "red"]);
+    // TASK-80: the success text of get_receipt carries the web URL line
+    // [covers:mcp-tools.receipt-web-url-line]
+    assert!(
+        text_of(&r).contains(&format!(
+            "webで見る: http://localhost:40281/receipts/{receipt_id}"
+        )),
+        "{}",
+        text_of(&r)
+    );
 
     // set.label_colors then approve: the amended set is what carries over
     let r = call(

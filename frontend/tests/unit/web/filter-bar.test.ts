@@ -147,7 +147,7 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
 })
 
 describe('topbar period dialog (PeriodPicker)', () => {
-  it('[covers:web-browse.filter-dialogs][covers:web-shell.period-picker-week-tab] 時期dialog: タブ「月｜週｜年｜期間」・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
+  it('[covers:web-browse.filter-dialogs][covers:web-shell.period-picker-week-tab][covers:web-shell.period-picker-order] 時期dialog: タブ「週｜月｜年｜Custom」の自然昇順（TASK-90/91）・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/receipts')
@@ -159,9 +159,13 @@ describe('topbar period dialog (PeriodPicker)', () => {
     const dialog = wrapper.get('[role="dialog"]')
     expect(chip().attributes('aria-expanded')).toBe('true')
     expect(chip().attributes('aria-controls')).toBe(dialog.attributes('id'))
-    for (const m of ['mode-month', 'mode-week', 'mode-year', 'mode-range']) {
-      expect(wrapper.find(`[data-test="${m}"]`).exists(), m).toBe(true)
-    }
+    // TASK-90: the tabs run 週・月・年 in natural ascending order, and the
+    // free-form fourth tab says Custom (TASK-91)
+    const tabs = wrapper.findAll('[role="tablist"][aria-label="期間の単位"] .tab')
+    expect(tabs.map((b) => b.text())).toEqual(['週', '月', '年', 'Custom'])
+    expect(tabs[0]!.attributes('data-test')).toBe('mode-week')
+    expect(tabs[1]!.attributes('data-test')).toBe('mode-month')
+    expect(tabs[3]!.attributes('data-test')).toBe('mode-range')
 
     // TASK-53: the week tab applies at once like month/year — the current week
     // (2026-10-12..18) steps in whole weeks, capped at the current week
@@ -222,7 +226,7 @@ describe('topbar label dialog', () => {
   it('[covers:web-browse.filter-dialogs] ラベルdialog: LabelToggleGroup+解除は即時にperiod storeへ出て各ページの再取得へ伝播（dialogは開いたまま）', async () => {
     await api.updateLabelTitle(1, 'red', { title: '旅行' })
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const stats = vi.spyOn(api, 'getStats')
+    const stats = vi.spyOn(api, 'getAnalysis')
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/')
     const chip = () => wrapper.find('[data-test="filter-labels"]')
@@ -233,12 +237,12 @@ describe('topbar label dialog', () => {
     // nothing selected: the clear button starts disabled
     expect(wrapper.find('[data-test="label-filter-clear"]').attributes('disabled')).toBeDefined()
 
-    // toggling red is period.setLabelColors(['red']) at once: Home's getStats
-    // and the recent list re-query with the filter, the chip shows the
-    // selection, and the dialog stays open
+    // toggling red is period.setLabelColors(['red']) at once: Home's
+    // analysis and the recent list re-query with the filter, the chip shows
+    // the selection, and the dialog stays open
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
-    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
+    expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red'], limit: 50 }))
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
     expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
     expect(chip().classes()).toContain('active')
@@ -247,10 +251,10 @@ describe('topbar label dialog', () => {
     // OR with blue, then 解除 empties the selection and re-queries with []
     await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
     await settle()
-    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
+    expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'], limit: 50 }))
     await wrapper.find('[data-test="label-filter-clear"]').trigger('click')
     await settle()
-    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: [] }))
+    expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: [], limit: 50 }))
     expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み')
     expect(chip().classes()).not.toContain('active')
   })
@@ -488,7 +492,7 @@ describe('one-row page toolbar (TASK-75 §6-3)', () => {
     // under the heading (TASK-74's provisional row absorbed, interface as-is)
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const detail = await mountApp('/categories/1?store_id=3')
+    const detail = await mountApp('/axes/category/1?store_id=3')
     const dBar = detail.wrapper.find('.page-toolbar')
     expect(dBar.exists()).toBe(true)
     expect(dBar.find('[data-test="page-chips"]').exists()).toBe(true)

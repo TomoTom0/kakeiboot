@@ -5,6 +5,11 @@
 
 import { ApiError } from '../http'
 import type {
+  AnalysisAxis,
+  AnalysisFilters,
+  AnalysisGranularity,
+  AnalysisMetric,
+  AnalysisRow,
   Catalog,
   CategoryKind,
   CategoryNode,
@@ -68,6 +73,27 @@ function shiftMonth(month: string, delta: number): string {
   const [y, m] = month.split('-').map(Number) as [number, number]
   const t = y * 12 + (m - 1) + delta
   return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`
+}
+
+function monthEndOf(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  return `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`
+}
+
+/** Monday of the ISO week containing d (same rule as the frontend helpers). */
+function weekStartOf(d: string): string {
+  const day = new Date(Date.parse(d)).getUTCDay() // 0 = Sunday
+  const off = (day + 6) % 7
+  return new Date(Date.parse(d) - off * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** One decimal, half-up-ish via the same rounding the backend uses for f64. */
+function round1(v: number): number {
+  return Math.round(v * 10) / 10
+}
+
+function shortDateOf(d: string): string {
+  return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
 }
 
 function notFound(): never {
@@ -293,6 +319,178 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
     labels: clone(r.labels ?? []),
   })
 
+  // --- analysis helpers (TASK-89) ------------------------------------------
+  // --- analysis (TASK-89): GET /analysis, /analysis/trend, /analysis/item.
+  // Backend parity of design_backend.md §1-§3: the selected period only,
+  // count is COUNT(DISTINCT receipt_id), the label axis double-counts a
+  // receipt's multiple labels, and no folded "other" row is produced — the
+  // rest row is the client's.
+  type Fact = { r: ReceiptView; it: ReceiptItem; top: string }
+  const factsOf = (lg2: Ledger, f: string, t: string, flt: AnalysisFilters): Fact[] =>
+  lg2.receipts
+  .filter((r) => r.deleted_at === null && (r.purchased_on ?? '') >= f && (r.purchased_on ?? '') <= t)
+  .filter((r) => !flt.store || (r.store?.name ?? '').includes(flt.store))
+  .filter((r) => !flt.store_id || r.store?.store_id === flt.store_id)
+  .filter(
+  (r) =>
+  !flt.store_category ||
+  (r.store?.category ?? '') === flt.store_category ||
+  (r.store?.category ?? '').startsWith(`${flt.store_category}/`),
+  )
+  .filter(
+  (r) => !flt.label_colors?.length || labelColorsOf(r.labels).some((c) => flt.label_colors!.includes(c)),
+  )
+  .filter((r) => !flt.payment_method || r.payment_method === flt.payment_method)
+  .flatMap((r) =>
+  r.items.map((it) => ({
+  r,
+  it,
+  top: (it.category ?? '未分類').split('/')[0]!,
+  })),
+  )
+  .filter((x) =>
+  !flt.category
+  ? true
+  : flt.category === '未分類'
+  ? x.it.category === null
+  : x.it.category === flt.category || (x.it.category ?? '').startsWith(`${flt.category}/`),
+  )
+  .filter((x) => !flt.item_query || x.it.name.includes(flt.item_query))
+
+  const AXES: AnalysisAxis[] = ['category', 'store', 'item', 'label', 'payment_method']
+  const METRICS: AnalysisMetric[] = ['amount', 'count', 'unit']
+
+  /** month | year | from+to (mutually exclusive) -> [from, to, kind]. */
+  function parsePeriod(
+  q: { month?: string; year?: number; from?: string; to?: string },
+  last12Default = false,
+  ): [string, string, 'month' | 'year' | 'days'] {
+  if (q.month !== undefined) {
+  if (!/^\d{4}-\d{2}$/.test(q.month)) throw new ApiError(400, 'invalid_request')
+  return [`${q.month}-01`, monthEndOf(q.month), 'month']
+  }
+  if (q.year !== undefined) return [`${q.year}-01-01`, `${q.year}-12-31`, 'year']
+  if (q.from !== undefined && q.to !== undefined) {
+  if (q.from > q.to || !/^\d{4}-\d{2}-\d{2}$/.test(q.from) || !/^\d{4}-\d{2}-\d{2}$/.test(q.to))
+  throw new ApiError(400, 'invalid_request')
+  return [q.from, q.to, 'days']
+  }
+  if ((q.from !== undefined) !== (q.to !== undefined)) throw new ApiError(400, 'invalid_request')
+  const tm = jstMonth(new Date())
+  if (last12Default) return [`${shiftMonth(tm, -11)}-01`, monthEndOf(tm), 'days']
+  return [`${tm}-01`, monthEndOf(tm), 'month']
+  }
+  const periodLabelOf = (kind: 'month' | 'year' | 'days', from: string, to: string): { from: string; to: string; label: string } =>
+  kind === 'month'
+  ? { from, to, label: `${Number(from.slice(0, 4))}年${Number(from.slice(5, 7))}月` }
+  : kind === 'year'
+  ? { from, to, label: `${from.slice(0, 4)}年` }
+  : { from, to, label: `${shortDateOf(from)}〜${shortDateOf(to)}` }
+
+  interface Agg {
+  key: string | number | null
+  label: string
+  amount: number
+  receipts: Set<number>
+  }
+  type Sel = (x: Fact) => { group: string; key: string | number | null; label: string }[]
+
+  const selectOf = (axis: AnalysisAxis, lg2: Ledger, flt: AnalysisFilters): Sel => {
+  if (axis === 'category') {
+  // with a category filter the grouping drops to the item's direct
+  // category (by_category parity); 未分類 keeps the top-level dim
+  const narrow = !!flt.category && flt.category !== '未分類'
+  return (x) => {
+  if (narrow && x.it.category !== null) {
+  return [{ group: x.it.category, key: findPath(lg2, 'item', x.it.category)?.id ?? null, label: x.it.category }]
+  }
+  return [
+  {
+  group: x.top,
+  key: lg2.cats.find((c) => c.kind === 'item' && c.parentId === null && c.name === x.top)?.id ?? null,
+  label: x.top,
+  },
+  ]
+  }
+  }
+  if (axis === 'store')
+  return (x) => [
+  {
+  group: x.r.store?.name ?? '店不明',
+  key: x.r.store?.store_id ?? null,
+  label: x.r.store?.name ?? '店不明',
+  },
+  ]
+  // REVIEW-13 M-3 parity: the item axis groups by 品名 — same-name lines are
+  // one item (key = label = the display name)
+  if (axis === 'item') return (x) => [{ group: x.it.name, key: x.it.name, label: x.it.name }]
+  if (axis === 'label') {
+  // a receipt with several labels counts into every label row; a
+  // label-less receipt lands on the 無ラベル row (key null)
+  return (x) => {
+  const colors = labelColorsOf(x.r.labels)
+  if (colors.length === 0) return [{ group: '', key: null, label: 'ラベルなし' }]
+  return colors.map((c) => ({
+  group: c,
+  key: c,
+  label: lg2.labels.find((lb) => lb.color === c)?.title ?? c,
+  }))
+  }
+  }
+  return (x) => [
+  x.r.payment_method
+  ? { group: x.r.payment_method, key: x.r.payment_method, label: PAYMENT_LABEL[x.r.payment_method] }
+  : { group: '支払方法不明', key: null, label: '支払方法不明' },
+  ]
+  }
+
+  const aggregate = (sel: Sel, xs: Fact[]): Map<string, Agg> => {
+  const map = new Map<string, Agg>()
+  for (const x of xs) {
+  for (const s of sel(x)) {
+  const e = map.get(s.group) ?? { key: s.key, label: s.label, amount: 0, receipts: new Set<number>() }
+  e.amount += x.it.amount_incl
+  e.receipts.add(x.r.receipt_id)
+  map.set(s.group, e)
+  }
+  }
+  return map
+  }
+
+  const metricOfAgg = (a: Agg | undefined, metric: AnalysisMetric): number =>
+  !a ? 0 : metric === 'amount' ? a.amount : metric === 'count' ? a.receipts.size : a.receipts.size ? round1(a.amount / a.receipts.size) : 0
+
+  /** the period's axis rows: metric value desc, top limit, no folded row. */
+  function breakdownOf(
+  sel: Sel,
+  metric: AnalysisMetric,
+  cur: Fact[],
+  limit: number,
+  ): { rows: AnalysisRow[]; truncated: number } {
+  const curAgg = aggregate(sel, cur)
+  const axisTotal = [...curAgg.values()].reduce((a, e) => a + metricOfAgg(e, metric), 0)
+  const rows: AnalysisRow[] = [...curAgg.values()].map((e) => {
+  const count = e.receipts.size
+  return {
+  key: e.key,
+  label: e.label,
+  amount: e.amount,
+  count,
+  unit: count ? round1(e.amount / count) : null,
+  share: metric === 'unit' ? null : axisTotal ? metricOfAgg(e, metric) / axisTotal : 0,
+  }
+  })
+  rows.sort(
+  (a, b) =>
+  metric === 'amount' ? b.amount - a.amount : metric === 'count' ? b.count - a.count : (b.unit ?? 0) - (a.unit ?? 0),
+  )
+  return {
+  rows: rows.slice(0, limit),
+  truncated: rows.length - Math.min(rows.length, limit),
+  }
+  }
+
+  // --- analysis (TASK-89): GET /analysis, /analysis/trend, /analysis/item ---
   const api: DataApi = {
     kind: 'mock',
 
@@ -407,198 +605,224 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
       return { store: storeRow(lg, dst), merged_from: { store_id: src.id, name: src.name }, moved_receipts: moved }
     },
 
-    async getStats(l, q) {
-      const lg = ledger(l)
-      const report = q.report ?? 'monthly_overview'
-      const today = jstMonth(new Date())
-      let from: string
-      let to: string
-      let kind: 'month' | 'year' | 'days'
-      if (q.month !== undefined) {
-        if (!/^\d{4}-\d{2}$/.test(q.month)) throw new ApiError(400, 'invalid_request')
-        ;[from, to, kind] = [`${q.month}-01`, `${q.month}-31`, 'month']
-      } else if (q.year !== undefined) {
-        ;[from, to, kind] = [`${q.year}-01-01`, `${q.year}-12-31`, 'year']
-      } else if (q.from && q.to) {
-        ;[from, to, kind] = [q.from, q.to, 'days']
-      } else if (report === 'monthly_trend' || report === 'item_price_history') {
-        ;[from, to, kind] = [`${shiftMonth(today, -11)}-01`, `${today}-31`, 'days']
-      } else {
-        ;[from, to, kind] = [`${today}-01`, `${today}-31`, 'month']
+    async getAnalysis(l, q) {
+      const lg2 = ledger(l)
+      const axis = q.axis ?? 'category'
+      const metric = q.metric ?? 'amount'
+      if (!AXES.includes(axis) || !METRICS.includes(metric)) throw new ApiError(400, 'invalid_request')
+      const [from, to, kind] = parsePeriod(q)
+      const cur = factsOf(lg2, from, to, q)
+      const totalOf = (xs: Fact[]) => {
+        const amount = xs.reduce((a, x) => a + x.it.amount_incl, 0)
+        const count = new Set(xs.map((x) => x.r.receipt_id)).size
+        return { amount, count, unit: count ? round1(amount / count) : null }
       }
-      if (report === 'item_price_history' && !q.item_query?.trim()) throw new ApiError(400, 'invalid_request')
-      const facts = (f: string, t: string) =>
-        lg.receipts
-          .filter((r) => r.deleted_at === null && (r.purchased_on ?? '') >= f && (r.purchased_on ?? '') <= t)
-          .filter((r) => !q.store || (r.store?.name ?? '').includes(q.store))
-          // web-only exact store id and the store-category path (TASK-74 A1:
-          // a parent store category includes its children — the same
-          // resolve_path semantics the backend's filter_sql applies)
-          .filter((r) => !q.store_id || r.store?.store_id === q.store_id)
-          .filter((r) => !q.store_category || (r.store?.category ?? '') === q.store_category || (r.store?.category ?? '').startsWith(`${q.store_category}/`))
-          .filter((r) => !q.label_colors?.length || labelColorsOf(r.labels).some((c) => q.label_colors!.includes(c)))
-          // web-only exact payment-method filter (TASK-65)
-          .filter((r) => !q.payment_method || r.payment_method === q.payment_method)
-          .flatMap((r) => r.items.map((it) => ({ r, it, top: (it.category ?? '未分類').split('/')[0]! })))
-          .filter((x) =>
-            !q.category
-              ? true
-              : q.category === '未分類'
-                ? x.it.category === null
-                : x.it.category === q.category || (x.it.category ?? '').startsWith(`${q.category}/`),
-          )
-          .filter((x) => !q.item_query || x.it.name.includes(q.item_query))
-      const cur = facts(from, to)
-      const sum = (xs: typeof cur) => xs.reduce((a, x) => a + x.it.amount_incl, 0)
-      const value = sum(cur)
-      const prevRange = (): [string, string] | null => {
-        if (report === 'monthly_trend' || report === 'item_price_history') return null
-        if (kind === 'month') {
-          const p = shiftMonth(from.slice(0, 7), -1)
-          return [`${p}-01`, `${p}-31`]
-        }
-        if (kind === 'year') return [`${Number(from.slice(0, 4)) - 1}-01-01`, `${Number(from.slice(0, 4)) - 1}-12-31`]
-        // a custom range compares against the same-length previous period
-        // (backend Range::previous "days"): [from - n days, from - 1 day].
-        // Date-only strings parse as UTC, so the day math has no TZ drift.
-        const n = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1
-        const end = new Date(Date.parse(from) - 86_400_000)
-        const start = new Date(end.getTime() - (n - 1) * 86_400_000)
-        return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)]
-      }
-      const pr = prevRange()
-      const prev = pr ? facts(pr[0], pr[1]) : null
-      const compare = prev ? sum(prev) : null
-      // ranked_section parity (TASK-74 §4-1): the row keys hold the row's id
-      // — the category top/sub id or the store id — and every aggregate
-      // (その他 / 未分類 / 店不明, i.e. a key the ledger has no node for)
-      // keys null, so the screens decide linkability off keys[0]. Rows past
-      // the limit fold into a その他 row exactly like the backend's top-N.
-      const ranked = (
-        id: string,
-        title: string,
-        sel: (x: (typeof cur)[number]) => { group: string; key: number | string | null; label: string },
-        limit = 10,
-      ) => {
-        const agg = (xs: typeof cur) => {
-          const map = new Map<string, { key: number | string | null; label: string; v: number }>()
-          for (const x of xs) {
-            const s = sel(x)
-            const e = map.get(s.group) ?? { key: s.key, label: s.label, v: 0 }
-            e.v += x.it.amount_incl
-            map.set(s.group, e)
-          }
-          return map
-        }
-        const map = agg(cur)
-        const pmap = agg(prev ?? [])
-        const entries = [...map.entries()].sort((a, b) => b[1].v - a[1].v)
-        const total = entries.reduce((a, [, e]) => a + e.v, 0)
-        const rows = entries.slice(0, limit).map(([group, e]) => ({
-          keys: [e.key],
-          labels: [e.label],
-          value: e.v,
-          ...(prev ? { compare_value: pmap.get(group)?.v ?? 0, diff: e.v - (pmap.get(group)?.v ?? 0) } : {}),
-          share: total ? e.v / total : 0,
-        }))
-        const rest = entries.slice(limit)
-        if (rest.length) {
-          const v = rest.reduce((a, [, e]) => a + e.v, 0)
-          const c = rest.reduce((a, [group]) => a + (pmap.get(group)?.v ?? 0), 0)
-          rows.push({
-            keys: [null],
-            labels: ['その他'],
-            value: v,
-            ...(prev ? { compare_value: c, diff: v - c } : {}),
-            share: total ? v / total : 0,
-          })
-        }
-        // backend ranked_section parity: truncated_rows counts the folded rows
-        return { id, title, dims: [id], chart: 'bar_h', rows, ...(rest.length ? { truncated_rows: rest.length } : {}) }
-      }
-      // key selectors: the numeric ids come off the ledger's own trees
-      const topSel = (x: (typeof cur)[number]) => ({
-        group: x.top,
-        key: lg.cats.find((c) => c.kind === 'item' && c.parentId === null && c.name === x.top)?.id ?? null,
-        label: x.top,
-      })
-      const storeSel = (x: (typeof cur)[number]) => ({
-        group: x.r.store?.name ?? '店不明',
-        key: x.r.store?.store_id ?? null,
-        label: x.r.store?.name ?? '店不明',
-      })
-      const subSel = (x: (typeof cur)[number]) => {
-        const path = x.it.category!
-        return { group: path, key: findPath(lg, 'item', path)?.id ?? null, label: path }
-      }
-      const months = (f: string, t: string) => {
-        const out: string[] = []
-        for (let m = f.slice(0, 7); m <= t.slice(0, 7); m = shiftMonth(m, 1)) out.push(m)
-        return out
-      }
-      // each bar is clipped to the range it is drawn over: backend grouped()
-      // filters purchased_on BETWEEN the section's range before grouping by
-      // month, and monthly_trend passes the query range (stats.rs) — so a
-      // mid-month range start/end counts only the in-range days. The
-      // overview's own trend passes no clip: its backend window is six whole
-      // months ending at range.to's month end.
-      const trendRows = (ms: string[], clipFrom?: string, clipTo?: string) =>
-        ms.map((m) => {
-          const lo = clipFrom && clipFrom > `${m}-01` ? clipFrom : `${m}-01`
-          const hi = clipTo && clipTo < `${m}-31` ? clipTo : `${m}-31`
-          return { keys: [m], labels: [m], value: sum(facts(lo, hi)) }
-        })
-      let sections
-      if (report === 'monthly_overview') {
-        sections = [
-          ranked('categories', '品目カテゴリ（大分類）別', topSel),
-          ranked('stores', '上位の店', storeSel, 5),
-          { id: 'trend', title: '直近6か月の推移', dims: ['month'], chart: 'bar_v', rows: trendRows(months(`${shiftMonth(to.slice(0, 7), -5)}-01`, to)) },
-        ]
-      } else if (report === 'by_category') {
-        // with a category filter the backend groups by the item's direct
-        // category (label = the full path); 未分類 keeps the top-level dim
-        sections = [ranked('categories', q.category ? `「${q.category}」の内訳` : '品目カテゴリ（大分類）別', q.category && q.category !== '未分類' ? subSel : topSel)]
-      } else if (report === 'by_store') {
-        sections = [ranked('stores', '店別', storeSel)]
-      } else if (report === 'by_payment_method') {
-        sections = [ranked('payment_methods', '支払方法別', (x) => ({ group: x.r.payment_method ?? '支払方法不明', key: x.r.payment_method ?? null, label: x.r.payment_method ? PAYMENT_LABEL[x.r.payment_method] : '支払方法不明' }))]
-      } else if (report === 'monthly_trend') {
-        sections = [{ id: 'trend', title: '月別合計', dims: ['month'], chart: 'bar_v', rows: trendRows(months(from, to), from, to) }]
-      } else if (report === 'item_price_history') {
-        sections = [{
-          id: 'prices',
-          title: '購入ごとの単価',
-          dims: ['month', 'store', 'item'],
-          chart: 'scatter_line',
-          rows: cur.map((x) => ({
-            keys: [x.r.purchased_on, x.r.store?.store_id ?? null, x.it.item_id],
-            labels: [x.r.purchased_on ?? '', x.r.store?.name ?? '店不明', x.it.name],
-            value: x.it.unit_price ?? Math.round(x.it.amount_incl / (x.it.quantity || 1)),
-          })),
-        }]
-      } else {
-        throw new ApiError(400, 'invalid_request')
-      }
-      let acc = 0
-      const days = new Map<string, number>()
-      for (const x of cur) days.set(x.r.purchased_on!, (days.get(x.r.purchased_on!) ?? 0) + x.it.amount_incl)
+      const ct = totalOf(cur)
+      const dayCount = (f: string, t: string) => Math.round((Date.parse(t) - Date.parse(f)) / 86_400_000) + 1
+      const limit = Math.min(Math.max(q.limit ?? 50, 1), 50)
+      const b = breakdownOf(selectOf(axis, lg2, q), metric, cur, limit)
       return {
-        report,
-        period_resolved: { from, to, label: from.slice(0, 7) },
-        compare_period: pr ? { from: pr[0], to: pr[1], label: pr[0].slice(0, 7) } : null,
+        axis,
+        metric,
+        period: periodLabelOf(kind, from, to),
         totals: {
-          value,
-          compare_value: compare,
-          diff: compare === null ? null : value - compare,
-          diff_pct: compare ? Math.round(((value - compare) / compare) * 1000) / 10 : null,
-          receipts: new Set(cur.map((x) => x.r.receipt_id)).size,
+          ...ct,
+          days: dayCount(from, to),
         },
-        sections,
-        notes: [],
-        ...(report === 'monthly_overview'
-          ? { daily_cumulative: [...days.entries()].sort().map(([date, v]) => ({ date, value: (acc += v) })) }
-          : {}),
+        rows: b.rows,
+        truncated_rows: b.truncated,
+        filters: {
+          ...(q.category ? { category: q.category } : {}),
+          ...(q.store ? { store: q.store } : {}),
+          ...(q.item_query ? { item_query: q.item_query } : {}),
+          ...(q.label_colors?.length ? { label_colors: [...q.label_colors] } : {}),
+        },
+      }
+    },
+
+    async getAnalysisTrend(l, q) {
+      const lg2 = ledger(l)
+      const axis = q.axis ?? 'category'
+      const metric = q.metric ?? 'amount'
+      if (!AXES.includes(axis) || !METRICS.includes(metric)) throw new ApiError(400, 'invalid_request')
+      const [from, to, pKind] = parsePeriod(q)
+      const spanDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1
+      const granularity: AnalysisGranularity = q.granularity ?? (spanDays <= 62 ? 'day' : spanDays <= 366 ? 'week' : 'month')
+      const buckets: string[] = []
+      if (granularity === 'day') {
+        for (let d = from; d <= to; d = new Date(Date.parse(d) + 86_400_000).toISOString().slice(0, 10)) {
+          buckets.push(d)
+          if (d === to) break
+        }
+      } else if (granularity === 'week') {
+        for (let w = weekStartOf(from); w <= to; w = new Date(Date.parse(w) + 7 * 86_400_000).toISOString().slice(0, 10)) {
+          buckets.push(w)
+        }
+      } else {
+        for (let m = from.slice(0, 7); m <= to.slice(0, 7); m = shiftMonth(m, 1)) buckets.push(m)
+      }
+      const idx = new Map(buckets.map((b, i) => [b, i]))
+      const bucketOf = (on: string) => (granularity === 'day' ? on : granularity === 'week' ? weekStartOf(on) : on.slice(0, 7))
+      const xs = factsOf(lg2, from, to, q)
+      // cell per axis value: amount and receipt set per bucket (count/unit
+      // need the per-bucket DISTINCT receipt, not a sum of line rows)
+      const cells = new Map<string, { key: string | number | null; label: string; amount: number[]; receipts: Set<number>[] }>()
+      for (const x of xs) {
+        if (!x.r.purchased_on) continue
+        const i = idx.get(bucketOf(x.r.purchased_on))
+        if (i === undefined) continue
+        for (const s of selectOf(axis, lg2, q)(x)) {
+          const c =
+            cells.get(s.group) ??
+            {
+              key: s.key,
+              label: s.label,
+              amount: new Array(buckets.length).fill(0) as number[],
+              receipts: buckets.map(() => new Set<number>()) as Set<number>[],
+            }
+          c.amount[i] = (c.amount[i] ?? 0) + x.it.amount_incl
+          c.receipts[i]!.add(x.r.receipt_id)
+          cells.set(s.group, c)
+        }
+      }
+      const limit = Math.min(Math.max(q.limit ?? 10, 1), 10)
+      const seriesAll = [...cells.values()]
+        .map((c) => {
+          const values: (number | null)[] = c.amount.map((a, i) => {
+            const rec = c.receipts[i]!
+            return metric === 'amount' ? a : metric === 'count' ? rec.size : rec.size ? round1(a / rec.size) : null
+          })
+          const receiptsAll = new Set(c.receipts.flatMap((s) => [...s]))
+          const amountAll = c.amount.reduce((a, b) => a + b, 0)
+          return {
+            key: c.key,
+            label: c.label,
+            values,
+            total:
+              metric === 'amount'
+                ? amountAll
+                : metric === 'count'
+                  ? receiptsAll.size
+                  : receiptsAll.size
+                    ? round1(amountAll / receiptsAll.size)
+                    : 0,
+          }
+        })
+        .sort(
+          (a, b) =>
+            b.total - a.total ||
+            b.values.reduce<number>((x, y) => x + (y ?? 0), 0) -
+              a.values.reduce<number>((x, y) => x + (y ?? 0), 0),
+        )
+      const bucketAmount = new Array(buckets.length).fill(0) as number[]
+      const bucketReceipts = buckets.map(() => new Set<number>()) as Set<number>[]
+      for (const c of cells.values())
+        c.amount.forEach((a, i) => {
+          bucketAmount[i] = (bucketAmount[i] ?? 0) + a
+          for (const rid of c.receipts[i] ?? []) bucketReceipts[i]!.add(rid)
+        })
+      const bucketTotals: (number | null)[] = bucketAmount.map((a, i) => {
+        const rec = bucketReceipts[i]!
+        return metric === 'amount' ? a : metric === 'count' ? rec.size : rec.size ? round1(a / rec.size) : null
+      })
+      return {
+        axis,
+        metric,
+        granularity,
+        period: periodLabelOf(pKind, from, to),
+        buckets,
+        series: seriesAll.slice(0, limit),
+        bucket_totals: bucketTotals,
+        truncated_rows: Math.max(0, seriesAll.length - limit),
+      }
+    },
+
+    async getAnalysisItem(l, q) {
+      const lg2 = ledger(l)
+      if (q.item_id === undefined && !q.item_query?.trim()) throw new ApiError(400, 'invalid_request')
+      const [from, to, pKind] = parsePeriod(q, true)
+      // item_query only SELECTS the item group here — it is not applied as a
+      // filter on top of itself (the finalized contract)
+      const { item_query: _drop, ...filters } = q
+      void _drop
+      const xs = factsOf(lg2, from, to, filters).filter((x) =>
+        q.item_id !== undefined ? x.it.item_id === q.item_id : x.it.name.includes(q.item_query!.trim()),
+      )
+      const period = periodLabelOf(pKind, from, to)
+      if (xs.length === 0) {
+        return {
+          item: null,
+          period,
+          summary: {
+            count: 0,
+            amount: 0,
+            // absent when empty — the backend skips null optional keys
+            stores: [],
+          },
+          prices: [],
+          by_store: [],
+          monthly: [],
+          truncated_rows: 0,
+        }
+      }
+      // the representative name: the latest purchase's (item_id wins when set)
+      const latest = [...xs].sort(
+        (a, b) => (b.r.purchased_on ?? '').localeCompare(a.r.purchased_on ?? '') || b.it.item_id - a.it.item_id,
+      )[0]!
+      const unitPriceOf = (x: Fact) => x.it.unit_price ?? Math.round(x.it.amount_incl / (x.it.quantity || 1))
+      const prices = [...xs]
+        .sort((a, b) => (a.r.purchased_on ?? '').localeCompare(b.r.purchased_on ?? '') || a.r.receipt_id - b.r.receipt_id)
+        .map((x) => ({
+          date: x.r.purchased_on ?? '',
+          store_id: x.r.store?.store_id ?? null,
+          store_name: x.r.store?.name ?? null,
+          unit_price: unitPriceOf(x),
+          quantity: x.it.quantity,
+          amount_incl: x.it.amount_incl,
+        }))
+      const unitPrices = prices.map((p) => p.unit_price)
+      const amount = xs.reduce((a, x) => a + x.it.amount_incl, 0)
+      const byStoreMap = new Map<string, { store_id: number | null; store_name: string; count: number; amount: number; prices: number[] }>()
+      for (const p of prices) {
+        const key = p.store_name ?? ''
+        const e = byStoreMap.get(key) ?? { store_id: p.store_id, store_name: p.store_name ?? '店名なし', count: 0, amount: 0, prices: [] }
+        e.amount += p.amount_incl
+        e.prices.push(p.unit_price)
+        e.count += 1
+        byStoreMap.set(key, e)
+      }
+      const monthly: { ym: string; count: number; amount: number }[] = []
+      for (let m = from.slice(0, 7); m <= to.slice(0, 7); m = shiftMonth(m, 1)) monthly.push({ ym: m, count: 0, amount: 0 })
+      const ymIdx = new Map(monthly.map((e, i) => [e.ym, i]))
+      for (const p of prices) {
+        const i = ymIdx.get(p.date.slice(0, 7))
+        if (i !== undefined) {
+          monthly[i]!.count += 1
+          monthly[i]!.amount += p.amount_incl
+        }
+      }
+      return {
+        item: { item_id: q.item_id ?? latest.it.item_id, name: q.item_id !== undefined ? xs[0]!.it.name : latest.it.name },
+        period,
+        summary: {
+          count: prices.length,
+          amount,
+          avg_unit_price: Math.round((unitPrices.reduce((a, b) => a + b, 0) / unitPrices.length) * 10) / 10,
+          min_unit_price: Math.min(...unitPrices),
+          max_unit_price: Math.max(...unitPrices),
+          last_purchased_on: latest.r.purchased_on ?? undefined,
+          stores: [...byStoreMap.values()].map((e) => e.store_name),
+        },
+        prices,
+        by_store: [...byStoreMap.values()].map((e) => ({
+          store_id: e.store_id,
+          store_name: e.store_name,
+          count: e.count,
+          amount: e.amount,
+          avg_unit_price: Math.round((e.prices.reduce((a, b) => a + b, 0) / e.prices.length) * 10) / 10,
+        })),
+        monthly,
+        truncated_rows: 0,
       }
     },
 

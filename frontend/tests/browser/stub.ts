@@ -70,16 +70,49 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
   if (method === 'POST' && rest === 'categories') return api.manageCategory(l, b)
   if (method === 'GET' && rest === 'stores') return api.listStores(l, str('query'))
   if (method === 'GET' && rest === 'labels') return api.listLabels(l)
-  if (method === 'GET' && rest === 'stats')
-    return api.getStats(l, {
-      report: str('report') as never,
+  if (method === 'GET' && rest === 'analysis')
+    return api.getAnalysis(l, {
+      axis: str('axis') as never,
+      metric: str('metric') as never,
       month: str('month'),
       year: num(q.get('year')),
       from: str('from'),
       to: str('to'),
       category: str('category'),
       store: str('store'),
+      store_id: num(q.get('store_id')),
+      store_category: str('store_category'),
       item_query: str('item_query'),
+      label_colors: labelColors(q.get('label_colors')),
+      limit: num(q.get('limit')),
+    })
+  if (method === 'GET' && rest === 'analysis/trend')
+    return api.getAnalysisTrend(l, {
+      axis: str('axis') as never,
+      metric: str('metric') as never,
+      granularity: str('granularity') as never,
+      month: str('month'),
+      year: num(q.get('year')),
+      from: str('from'),
+      to: str('to'),
+      category: str('category'),
+      store: str('store'),
+      store_id: num(q.get('store_id')),
+      store_category: str('store_category'),
+      item_query: str('item_query'),
+      label_colors: labelColors(q.get('label_colors')),
+      limit: num(q.get('limit')),
+    })
+  if (method === 'GET' && rest === 'analysis/item')
+    return api.getAnalysisItem(l, {
+      item_id: num(q.get('item_id')),
+      item_query: str('item_query'),
+      month: str('month'),
+      year: num(q.get('year')),
+      from: str('from'),
+      to: str('to'),
+      category: str('category'),
+      store: str('store'),
       label_colors: labelColors(q.get('label_colors')),
     })
   if (method === 'GET' && rest === 'receipts')

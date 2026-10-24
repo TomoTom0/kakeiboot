@@ -78,9 +78,64 @@ async function copyUrl(row: IssuedRow): Promise<void> {
     class="card"
     data-test="register-invite"
   >
-    <h2>登録の招待</h2>
+    <div class="card-head">
+      <h2>登録の招待</h2>
+      <div class="head-actions">
+        <FormDialog
+          v-model:open="dialogOpen"
+          label="登録 URL を発行"
+          test="register-invite-dialog"
+        >
+          <template #trigger>
+            <IconButton
+              icon="plus"
+              label="登録 URL を発行"
+              variant="primary"
+              :disabled="busy"
+              aria-haspopup="dialog"
+              :aria-expanded="dialogOpen"
+              test="register-invite-issue"
+              @click="openDialog"
+            />
+          </template>
+          <h3>登録 URL を発行</h3>
+          <label class="field"><span>メモ</span><input
+            v-model="registerNote"
+            type="text"
+            placeholder="誰に渡すかのメモ（空欄なら発行日時・運用者のみ閲覧）"
+            maxlength="200"
+            data-autofocus
+            data-test="register-invite-note"
+          ></label>
+          <p
+            v-if="dialogError"
+            class="msg msg-error"
+            role="alert"
+          >
+            {{ dialogError }}
+          </p>
+          <div class="actions">
+            <button
+              class="btn btn-primary"
+              :disabled="busy"
+              data-test="register-invite-submit"
+              @click="issueRegisterInvite"
+            >
+              発行
+            </button>
+            <button
+              class="btn"
+              :disabled="busy"
+              @click="dialogOpen = false"
+            >
+              やめる
+            </button>
+          </div>
+        </FormDialog>
+      </div>
+    </div>
     <p class="muted small">
-      家計簿への参加を伴わない新規ユーザー登録用の URL を発行します。受け取った人は自分専用の家計簿と一緒に登録できます。メモは運用者のみ閲覧できます。URL は一度だけ表示されます。
+      新規ユーザー登録用の URL を発行します（メモは運用者のみ閲覧可・URL は一度だけ表示されます）。
     </p>
     <ul
       v-if="issued.length > 0"
@@ -134,56 +189,5 @@ async function copyUrl(row: IssuedRow): Promise<void> {
         </div>
       </li>
     </ul>
-    <FormDialog
-      v-model:open="dialogOpen"
-      label="登録 URL を発行"
-      test="register-invite-dialog"
-    >
-      <template #trigger>
-        <IconButton
-          icon="plus"
-          label="登録 URL を発行"
-          variant="primary"
-          :disabled="busy"
-          aria-haspopup="dialog"
-          :aria-expanded="dialogOpen"
-          test="register-invite-issue"
-          @click="openDialog"
-        />
-      </template>
-      <h3>登録 URL を発行</h3>
-      <label class="field"><span>メモ</span><input
-        v-model="registerNote"
-        type="text"
-        placeholder="誰に渡すかのメモ（空欄なら発行日時・運用者のみ閲覧）"
-        maxlength="200"
-        data-autofocus
-        data-test="register-invite-note"
-      ></label>
-      <p
-        v-if="dialogError"
-        class="msg msg-error"
-        role="alert"
-      >
-        {{ dialogError }}
-      </p>
-      <div class="actions">
-        <button
-          class="btn btn-primary"
-          :disabled="busy"
-          data-test="register-invite-submit"
-          @click="issueRegisterInvite"
-        >
-          発行
-        </button>
-        <button
-          class="btn"
-          :disabled="busy"
-          @click="dialogOpen = false"
-        >
-          やめる
-        </button>
-      </div>
-    </FormDialog>
   </section>
 </template>

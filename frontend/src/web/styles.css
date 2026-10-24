@@ -13,16 +13,21 @@
   --bb-fg: #1f2421;
   --bb-muted: #6b746e;
   --bb-border: #e3e7e2;
-  --bb-accent: #2e9a5e;
-  --bb-accent-strong: #257e4c;
-  --bb-accent-soft: #e3f2e7;
+  /* TASK-89 reading-screen tokens: deeper brand accent, one hairline rule
+     token, and the 6px radius for the reading screens (settings keep
+     --bb-radius-lg / --bb-shadow) */
+  --bb-accent: #1b6b4a;
+  --bb-accent-strong: #14543a;
+  --bb-accent-soft: #e6efe9;
   --bb-accent-fg: #ffffff;
+  --bb-rule: 1px solid var(--bb-border);
   --bb-warn: #a15c00;
   --bb-danger: #c0392b;
   --bb-info-bg: #e8f3ec;
   --bb-error-bg: #fbeceb;
-  --bb-radius: 10px;
+  --bb-radius: 6px;
   --bb-radius-lg: 14px;
+  --bb-radius-card: 14px;
   --bb-shadow: 0 1px 2px rgb(16 24 20 / 6%);
   --bb-shadow-pop: 0 10px 30px rgb(16 24 20 / 16%);
   --sidebar-w: 240px;
@@ -73,9 +78,9 @@
     --bb-fg: #e6ece8;
     --bb-muted: #94a19a;
     --bb-border: #2a332e;
-    --bb-accent: #45b97a;
-    --bb-accent-strong: #5fcb8f;
-    --bb-accent-soft: #1d3327;
+    --bb-accent: #4aa87c;
+    --bb-accent-strong: #5cbd8e;
+    --bb-accent-soft: #1c3328;
     --bb-accent-fg: #07120c;
     --bb-warn: #e3a64a;
     --bb-danger: #f07b6f;
@@ -343,10 +348,20 @@ html.drawer-lock { overflow: hidden; }
   font-size: 0.9rem;
 }
 
-/* the scrim is a mobile-only layer: it covers the area below the topbar and
-   closes the drawer (the rule that shows it lives inside the 899px block;
-   the desktop overlay opens without one) */
-.scrim { display: none; }
+/* the scrim covers the area below the topbar whenever the drawer is open —
+   at every width (TASK-89): the desktop overlay closes on an outside tap
+   too. Only the modal extras (inert / focus / scroll lock) stay narrow-only */
+.scrim {
+  display: none;
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  background: rgb(0 0 0 / 45%);
+}
+.drawer-open .scrim { display: block; }
 
 .main-col { min-height: 100vh; min-width: 0; }
 
@@ -542,22 +557,11 @@ html.drawer-lock { overflow: hidden; }
   .topbar { gap: 6px; padding: 0 0.5rem; }
   .topbar-title { font-size: 1rem; }
   .topbar-actions { gap: 6px; }
-  /* the drawer keeps the shared slide and gains the modal layer: the scrim
-     covers the area below the topbar and closes the drawer (the desktop
-     overlay carries no scrim) */
+  /* the drawer keeps the shared slide and gains the modal layer (inert /
+     focus / scroll lock); the scrim itself is width-independent now */
   .sidebar {
     overscroll-behavior: contain;
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
-  }
-  .drawer-open .scrim {
-    display: block;
-    position: fixed;
-    top: var(--topbar-h);
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 25;
-    background: rgb(0 0 0 / 45%);
   }
   .main-col { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   /* menu button + full logo; the name leaves the ledger chip */
@@ -895,8 +899,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   background: var(--bb-surface-2);
   color: var(--bb-muted);
 }
-.chip-up { background: var(--bb-error-bg); color: var(--bb-danger); }
-.chip-down { background: var(--bb-accent-soft); color: var(--bb-accent); }
 .kpi-head .chip { margin-left: auto; flex: none; align-self: center; }
 .kpi-sub {
   margin: 0;
@@ -946,15 +948,60 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .trend-wrap { width: fit-content; min-width: 100%; }
 .axis-ends { display: flex; justify-content: space-between; margin-top: 0.4rem; }
 
-/* The donut shares its card with a RankedList (TASK-75 §6-4 replaced the
-   legend rows with the ranked list — the same rows, colors and links); at
-   720px- the wrap stacks the 120px ring over the list */
-.donut-wrap { display: flex; align-items: center; gap: 1.5rem; }
-.donut { flex: none; width: 170px; height: 170px; }
-.donut circle { transition: opacity 0.15s; }
-.donut-track { fill: none; stroke: var(--bb-surface-2); stroke-width: 18; }
-.donut-caption { text-anchor: middle; font-size: 10px; fill: var(--bb-muted); }
-.donut-total { text-anchor: middle; font-size: 17px; font-weight: 700; fill: var(--bb-fg); }
+/* ------------------------------------------------ reading screens (TASK-89)
+   Home / the lists / the axis detail drop the two-column card grid for a
+   one-column stack of ruled zones: no shadow, a 1px border with the 6px
+   radius, list rows on the shared hairline rule and numbers in tabular
+   figures. The settings screens keep the card look (--bb-radius-lg +
+   --bb-shadow) — the tokens above stay split on purpose. */
+.view-stack { display: flex; flex-direction: column; gap: 0.75rem; transition: opacity 0.15s; }
+.view-stack.loading { opacity: 0.6; }
+.zone {
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 1rem 1.25rem;
+  min-width: 0;
+}
+.zone h2 { font-size: 0.875rem; font-weight: 600; margin: 0 0 0.5rem; }
+.zone-sub { font-size: 0.875rem; font-weight: 600; margin: 1rem 0 0.25rem; }
+
+/* the period header: whitespace + hairline, typography leads — the total
+   at 2.25rem/700/tabular-nums is the whole statement */
+.period-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding: 0.25rem 0 0.75rem;
+  border-bottom: var(--bb-rule);
+}
+.period-label { margin: 0 0 0.1rem; }
+.period-total {
+  font-size: 2.25rem;
+  line-height: 1.1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* the trend card's mode / metric tab rows share the plain .tab strip */
+.trend-controls { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; }
+.trend-mode-tabs .tab, .trend-metric-tabs .tab { flex: none; }
+
+/* the stacked bars: segments stack bottom-up inside the column */
+.bar-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  max-width: 34px;
+  border-radius: 4px 4px 2px 2px;
+  overflow: hidden;
+}
+.bar-seg { width: 100%; transition: background-color 0.15s; }
+.bar-seg:first-child { border-radius: 4px 4px 0 0; }
+.bar-col.stacked { position: relative; }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
 /* The one-line receipt row (TASK-75 §6-4): date / store (ellipsis) / labels
@@ -1061,7 +1108,9 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 }
 /* the period dialog's content (PeriodPicker, TASK-44 §11-6): tabs over the
    step / range form, replacing the old in-page period bar row */
-.period-picker { display: flex; flex-direction: column; gap: 0.5rem; }
+/* TASK-91 (real-device): the period dialog widens so the four tabs
+   （週｜月｜年｜Custom） sit on one row */
+.period-picker { display: flex; flex-direction: column; gap: 0.5rem; min-width: 19rem; }
 .period-picker .tabs { margin-bottom: 0; justify-content: center; }
 .period-step { display: flex; align-items: center; gap: 0.25rem; }
 .period-step strong { min-width: 7.5rem; text-align: center; }
@@ -1159,24 +1208,23 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 }
 .link-btn:hover { text-decoration: underline; }
 
-/* The ranked row as one 44px line (TASK-75 §6-4): dot / label / share % /
-   diff / amount / chevron on a six-track grid. The proportional bar rides
-   the row's bottom edge as a 2px gradient (--rank-fill of --rank-color) —
-   no standalone meter element, no gap between rows for it. The row is its
-   own size container: through 340px the diff cell folds away so the label
-   keeps at least ~96px */
+/* The ranked row as one 44px line (TASK-75 §6-4, TASK-89): label / share % /
+   diff / amount / chevron on a five-track grid — the donut-era color dot is
+   gone, the proportional bar is the single accent. The bar rides the row's
+   bottom edge as a 2px gradient (--rank-fill) — no standalone meter element,
+   no gap between rows for it. The row is its own size container: through
+   340px the diff cell folds away so the label keeps at least ~96px */
 .ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ranked-row {
   --rank-fill: 0%;
-  --rank-color: var(--bb-accent);
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto auto 12px;
+  grid-template-columns: minmax(0, 1fr) auto auto 12px;
   align-items: center;
   gap: 8px;
   min-height: 44px;
   padding: 0 0.5rem;
   border-radius: 10px;
-  background-image: linear-gradient(to right, var(--rank-color) var(--rank-fill), transparent var(--rank-fill));
+  background-image: linear-gradient(to right, var(--bb-accent) var(--rank-fill), transparent var(--rank-fill));
   /* the bar spans the row's full width including the 0.5rem side paddings
      (review L1): the default origin is padding-box, whose 100% excludes the
      padding and leaves the bar inset from the rounded row ends */
@@ -1184,7 +1232,6 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
   background-size: 100% 2px;
   background-position: bottom;
   background-repeat: no-repeat;
-  container-type: inline-size;
   color: inherit;
   font: inherit;
   text-align: left;
@@ -1200,16 +1247,9 @@ button.ranked-row.is-link:hover { background-color: var(--bb-hover); }
 a.ranked-row.is-link:focus-visible,
 button.ranked-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
 button.ranked-row { border: 0; background-color: transparent; }
-.ranked-dot { width: 10px; height: 10px; border-radius: 50%; }
 .ranked-label { min-width: 0; }
 .ranked-share { color: var(--bb-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-.ranked-diff { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.ranked-diff.up { color: var(--bb-danger); }
-.ranked-diff.down { color: var(--bb-accent); }
 .ranked-chevron { color: var(--bb-muted); flex: none; }
-@container (max-width: 340px) {
-  .ranked-diff { display: none; }
-}
 
 .detail-kpi { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; margin: 0 0 0.5rem; }
 .detail-kpi .amount { font-size: 1.5rem; }
@@ -1804,14 +1844,13 @@ a.sub-row:hover { background: var(--bb-hover); }
 .skeleton .card { display: flex; flex-direction: column; justify-content: flex-start; }
 
 @media (max-width: 720px) {
-  /* the narrow-band density pass (TASK-75 §6-4): tighter card rhythm, the
-     smaller donut over its ranked list, and the shorter trend bars */
+  /* the narrow-band density pass (TASK-75 §6-4, TASK-89: the donut is gone):
+     tighter card rhythm and the shorter trend bars */
   .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
   .card { padding: 12px; }
   .receipt-body { grid-template-columns: 1fr; }
-  .donut-wrap { flex-direction: column; align-items: stretch; }
-  .donut { align-self: center; width: 120px; height: 120px; }
   .bars { height: 96px; }
+  .zone { padding: 0.85rem 1rem; }
 }
 
 @media (max-width: 520px) {

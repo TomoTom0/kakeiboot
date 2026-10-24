@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { periodDays } from '@/web/composables/period'
 
 describe('periodDays', () => {
-  it('[covers:web-home.dashboard-period-modes] 進行中は今日まで・確定期間は全日数・未来は1でガード', () => {
+  it('進行中は今日まで・確定期間は全日数・未来は1でガード', () => {
     expect(periodDays('2026-10-01', '2026-10-31', '2026-10-15')).toBe(15) // 当月（現行月規則と同一）
     expect(periodDays('2026-09-01', '2026-09-30', '2026-10-15')).toBe(30) // 過去月
     expect(periodDays('2026-01-01', '2026-12-31', '2026-10-15')).toBe(288) // 当年

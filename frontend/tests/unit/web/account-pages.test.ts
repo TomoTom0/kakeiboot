@@ -323,7 +323,7 @@ describe('SettingsPage', () => {
     const add = wrapper.find('[data-test="add-passkey"]')
     expect(add.text()).toBe('')
     expect(add.attributes('aria-label')).toBe('パスキーを追加')
-    expect(add.find('svg').html()).toContain('M20 3v4') // the key-plus' plus
+    expect(add.find('svg').html()).toContain('M12 5v14') // the key-plus' plus
 
     // the rename editor's confirm pair is icon-only with plain labels
     await wrapper.find('[data-test="passkey-1"] [data-test="rename"]').trigger('click')

@@ -158,6 +158,8 @@ const PAGE_WIDTH_SCREENS = [
   { name: 'home', path: '/' },
   { name: 'categories', path: '/categories?month=2026-10' },
   { name: 'stores', path: '/stores?month=2026-10' },
+  { name: 'axis-category', path: '/axes/category/1?month=2026-10' },
+  { name: 'axis-store', path: '/axes/store/1?month=2026-10' },
   { name: 'receipt', path: '/receipts/101' },
 ] as const
 

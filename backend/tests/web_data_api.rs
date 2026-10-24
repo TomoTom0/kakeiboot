@@ -810,201 +810,6 @@ async fn items_search_endpoint() {
     assert_eq!(resp.status(), 404);
 }
 
-#[tokio::test]
-// [covers:web-data-api.stats]
-async fn stats_reports_and_periods() {
-    let (router, pool) = setup().await;
-    let c = user_with_ledger(&router, &pool, "viewer").await;
-    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
-    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
-    insert_receipt_full(&pool, 102, 1, 1, "2026-10-12", 80).await;
-    insert_receipt_full(&pool, 103, 1, 1, "2026-09-30", 180).await;
-
-    // viewer can read; totals + compare with the previous month
-    let resp = c.get(&router, "/api/ledgers/1/stats?month=2026-10").await;
-    assert_eq!(resp.status(), 200);
-    let v = body_json(resp).await;
-    assert_eq!(v["period_resolved"]["from"], "2026-10-01");
-    assert_eq!(v["totals"]["value"], 300);
-    assert_eq!(v["totals"]["receipts"], 2);
-    assert_eq!(v["totals"]["compare_value"], 180);
-    let ids: Vec<&str> = v["sections"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| s["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["categories", "stores", "trend"]);
-    assert_eq!(v["sections"][1]["rows"][0]["labels"][0], "Aマート");
-    assert_eq!(v["sections"][2]["rows"].as_array().unwrap().len(), 6);
-    let days = v["daily_cumulative"].as_array().unwrap();
-    assert_eq!(days.last().unwrap()["value"], 300);
-
-    // other reports / periods share summarize_spending
-    let v = body_json(
-        c.get(&router, "/api/ledgers/1/stats?report=by_store&year=2026")
-            .await,
-    )
-    .await;
-    assert_eq!(v["report"], "by_store");
-    assert_eq!(v["period_resolved"]["from"], "2026-01-01");
-    assert_eq!(v["sections"][0]["rows"][0]["value"], 480);
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?report=monthly_trend&from=2026-09-01&to=2026-10-31",
-        )
-        .await,
-    )
-    .await;
-    let trend: Vec<i64> = v["sections"][0]["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["value"].as_i64().unwrap())
-        .collect();
-    assert_eq!(trend, [180, 300]);
-    assert!(v["daily_cumulative"].is_null(), "overview only");
-    // store filter narrows the totals
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?report=by_category&month=2026-10&store=A",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 300);
-
-    // bad month / mixed period / unknown report / other ledger
-    for q in [
-        "month=2026-1",
-        "month=2026-10&year=2026",
-        "from=2026-10-01",
-        "report=nope",
-    ] {
-        let resp = c.get(&router, &format!("/api/ledgers/1/stats?{q}")).await;
-        assert_eq!(resp.status(), 400, "{q}");
-    }
-    let resp = c.get(&router, "/api/ledgers/9/stats").await;
-    assert_eq!(resp.status(), 404);
-}
-
-#[tokio::test]
-// [covers:web-data-api.stats-store-id]
-async fn stats_store_id_exact_match() {
-    let (router, pool) = setup().await;
-    let c = user_with_ledger(&router, &pool, "viewer").await;
-    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
-    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
-    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
-    insert_receipt_full(&pool, 102, 1, 2, "2026-10-12", 80).await;
-    insert_receipt_full(&pool, 103, 1, 1, "2026-09-30", 180).await;
-
-    // web-only exact store match narrows the totals, the compare period and
-    // every section row (the same filter_sql the reports share)
-    let v = body_json(
-        c.get(&router, "/api/ledgers/1/stats?month=2026-10&store_id=1")
-            .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 220);
-    assert_eq!(v["totals"]["receipts"], 1);
-    assert_eq!(v["totals"]["compare_value"], 180, "prev month store 1 only");
-    let store_total: i64 = v["sections"][1]["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["value"].as_i64().unwrap_or(0))
-        .sum();
-    assert_eq!(store_total, 220, "section rows share the filter");
-    // the echo is emitted (is_empty counts store_id) but never carries the
-    // web-only key (serde(skip) keeps it out of the serialization)
-    assert!(v["filters"].is_object(), "store_id-only still echoes");
-    assert!(v["filters"].get("store_id").is_none(), "no store_id key");
-
-    // no existence check: another ledger's store id is an empty result
-    let other: i64 = sqlx::query_scalar(
-        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('other3', 0, 0) RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    insert_store(&pool, 98, other, "他所の店", "たしょのみせ").await;
-    let v = body_json(
-        c.get(&router, "/api/ledgers/1/stats?month=2026-10&store_id=98")
-            .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 0);
-
-    // without the filter everything is aggregated
-    let v = body_json(c.get(&router, "/api/ledgers/1/stats?month=2026-10").await).await;
-    assert_eq!(v["totals"]["value"], 300);
-}
-
-#[tokio::test]
-// [covers:web-data-api.stats-store-category]
-async fn stats_store_category_path_filter() {
-    let (router, pool) = setup().await;
-    let c = user_with_ledger(&router, &pool, "viewer").await;
-    // the default ledger is seeded with the top-level store categories; use
-    // the seeded スーパー and only add the child (no sub categories seeded)
-    let top: i64 = sqlx::query_scalar(
-        "SELECT id FROM store_categories WHERE ledger_id = 1 AND parent_id IS NULL AND name = 'スーパー'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let sub =
-        common::insert_category(&pool, "store_categories", 1, Some(top), "業務スーパー").await;
-    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
-    insert_store(&pool, 2, 1, "B業務", "bぎょうむ").await;
-    for (store, cat) in [(1i64, top), (2, sub)] {
-        sqlx::query("UPDATE stores SET category_id = ? WHERE id = ?")
-            .bind(cat)
-            .bind(store)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
-    insert_receipt_full(&pool, 102, 1, 2, "2026-10-12", 80).await;
-
-    // a top path includes the stores under the child category
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&store_category=スーパー",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 300, "top includes the child");
-    assert_eq!(v["filters"]["store_category"], "スーパー");
-
-    // "Top/Sub" narrows to the child; both share resolve_path validation
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&store_category=スーパー/業務スーパー",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 80);
-    assert_eq!(v["filters"]["store_category"], "スーパー/業務スーパー");
-
-    // an unknown path is the same 400 as the MCP filters.store_category
-    let resp = c
-        .get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&store_category=無い",
-        )
-        .await;
-    assert_eq!(resp.status(), 400);
-}
-
 // ---------------------------------------------------------------------------
 // TASK-73: search query length cap (mcp.toml [limits] max_query_chars = 200,
 // chars at the input). Every free-text search param on the 4 endpoints.
@@ -1027,8 +832,8 @@ async fn search_query_length_cap() {
         format!("/api/ledgers/1/receipts?q={over}"),
         format!("/api/ledgers/1/receipts?item_query={over}"),
         format!("/api/ledgers/1/items?q={over}"),
-        format!("/api/ledgers/1/stats?month=2026-10&store={over}"),
-        format!("/api/ledgers/1/stats?month=2026-10&item_query={over}"),
+        format!("/api/ledgers/1/analysis?month=2026-10&store={over}"),
+        format!("/api/ledgers/1/analysis?month=2026-10&item_query={over}"),
     ] {
         let resp = c.get(&router, &path).await;
         assert_eq!(resp.status(), 400, "{path}");
@@ -1044,8 +849,8 @@ async fn search_query_length_cap() {
         format!("/api/ledgers/1/receipts?q={at}"),
         format!("/api/ledgers/1/receipts?item_query={at}"),
         format!("/api/ledgers/1/items?q={at}"),
-        format!("/api/ledgers/1/stats?month=2026-10&store={at}"),
-        format!("/api/ledgers/1/stats?month=2026-10&item_query={at}"),
+        format!("/api/ledgers/1/analysis?month=2026-10&store={at}"),
+        format!("/api/ledgers/1/analysis?month=2026-10&item_query={at}"),
     ] {
         let resp = c.get(&router, &path).await;
         assert_eq!(resp.status(), 200, "{path}");
@@ -1776,68 +1581,6 @@ async fn receipt_view_carries_labels() {
 }
 
 #[tokio::test]
-// [covers:web-data-api.stats-label-filter]
-async fn stats_label_filter_and_echo() {
-    let (router, pool) = setup().await;
-    let c = user_with_ledger(&router, &pool, "viewer").await;
-    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
-    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 300).await; // red
-    insert_receipt_full(&pool, 102, 1, 1, "2026-10-12", 80).await; // unlabeled
-    insert_receipt_full(&pool, 103, 1, 1, "2026-09-30", 180).await; // red (prev month)
-    insert_receipt_full(&pool, 104, 1, 1, "2026-09-20", 50).await; // unlabeled (prev)
-    insert_receipt_label(&pool, 101, "red").await;
-    insert_receipt_label(&pool, 103, "red").await;
-
-    // the shared filter_sql applies to every report and the comparison
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&label_colors=red",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 300, "only the red receipt");
-    assert_eq!(v["totals"]["receipts"], 1);
-    assert_eq!(v["totals"]["compare_value"], 180, "previous month red only");
-    let cat_total: i64 = v["sections"][0]["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["value"].as_i64().unwrap_or(0))
-        .sum();
-    assert_eq!(cat_total, 300, "by_category rows also filtered");
-    // the applied filters are echoed back
-    assert_eq!(v["filters"]["label_colors"], serde_json::json!(["red"]));
-
-    // OR across colors
-    insert_receipt_label(&pool, 102, "blue").await;
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&label_colors=red,blue",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 380);
-
-    // unlabeled query: no filter at all (no filters echo)
-    let v = body_json(c.get(&router, "/api/ledgers/1/stats?month=2026-10").await).await;
-    assert_eq!(v["totals"]["value"], 380);
-    assert!(v["filters"].is_null());
-
-    // unknown color: 400
-    let resp = c
-        .get(
-            &router,
-            "/api/ledgers/1/stats?month=2026-10&label_colors=orange",
-        )
-        .await;
-    assert_eq!(resp.status(), 400);
-}
-
-#[tokio::test]
 // [covers:web-data-api.ledger-rename]
 async fn ledger_rename_rules() {
     let (router, pool) = setup().await;
@@ -2027,7 +1770,8 @@ async fn ledger_rename_rules() {
 // ---------------------------------------------------------------------------
 // TASK-63: same-date receipts order by purchased_time (newest first, NULL
 // last) with the 3-part keyset cursor; the item-level list shares the rule.
-// TASK-65: the web payment_method filter on /receipts and /stats.
+// TASK-65: the web payment_method filter on /receipts and the /analysis
+// endpoints.
 
 /// [covers:web-data-api.receipt-time-ordering] same-day time ordering + cursor
 #[tokio::test]
@@ -2111,9 +1855,11 @@ async fn receipt_list_time_ordering_and_cursor() {
     assert_eq!(items, vec![10400, 10200, 10100, 10300]);
 }
 
-/// [covers:web-data-api.payment-method-filter] payment_method on /receipts and /stats
+/// [covers:web-data-api.payment-method-filter] payment_method on /receipts
+/// and the /analysis endpoints (the old /stats route is gone; the analysis
+/// handlers share the same web_filters parse)
 #[tokio::test]
-async fn receipt_and_stats_payment_method_filter() {
+async fn receipt_and_analysis_payment_method_filter() {
     let (router, pool) = setup().await;
     let c = user_with_ledger(&router, &pool, "editor").await;
     insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
@@ -2150,38 +1896,476 @@ async fn receipt_and_stats_payment_method_filter() {
     assert_eq!(v["total_count"], 0);
     assert_eq!(v["receipts"].as_array().unwrap().len(), 0);
 
-    // /stats: the filter rides every report and the compare period, and the
-    // filters echo omits it (the store_id web-only pattern)
+    // /analysis: the filter rides the totals and the axis rows (the same
+    // filter_sql the endpoints share), and the filters echo omits it (the
+    // store_id web-only pattern)
     let v = body_json(
         c.get(
             &router,
-            "/api/ledgers/1/stats?report=by_payment_method&month=2026-10&payment_method=cash",
+            "/api/ledgers/1/analysis?axis=payment_method&month=2026-10&payment_method=cash",
         )
         .await,
     )
     .await;
-    assert_eq!(v["totals"]["value"], 370, "cash rows only");
-    assert_eq!(v["totals"]["compare_value"], 0);
+    assert_eq!(v["totals"]["amount"], 370, "cash rows only");
     assert!(v.get("filters").is_none() || v["filters"].get("payment_method").is_none());
-    let rows = v["sections"][0]["rows"].as_array().unwrap();
+    let rows = v["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["labels"][0], "現金");
-    // monthly_overview narrows the same way (total + daily cumulative)
-    let v = body_json(
-        c.get(
-            &router,
-            "/api/ledgers/1/stats?report=monthly_overview&month=2026-10&payment_method=cash",
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(v["totals"]["value"], 370);
-    // an unknown key on /stats is a 400 too
+    assert_eq!(rows[0]["label"], "現金");
+    // an unknown key on /analysis is a 400 too
     let resp = c
-        .get(
-            &router,
-            "/api/ledgers/1/stats?report=by_store&payment_method=x",
-        )
+        .get(&router, "/api/ledgers/1/analysis?payment_method=x")
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+// ---------------------------------------------------------------------------
+// TASK-89: /analysis endpoints (breakdown / stacked trend / item stats)
+
+/// A priced item line (quantity / unit_price for the item stats rule).
+#[allow(clippy::too_many_arguments)]
+async fn insert_priced_item(
+    pool: &SqlitePool,
+    id: i64,
+    receipt_id: i64,
+    ledger_id: i64,
+    line_no: i64,
+    name: &str,
+    norm: &str,
+    amount_incl: i64,
+    quantity: f64,
+    unit_price: Option<i64>,
+) {
+    sqlx::query(
+        "INSERT INTO receipt_items (id, receipt_id, ledger_id, line_no, name, name_norm,
+             amount, amount_incl, quantity, unit_price, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+    )
+    .bind(id)
+    .bind(receipt_id)
+    .bind(ledger_id)
+    .bind(line_no)
+    .bind(name)
+    .bind(norm)
+    .bind(amount_incl)
+    .bind(amount_incl)
+    .bind(quantity)
+    .bind(unit_price)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-breakdown]
+async fn analysis_breakdown_axis_metric_rows() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
+    // Oct: Aマート 2 receipts (one with two identical 牛乳 lines), Sep: both stores
+    insert_receipt_bare(&pool, 101, 1, 1, "2026-10-10").await;
+    insert_priced_item(&pool, 10101, 101, 1, 1, "牛乳", "牛乳", 100, 1.0, None).await;
+    insert_priced_item(&pool, 10102, 101, 1, 2, "牛乳", "牛乳", 100, 1.0, None).await;
+    insert_receipt_bare(&pool, 102, 1, 1, "2026-10-12").await;
+    insert_priced_item(&pool, 10201, 102, 1, 1, "牛乳", "牛乳", 220, 1.0, None).await;
+    insert_receipt_bare(&pool, 103, 1, 1, "2026-09-10").await;
+    insert_priced_item(&pool, 10301, 103, 1, 1, "牛乳", "牛乳", 180, 1.0, None).await;
+    insert_receipt_bare(&pool, 104, 1, 2, "2026-09-15").await;
+    insert_priced_item(
+        &pool,
+        10401,
+        104,
+        1,
+        1,
+        "風邪薬",
+        "かぜやく",
+        200,
+        1.0,
+        None,
+    )
+    .await;
+
+    // axis=store&month=2026-10: the current period only (B薬局 has September
+    // data alone, so it is absent), metric desc, no その他 row
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=store&month=2026-10")
+            .await,
+    )
+    .await;
+    assert_eq!(v["axis"], "store");
+    assert_eq!(v["metric"], "amount");
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "September-only stores drop out entirely");
+    assert_eq!(rows[0]["label"], "Aマート");
+    assert_eq!(rows[0]["amount"], 420);
+    assert_eq!(rows[0]["count"], 2);
+    assert_eq!(rows[0]["unit"], 210.0);
+    assert_eq!(rows[0]["share"], 1.0);
+    assert!(
+        rows.iter().all(|r| r["label"] != "その他"),
+        "no aggregated remainder row"
+    );
+    assert_eq!(v["totals"]["amount"], 420);
+    assert_eq!(v["totals"]["count"], 2);
+    assert_eq!(v["totals"]["days"], 31);
+
+    // metric=count: the two identical lines on receipt 101 count as one receipt
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis?axis=store&month=2026-10&metric=count",
+        )
+        .await,
+    )
+    .await;
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["label"], "Aマート");
+    assert_eq!(rows[0]["count"], 2);
+
+    // metric=unit: per-receipt average, one decimal; share null on the unit axis
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis?axis=store&month=2026-10&metric=unit",
+        )
+        .await,
+    )
+    .await;
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["label"], "Aマート");
+    assert_eq!(rows[0]["unit"], 210.0);
+    assert!(rows[0]["share"].is_null());
+
+    // axis=item: grouped by 品名 (REVIEW-13 M-3 — same-name lines are one
+    // item, so the three 牛乳 lines collapse). One more Oct item (receipt
+    // 105, パン) makes the limit=1 tail hold it.
+    insert_receipt_bare(&pool, 105, 1, 1, "2026-10-13").await;
+    insert_priced_item(&pool, 10501, 105, 1, 1, "パン", "ぱん", 130, 1.0, None).await;
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis?axis=item&month=2026-10&limit=1",
+        )
+        .await,
+    )
+    .await;
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["key"], "牛乳", "item axis key is the 品名 string");
+    assert!(rows[0]["key"].is_string());
+    assert_eq!(rows[0]["label"], "牛乳");
+    assert_eq!(rows[0]["amount"], 420, "the three 牛乳 lines in one group");
+    // the tail holds the current-period パン only — September values never
+    // appear in the current-period analysis
+    assert_eq!(v["truncated_rows"], 1);
+
+    // no query: category x amount defaults
+    let v = body_json(c.get(&router, "/api/ledgers/1/analysis").await).await;
+    assert_eq!(v["axis"], "category");
+    assert_eq!(v["metric"], "amount");
+    // seeded catalog has no matching category -> 未分類 axis row
+    assert_eq!(v["rows"][0]["label"], "未分類");
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-stacked-trend]
+async fn analysis_stacked_trend_matrix() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-05", 100).await;
+    insert_receipt_full(&pool, 102, 1, 2, "2026-10-08", 200).await;
+    insert_receipt_full(&pool, 103, 1, 1, "2026-10-12", 50).await;
+
+    // granularity=week over a 2-week span: Monday anchors, zero-filled
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?axis=store&from=2026-10-05&to=2026-10-18&granularity=week",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["granularity"], "week");
+    assert_eq!(
+        v["buckets"],
+        serde_json::json!(["2026-10-05", "2026-10-12"])
+    );
+    let series = v["series"].as_array().unwrap();
+    assert_eq!(series.len(), 2);
+    assert_eq!(series[0]["label"], "B薬局", "whole-range metric total desc");
+    assert_eq!(series[0]["values"], serde_json::json!([200, 0]));
+    assert_eq!(series[1]["label"], "Aマート");
+    assert_eq!(series[1]["values"], serde_json::json!([100, 50]));
+    assert_eq!(v["bucket_totals"], serde_json::json!([300, 50]));
+    assert_eq!(v["truncated_rows"], 0);
+
+    // auto: <= 62 days picks day (zero-filled per date), 63..366 week
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?from=2026-10-01&to=2026-10-18",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["granularity"], "day");
+    assert_eq!(v["buckets"].as_array().unwrap().len(), 18);
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?from=2026-01-01&to=2026-06-30",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["granularity"], "week");
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?from=2024-01-01&to=2026-12-31",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["granularity"], "month");
+
+    // 11 series with the default limit 10: series capped, truncated_rows=1
+    for i in 0..11 {
+        let store = 10 + i;
+        insert_store(
+            &pool,
+            store,
+            1,
+            &format!("店{store}"),
+            &format!("みせ{store}"),
+        )
+        .await;
+        insert_receipt_full(&pool, 200 + i, 1, store, "2026-10-06", 100).await;
+    }
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?axis=store&from=2026-10-05&to=2026-10-18&granularity=day",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["series"].as_array().unwrap().len(), 10);
+    // A / B / the 11 stores = 13 series, top 10 kept
+    assert_eq!(v["truncated_rows"], 3);
+    // bucket totals still cover every axis value (top series + remainder):
+    // the 11 stores all sit on 10-06 = buckets[1]
+    assert_eq!(v["bucket_totals"][1], 1100, "11 stores on 10-06");
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-item-stats]
+async fn analysis_item_stats_endpoint() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
+    // B薬局 9/20: unit_price stated (300 for 2); Aマート 10/05: derived (198 / 1)
+    insert_receipt_bare(&pool, 101, 1, 2, "2026-09-20").await;
+    insert_priced_item(&pool, 10101, 101, 1, 1, "牛乳", "牛乳", 300, 2.0, Some(150)).await;
+    insert_receipt_bare(&pool, 102, 1, 1, "2026-10-05").await;
+    insert_priced_item(&pool, 10201, 102, 1, 1, "牛乳", "牛乳", 198, 1.0, None).await;
+
+    // item_id is the exact line: the single 10/05 purchase
+    let milk: i64 =
+        sqlx::query_scalar("SELECT id FROM receipt_items WHERE name = '牛乳' AND receipt_id = 102")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let v = body_json(
+        c.get(
+            &router,
+            &format!("/api/ledgers/1/analysis/item?item_id={milk}&from=2026-09-01&to=2026-10-31"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["item"]["item_id"], milk);
+    assert_eq!(v["item"]["name"], "牛乳");
+    assert_eq!(v["prices"].as_array().unwrap().len(), 1);
+    assert_eq!(v["prices"][0]["unit_price"], 198, "amount / quantity");
+    assert_eq!(v["truncated_rows"], 0);
+
+    // item_query matches the whole name group across ids/stores: both the
+    // stated unit_price row and the derived one
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/item?item_query=牛乳&from=2026-09-01&to=2026-10-31",
+        )
+        .await,
+    )
+    .await;
+    // the representative is the latest purchase
+    assert_eq!(v["item"]["item_id"], milk);
+    assert_eq!(v["item"]["name"], "牛乳");
+    // prices ascending; unit_price wins, missing -> round(amount/quantity)
+    let prices = v["prices"].as_array().unwrap();
+    assert_eq!(prices.len(), 2);
+    assert_eq!(prices[0]["date"], "2026-09-20");
+    assert_eq!(prices[0]["store_name"], "B薬局");
+    assert_eq!(prices[0]["unit_price"], 150);
+    assert_eq!(prices[0]["quantity"], 2.0);
+    assert_eq!(prices[1]["unit_price"], 198);
+    assert_eq!(v["truncated_rows"], 0);
+    // summary follows the same unit-price rule
+    assert_eq!(v["summary"]["count"], 2);
+    assert_eq!(v["summary"]["amount"], 498);
+    assert_eq!(v["summary"]["min_unit_price"], 150);
+    assert_eq!(v["summary"]["max_unit_price"], 198);
+    assert_eq!(v["summary"]["avg_unit_price"], 174);
+    assert_eq!(v["summary"]["last_purchased_on"], "2026-10-05");
+    assert_eq!(
+        v["summary"]["stores"],
+        serde_json::json!(["B薬局", "Aマート"])
+    );
+    // by_store aggregates per store
+    let by_store = v["by_store"].as_array().unwrap();
+    assert_eq!(by_store.len(), 2);
+    assert_eq!(by_store[0]["store_name"], "B薬局");
+    assert_eq!(by_store[0]["amount"], 300);
+    assert_eq!(by_store[0]["count"], 1);
+    // monthly zero-fill over the period
+    assert_eq!(
+        v["monthly"],
+        serde_json::json!([
+            { "ym": "2026-09", "count": 1, "amount": 300 },
+            { "ym": "2026-10", "count": 1, "amount": 198 },
+        ])
+    );
+
+    // REVIEW-13 M-3: /analysis?axis=item and /analysis/item?item_query=品名
+    // agree on the same name group — a row press and its landing page show
+    // the same amount (here: the two 牛乳 lines in Oct are ONE axis value
+    // despite two distinct item_ids)
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=item&month=2026-10")
+            .await,
+    )
+    .await;
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one name group across item ids");
+    assert_eq!(rows[0]["key"], "牛乳");
+    assert_eq!(rows[0]["amount"], 198);
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/item?item_query=牛乳&month=2026-10",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(v["summary"]["amount"], 198, "the landing page's total");
+
+    // neither item_id nor item_query: 400
+    let resp = c
+        .get(&router, "/api/ledgers/1/analysis/item?month=2026-10")
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-label-axis]
+async fn analysis_label_axis_semantics() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 400).await;
+    insert_receipt_full(&pool, 102, 1, 1, "2026-10-12", 100).await;
+    insert_receipt_label(&pool, 101, "red").await;
+    insert_receipt_label(&pool, 101, "blue").await;
+    sqlx::query("UPDATE ledger_labels SET title = '旅行' WHERE ledger_id = 1 AND color = 'red'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=label&month=2026-10")
+            .await,
+    )
+    .await;
+    let rows = v["rows"].as_array().unwrap();
+    let red = rows.iter().find(|r| r["label"] == "旅行").unwrap();
+    let blue = rows.iter().find(|r| r["label"] == "青").unwrap();
+    let none = rows.iter().find(|r| r["label"] == "ラベルなし").unwrap();
+    // duplicate postings: the double-labeled receipt lands in both colors
+    assert_eq!(red["key"], "red");
+    assert_eq!(red["amount"], 400);
+    assert_eq!(blue["key"], "blue");
+    assert_eq!(blue["amount"], 400);
+    assert!(none["key"].is_null(), "unlabeled bucket key is null");
+    assert_eq!(none["amount"], 100);
+    // shares over the duplicate-inclusive axis total 900
+    assert_eq!(red["share"], 0.444);
+    assert_eq!(none["share"], 0.111);
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-input-validation]
+async fn analysis_input_validation() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-10", 220).await;
+
+    let max = 200i64; // configs/dev mcp.toml stats_max_rows
+    let bad = [
+        "/api/ledgers/1/analysis?axis=nope",
+        "/api/ledgers/1/analysis?metric=avg",
+        "/api/ledgers/1/analysis?month=2026-10&year=2026",
+        "/api/ledgers/1/analysis?from=2026-10-01",
+        "/api/ledgers/1/analysis?from=2026-10-31&to=2026-10-01",
+        "/api/ledgers/1/analysis?limit=0",
+        &format!("/api/ledgers/1/analysis?limit={}", max + 1),
+        "/api/ledgers/1/analysis?category=無いカテゴリ",
+        &format!("/api/ledgers/1/analysis?item_query={}", "a".repeat(201)),
+        "/api/ledgers/1/analysis/trend?granularity=hour",
+        "/api/ledgers/1/analysis/trend?axis=nope",
+        "/api/ledgers/1/analysis/item?month=2026-10",
+        &format!(
+            "/api/ledgers/1/analysis/item?item_query={}",
+            "a".repeat(201)
+        ),
+    ];
+    for q in bad {
+        let resp = c.get(&router, q).await;
+        let (status, body) = status_text(resp).await;
+        assert_eq!(status, 400, "{q} -> {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+        assert_eq!(v["error"], "invalid_request", "{q} -> {body}");
+    }
+
+    // boundary limits and plain valid calls are 200
+    for q in [
+        "/api/ledgers/1/analysis?limit=1&month=2026-10",
+        &format!("/api/ledgers/1/analysis?limit={max}&month=2026-10"),
+        "/api/ledgers/1/analysis/trend?granularity=week&from=2026-10-01&to=2026-10-18",
+        "/api/ledgers/1/analysis/item?item_id=10101",
+    ] {
+        let resp = c.get(&router, q).await;
+        assert_eq!(resp.status(), 200, "{q}");
+    }
+
+    // another user's / missing ledger: the same 404 as the rest of the API
+    let other: i64 = sqlx::query_scalar(
+        "INSERT INTO ledgers (name, created_at, updated_at) VALUES ('other89', 0, 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for q in [
+        format!("/api/ledgers/{other}/analysis"),
+        "/api/ledgers/1/analysis/item?item_id=1".replace("ledgers/1", "ledgers/77"),
+    ] {
+        let resp = c.get(&router, &q).await;
+        assert_eq!(resp.status(), 404, "{q}");
+    }
 }

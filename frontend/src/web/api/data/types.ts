@@ -251,75 +251,155 @@ export interface StatsRow {
   keys: (string | number | null)[]
   labels: string[]
   value: number
-  compare_value?: number
-  diff?: number
   share?: number
 }
 
-export interface StatsSection {
-  id: string
-  title: string
-  dims: string[]
-  chart: string
-  rows: StatsRow[]
-  truncated_rows?: number
+// --- analysis API (TASK-89): GET /analysis, /analysis/trend, /analysis/item
+//
+// The three read-only aggregation endpoints behind the redesigned dashboard
+// and the axis detail screens (design: tmp/tasks/tm-89/design_backend.md
+// §1-A/B/C). The legacy GET /stats web route is gone — the MCP
+// summarize_spending side keeps its own contract (spec_mcp-tools.md 10).
+
+export type AnalysisAxis = 'category' | 'store' | 'item' | 'label' | 'payment_method'
+export type AnalysisMetric = 'amount' | 'count' | 'unit'
+export type AnalysisGranularity = 'day' | 'week' | 'month'
+
+/** Filters shared by every analysis query (the former StatsQuery set minus
+ *  `report`; label_colors is the OR filter of TASK-17). */
+export interface AnalysisFilters {
+  category?: string
+  store?: string
+  store_id?: number
+  store_category?: string
+  item_query?: string
+  payment_method?: PaymentMethod
+  label_colors?: LabelColor[]
 }
 
-export type StatsReport =
-  | 'monthly_overview'
-  | 'by_category'
-  | 'by_store'
-  | 'by_payment_method'
-  | 'monthly_trend'
-  | 'item_price_history'
-
-/** Query of GET /api/ledgers/{l}/stats. Period: month | year | from+to (or none = report default). */
-export interface StatsQuery {
-  report?: StatsReport
+/** Query of GET /api/ledgers/{l}/analysis. Period: month | year | from+to
+ *  (default this month) — the selected period only, no comparison side. */
+export interface AnalysisQuery extends AnalysisFilters {
+  axis?: AnalysisAxis
+  metric?: AnalysisMetric
   month?: string
   year?: number
   from?: string
   to?: string
-  category?: string
-  store?: string
-  /** exact store id (web-only, TASK-74 A1: not in the MCP summarize filters) */
-  store_id?: number
-  /** store category path ("大分類" or "大分類/小分類", TASK-74 A1) */
-  store_category?: string
-  item_query?: string
-  /** exact payment-method filter (web only, TASK-65; not in the MCP filters) */
-  payment_method?: PaymentMethod
-  /** label filter: receipts having ANY of these colors (OR, TASK-17) */
-  label_colors?: LabelColor[]
+  limit?: number
 }
 
-/** Echo of the applied filters in a stats result (spec_mcp-tools.md 10). */
-export interface StatsResultFilters {
-  category?: string
-  store?: string
-  item_query?: string
-  label_colors?: LabelColor[]
+export interface AnalysisPeriod {
+  from: string
+  to: string
+  label: string
 }
 
-/** GET /api/ledgers/{l}/stats: summarize_spending result (spec_mcp-tools.md 10). */
-export interface StatsResult {
-  report: string | null
-  period_resolved: { from: string; to: string; label: string }
-  compare_period: { from: string; to: string; label: string } | null
-  totals: {
-    value: number
-    compare_value: number | null
-    diff: number | null
-    diff_pct: number | null
-    receipts: number
+/** Whole-filter totals of the selected period. */
+export interface AnalysisTotals {
+  amount: number
+  count: number
+  /** amount / count (per receipt), 1-decimal, null when count = 0 */
+  unit: number | null
+  days: number
+}
+
+/** One axis value of the selected period's breakdown. */
+export interface AnalysisRow {
+  key: string | number | null
+  label: string
+  amount: number
+  count: number
+  unit: number | null
+  /** metric value / axis total (label axis: duplicated receipts inflate the
+   *  denominator; null on metric=unit). No folded "other" row — the client
+   *  builds the rest row from truncated_rows and totals. */
+  share: number | null
+}
+
+/** GET /api/ledgers/{l}/analysis: the period totals and the axis breakdown
+ *  (Home and the axis detail in one fetch). */
+export interface AnalysisResult {
+  axis: AnalysisAxis
+  metric: AnalysisMetric
+  period: AnalysisPeriod
+  totals: AnalysisTotals
+  rows: AnalysisRow[]
+  truncated_rows: number
+  filters?: AnalysisFilters | null
+}
+
+/** Query of GET /api/ledgers/{l}/analysis/trend. granularity defaults to
+ *  auto (<=62 days day / <=366 week / else month) but the frontend passes it
+ *  explicitly — the display decision stays client-side. */
+export interface AnalysisTrendQuery extends AnalysisFilters {
+  axis?: AnalysisAxis
+  metric?: AnalysisMetric
+  granularity?: AnalysisGranularity
+  month?: string
+  year?: number
+  from?: string
+  to?: string
+  /** number of stacked series kept (default 10; the rest is client-side) */
+  limit?: number
+}
+
+/** GET /api/ledgers/{l}/analysis/trend: the stacked matrix. buckets are
+ *  zero-filled ascending (day = date, week = its Monday, month = "YYYY-MM"). */
+export interface AnalysisTrendResult {
+  axis: AnalysisAxis
+  metric: AnalysisMetric
+  granularity: AnalysisGranularity
+  period: AnalysisPeriod
+  buckets: string[]
+  /** top `limit` series by whole-period metric total; every other series is
+   *  the client's rest segment (bucket_totals - series). values are null on
+   *  metric=unit zero-fill buckets (no receipts that bucket) */
+  series: { key: string | number | null; label: string; values: (number | null)[]; total: number }[]
+  bucket_totals: (number | null)[]
+  truncated_rows: number
+}
+
+/** Query of GET /api/ledgers/{l}/analysis/item: item_id or item_query
+ *  (either required, item_id wins; the default period is last 12 months). */
+export interface AnalysisItemQuery extends AnalysisFilters {
+  item_id?: number
+  item_query?: string
+  month?: string
+  year?: number
+  from?: string
+  to?: string
+}
+
+/** GET /api/ledgers/{l}/analysis/item: one item group's stats (the web
+ *  counterpart of the widget item_price_history). */
+export interface AnalysisItemResult {
+  item: { item_id: number; name: string } | null
+  period: AnalysisPeriod
+  summary: {
+    count: number
+    amount: number
+    /** absent when the period has no purchases (backend skip_serializing_if) */
+    avg_unit_price?: number
+    min_unit_price?: number
+    max_unit_price?: number
+    last_purchased_on?: string
+    /** purchase store names in by_store order */
+    stores: string[]
   }
-  /** monthly_overview: categories / stores / trend (6 months, oldest first) */
-  sections: StatsSection[]
-  notes: string[]
-  /** echo of the applied filters (label_colors etc., TASK-17) */
-  filters?: StatsResultFilters | null
-  /** monthly_overview only */
-  daily_cumulative?: { date: string; value: number }[]
+  /** ascending purchase rows (stats_max_rows cap) */
+  prices: {
+    date: string
+    store_id: number | null
+    store_name: string | null
+    unit_price: number
+    quantity: number
+    amount_incl: number
+  }[]
+  by_store: { store_id: number | null; store_name: string; count: number; amount: number; avg_unit_price: number }[]
+  /** zero-filled "YYYY-MM" within the period */
+  monthly: { ym: string; count: number; amount: number }[]
+  truncated_rows: number
 }
 
 /**
@@ -334,8 +414,12 @@ export interface DataApi {
   updateStore(ledgerId: number, storeId: number, input: UpdateStoreInput): Promise<UpdateStoreResult>
   /** Irreversible: reassign receipts, register the old name as an alias, delete the source. */
   mergeStores(ledgerId: number, sourceId: number, intoId: number): Promise<MergeStoresResult>
-  /** Read-only aggregation (dashboard / analysis); same reports as summarize_spending. */
-  getStats(ledgerId: number, query: StatsQuery): Promise<StatsResult>
+  /** GET /analysis (TASK-89): period totals + axis breakdown. */
+  getAnalysis(ledgerId: number, query: AnalysisQuery): Promise<AnalysisResult>
+  /** GET /analysis/trend (TASK-89): the stacked trend matrix. */
+  getAnalysisTrend(ledgerId: number, query: AnalysisTrendQuery): Promise<AnalysisTrendResult>
+  /** GET /analysis/item (TASK-89): one item group's price stats. */
+  getAnalysisItem(ledgerId: number, query: AnalysisItemQuery): Promise<AnalysisItemResult>
   listReceipts(ledgerId: number, query: ReceiptListQuery): Promise<ReceiptListResult>
   /** GET /api/ledgers/{l}/items: the item-level list behind the /search item tab (search_items). */
   searchItems(ledgerId: number, query: ItemListQuery): Promise<ItemsListResult>

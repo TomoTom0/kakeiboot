@@ -246,14 +246,15 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
   })
 })
 
-// --- drawer overlay, desktop side (900px): the overlay starts open with no
-// modal side effects (no scrim, no inert, no lock); the plain slide toggle
-// keeps the main column put through open -> close -> open ---
+// --- drawer overlay, desktop side (900px, TASK-89): the drawer starts
+// closed at every width; opened by the menu button it is a plain overlay —
+// the scrim shows and an outside tap closes it, but there are no modal side
+// effects (no inert, no lock) and the main column never moves ---
 
 test.describe('drawer overlay (900x800, reduced motion)', () => {
   test.use({ viewport: { width: 900, height: 800 }, reducedMotion: 'reduce' })
 
-  test('[covers:web-shell.drawer-overlay-real] desktop overlay: 初期open・scrim/inert/lockなし・main不変', async ({ page }) => {
+  test('[covers:web-shell.drawer-overlay-real] desktop overlay: 初期closed・開ければscrim表示で外タップで閉じる・inert/lockなし・main不変', async ({ page }) => {
     logPageIssues(page, 'drawer-desktop')
     await installApiStub(page)
     await page.goto('/receipts/101')
@@ -262,7 +263,21 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
     const sidebarRect = () => page.evaluate(() => document.querySelector('.sidebar')!.getBoundingClientRect())
     const mainX = () => page.evaluate(() => document.querySelector('.app-main')!.getBoundingClientRect().x)
 
-    // the 900px matchMedia opens the overlay from the start
+    // TASK-89: the drawer starts closed even at 900px+
+    await expect.poll(async () => (await sidebarRect()).right <= 0, { timeout: 3_000 }).toBe(true)
+    const m0 = await page.evaluate(() => ({
+      scrim: getComputedStyle(document.querySelector('.scrim')!).display,
+      mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
+      lock: document.documentElement.classList.contains('drawer-lock'),
+    }))
+    const d0 = JSON.stringify(m0)
+    expect(m0.scrim, d0).toBe('none')
+    expect(m0.mainInert, d0).toBe(false)
+    expect(m0.lock, d0).toBe(false)
+
+    // open: the plain slide overlay — the scrim shows at desktop too, still
+    // no modal side effects, and the main column never moves
+    await page.locator('[data-test="menu-button"]').click()
     await expect
       .poll(async () => {
         const r = await sidebarRect()
@@ -275,24 +290,17 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
       lock: document.documentElement.classList.contains('drawer-lock'),
     }))
     const dump = JSON.stringify(m)
-    expect(m.scrim, dump).toBe('none')
+    expect(m.scrim, dump).toBe('block')
     expect(m.mainInert, dump).toBe(false)
     expect(m.lock, dump).toBe(false)
     const x0 = await mainX()
 
-    // close: plain slide, no modal side effects; the main column stays put
-    await page.locator('[data-test="menu-button"]').click()
+    // an outside tap on the scrim closes the desktop overlay too (TASK-89)
+    // the outside tap is the scrim itself (it covers the desktop now and
+    // sits above the main column)
+    await page.locator('.scrim').click({ position: { x: 500, y: 300 } })
     await expect.poll(async () => (await sidebarRect()).right <= 0, { timeout: 3_000 }).toBe(true)
     expect(Math.abs((await mainX()) - x0), 'the main column never moves').toBeLessThanOrEqual(1)
-
-    // and open again
-    await page.locator('[data-test="menu-button"]').click()
-    await expect
-      .poll(async () => {
-        const r = await sidebarRect()
-        return Math.abs(r.left) <= 1 && Math.abs(r.top - 60) <= 1
-      }, { timeout: 3_000 })
-      .toBe(true)
   })
 })
 

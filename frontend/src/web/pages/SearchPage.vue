@@ -290,7 +290,7 @@ function categoryTo(path: string): RouteLocationRaw {
   const node = catalog.resolve('item', path)
   if (!node) return { path: '/categories', query: { category: path, ...categoryQuery() } }
   const parent = catalog.parentIdOf('item', node.id)
-  const target = parent === null ? `/categories/${node.id}` : `/categories/${parent}/${node.id}`
+  const target = parent === null ? `/axes/category/${node.id}` : `/axes/category/${parent}/${node.id}`
   return { path: target, query: categoryQuery() }
 }
 </script>

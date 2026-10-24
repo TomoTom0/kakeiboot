@@ -704,7 +704,7 @@ describe('Receipts', () => {
     // the item category is a link into the hierarchy page (TASK-74 §4-8)
     const cat = p.find('[data-test="item-cat-1001"]')
     expect(cat.element.tagName).toBe('A')
-    expect(cat.attributes('href')).toBe('/categories/1/2?month=2026-10')
+    expect(cat.attributes('href')).toBe('/axes/category/1/2?month=2026-10')
   })
 
   it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {
@@ -869,7 +869,7 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
 
   it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] topbar ラベルチップ+dialog の選択は URL labels に同期し label_colors で流れ、条件チップは1色1チップ（×はその色だけ外す）、行に LabelDots compact', async () => {
     const list = withRowLabels()
-    const stats = vi.spyOn(api, 'getStats')
+    const stats = vi.spyOn(api, 'getAnalysis')
     const { wrapper, router } = await mountApp('/receipts')
 
     // the label filter moved to the topbar (TASK-44): the chip is icon-only

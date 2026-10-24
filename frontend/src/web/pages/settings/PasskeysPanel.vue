@@ -117,7 +117,65 @@ function confirmDelete(id: number): Promise<void> {
     class="card"
     data-test="passkeys-panel"
   >
-    <h2>パスキー</h2>
+    <div class="card-head">
+      <h2>パスキー</h2>
+      <div class="head-actions">
+        <FormDialog
+          v-model:open="addOpen"
+          label="パスキーを追加"
+          test="add-passkey-dialog"
+        >
+          <template #trigger>
+            <IconButton
+              icon="plus"
+              label="パスキーを追加"
+              variant="primary"
+              :disabled="busy"
+              aria-haspopup="dialog"
+              :aria-expanded="addOpen"
+              test="add-passkey"
+              @click="openAdd"
+            />
+          </template>
+          <h3>パスキーを追加</h3>
+          <div class="inline-form">
+            <input
+              v-model="newLabel"
+              type="text"
+              placeholder="追加するパスキーの名前（任意）"
+              aria-label="追加するパスキーの名前"
+              maxlength="100"
+              data-autofocus
+              data-test="new-label"
+            >
+          </div>
+          <p
+            v-if="addError"
+            class="msg msg-error"
+            role="alert"
+          >
+            {{ addError }}
+          </p>
+          <div class="actions">
+            <button
+              class="btn btn-primary"
+              :disabled="busy"
+              data-test="add-passkey-submit"
+              @click="addPasskey"
+            >
+              追加
+            </button>
+            <button
+              class="btn"
+              :disabled="busy"
+              @click="addOpen = false"
+            >
+              やめる
+            </button>
+          </div>
+        </FormDialog>
+      </div>
+    </div>
     <ul
       class="rows"
       data-test="passkeys"
@@ -212,59 +270,5 @@ function confirmDelete(id: number): Promise<void> {
     >
       {{ info }}
     </p>
-    <FormDialog
-      v-model:open="addOpen"
-      label="パスキーを追加"
-      test="add-passkey-dialog"
-    >
-      <template #trigger>
-        <IconButton
-          icon="key-plus"
-          label="パスキーを追加"
-          variant="primary"
-          :disabled="busy"
-          aria-haspopup="dialog"
-          :aria-expanded="addOpen"
-          test="add-passkey"
-          @click="openAdd"
-        />
-      </template>
-      <h3>パスキーを追加</h3>
-      <div class="inline-form">
-        <input
-          v-model="newLabel"
-          type="text"
-          placeholder="追加するパスキーの名前（任意）"
-          aria-label="追加するパスキーの名前"
-          maxlength="100"
-          data-autofocus
-          data-test="new-label"
-        >
-      </div>
-      <p
-        v-if="addError"
-        class="msg msg-error"
-        role="alert"
-      >
-        {{ addError }}
-      </p>
-      <div class="actions">
-        <button
-          class="btn btn-primary"
-          :disabled="busy"
-          data-test="add-passkey-submit"
-          @click="addPasskey"
-        >
-          追加
-        </button>
-        <button
-          class="btn"
-          :disabled="busy"
-          @click="addOpen = false"
-        >
-          やめる
-        </button>
-      </div>
-    </FormDialog>
   </section>
 </template>

@@ -10,7 +10,11 @@ use serde_json::{Value, json};
 use sqlx::SqliteConnection;
 
 use super::catalog::{self, CatKind};
-use super::dto::{PeriodResolved, StatsResult, StatsRow, StatsSection, StatsTotals};
+use super::dto::{
+    AnalysisResult, AnalysisRow, AnalysisTotals, ItemMonthly, ItemPrice, ItemRef, ItemStatsResult,
+    ItemStatsSummary, ItemStoreAgg, PeriodResolved, StatsResult, StatsRow, StatsSection,
+    StatsTotals, TrendResult, TrendSeries,
+};
 use super::labels::LabelColor;
 use super::util::{
     add_months, escape_like, fmt_date, fts_phrase, month_end, month_start, parse_date,
@@ -172,6 +176,158 @@ pub fn parse_period(v: &Value) -> Result<Period, String> {
 }
 
 // ---------------------------------------------------------------------------
+// analysis (TASK-89 web screens; spec_mcp-tools.md 12, spec_data-model.md
+// 13-3). The /analysis endpoints above `summarize` are web-only: the MCP
+// reports, `Range::previous` and section shapes stay untouched.
+
+/// The breakdown axis of the web analysis API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    Category,
+    Store,
+    Item,
+    Label,
+    PaymentMethod,
+}
+
+impl Axis {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "category" => Self::Category,
+            "store" => Self::Store,
+            "item" => Self::Item,
+            "label" => Self::Label,
+            "payment_method" => Self::PaymentMethod,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Category => "category",
+            Self::Store => "store",
+            Self::Item => "item",
+            Self::Label => "label",
+            Self::PaymentMethod => "payment_method",
+        }
+    }
+
+    /// The `labels_for` dim name of the axis. The item axis is name-keyed
+    /// (grouped by 品名): `item_name` falls through labels_for's default arm,
+    /// so the key itself — the display name — is the label.
+    fn dim(self) -> &'static str {
+        match self {
+            Self::Category => "category_top",
+            Self::Store => "store",
+            Self::Item => "item_name",
+            Self::Label => "label",
+            Self::PaymentMethod => "payment_method",
+        }
+    }
+
+    /// The grouped() key expression (label goes through its own JOIN query).
+    /// A category filter narrows the category axis to that category's subs
+    /// (the by_category convention). The item axis groups by 品名: same-name
+    /// lines are one item (the /analysis/item item_query concept; REVIEW-13
+    /// M-3). Note the drill is not strictly identical: item_query matches by
+    /// item_match (FTS/LIKE), so another item whose name contains the
+    /// drilled name (牛乳 vs 低脂肪牛乳) can widen the landing page beyond
+    /// the row's exact-name group.
+    fn key_expr(self, filters: &Filters) -> &'static str {
+        match self {
+            Self::Category => match filters.category.as_deref() {
+                Some(c) if c.trim() != "未分類" => "f.category_id",
+                _ => "f.category_top_id",
+            },
+            Self::Store => "f.store_id",
+            Self::Item => "f.name",
+            Self::PaymentMethod => "f.payment_method",
+            Self::Label => "rl.color",
+        }
+    }
+}
+
+/// The numeric metric of the analysis API (unit = per-receipt average).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Metric {
+    Amount,
+    Count,
+    Unit,
+}
+
+impl Metric {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "amount" => Self::Amount,
+            "count" => Self::Count,
+            "unit" => Self::Unit,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Amount => "amount",
+            Self::Count => "count",
+            Self::Unit => "unit",
+        }
+    }
+
+    /// The metric value of one aggregate. Unit rounds to one decimal and is
+    /// None when there is no receipt (count = 0).
+    pub fn value(self, amount: i64, count: i64) -> Option<f64> {
+        match self {
+            Self::Amount => Some(amount as f64),
+            Self::Count => Some(count as f64),
+            Self::Unit => (count > 0).then(|| round1(amount as f64 / count as f64)),
+        }
+    }
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// The bucket size of the stacked trend. `auto` follows the same 62/366-day
+/// thresholds as the frontend trend granularity; the display decision stays
+/// frontend-side, so an explicit value is expected in practice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Granularity {
+    Day,
+    Week,
+    Month,
+}
+
+impl Granularity {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "day" => Self::Day,
+            "week" => Self::Week,
+            "month" => Self::Month,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+        }
+    }
+
+    pub fn auto(days: i64) -> Self {
+        if days <= 62 {
+            Self::Day
+        } else if days <= 366 {
+            Self::Week
+        } else {
+            Self::Month
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // filters
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -190,9 +346,10 @@ pub struct Filters {
     /// filter" and is normalized to None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_colors: Option<Vec<LabelColor>>,
-    /// Web-only exact store match (the web StatsQuery sets it). `serde(skip)`
-    /// keeps it out of the MCP summarize_spending input (deny_unknown_fields
-    /// still rejects it as an unknown key) and out of the echo.
+    /// Web-only exact store match (the web /analysis query sets it).
+    /// `serde(skip)` keeps it out of the MCP summarize_spending input
+    /// (deny_unknown_fields still rejects it as an unknown key) and out of
+    /// the echo.
     #[serde(skip)]
     pub store_id: Option<i64>,
     /// Web-only exact payment-method match (TASK-65, the store_id pattern:
@@ -354,6 +511,20 @@ pub fn bind_all<'q, O>(
     q
 }
 
+/// bind_all for query_scalar (TASK-89 analysis).
+fn bind_scalar<'q, O>(
+    mut q: sqlx::query::QueryScalar<'q, sqlx::Sqlite, O, sqlx::sqlite::SqliteArguments>,
+    binds: &[Bind],
+) -> sqlx::query::QueryScalar<'q, sqlx::Sqlite, O, sqlx::sqlite::SqliteArguments> {
+    for b in binds {
+        q = match b {
+            Bind::I(i) => q.bind(*i),
+            Bind::S(s) => q.bind(s.clone()),
+        };
+    }
+    q
+}
+
 // ---------------------------------------------------------------------------
 // reports
 
@@ -377,7 +548,8 @@ pub fn default_period(report: &str) -> Period {
     }
 }
 
-/// Grouped totals: (key, label, value, receipts).
+/// Grouped totals: (key, SUM(amount_incl), COUNT(DISTINCT receipt_id))
+/// — the counted third column feeds the analysis metrics (TASK-89).
 async fn grouped(
     conn: &mut SqliteConnection,
     ledger_id: i64,
@@ -417,9 +589,13 @@ async fn totals(
     bind_all(q, &filt.1).fetch_one(conn).await
 }
 
-/// Label lookup for grouped keys.
+/// Label lookup for grouped keys. `dim` adds "label" (ledger title first,
+/// the palette display name otherwise; None = the unlabeled bucket); the
+/// name-keyed axes (item 品名) fall through the default arm — the key is
+/// the label.
 async fn labels_for(
     conn: &mut SqliteConnection,
+    ledger_id: i64,
     dim: &str,
     key: Option<&str>,
 ) -> sqlx::Result<String> {
@@ -427,6 +603,7 @@ async fn labels_for(
         return Ok(match dim {
             "store" => "店不明".into(),
             "payment_method" => "支払方法不明".into(),
+            "label" => "ラベルなし".into(),
             _ => "未分類".into(),
         });
     };
@@ -448,6 +625,22 @@ async fn labels_for(
             )
         }
         "payment_method" => Ok(payment_label(k).into()),
+        "label" => {
+            let color = super::labels::LabelColor::parse(k);
+            let title: Option<Option<String>> = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT title FROM ledger_labels WHERE ledger_id = ? AND color = ?",
+            )
+            .bind(ledger_id)
+            .bind(k)
+            .fetch_optional(conn)
+            .await?;
+            Ok(match title.flatten().filter(|t| !t.is_empty()) {
+                Some(t) => t,
+                None => color
+                    .map(|c| c.display_ja().to_string())
+                    .unwrap_or_else(|| "ラベルなし".into()),
+            })
+        }
         _ => Ok(k.to_string()),
     }
 }
@@ -508,7 +701,7 @@ async fn ranked_section(
     let mut other_n = 0i64;
     for (i, (k, v, _)) in cur.iter().enumerate() {
         if i < top {
-            let label = labels_for(conn, dim, k.as_deref()).await?;
+            let label = labels_for(conn, ledger_id, dim, k.as_deref()).await?;
             let cv = cmp.map(|_| prev.get(k).copied().unwrap_or(0));
             rows.push(StatsRow {
                 keys: vec![key_value(dim, k.as_deref())],
@@ -769,8 +962,13 @@ pub async fn summarize(
             let mut rows = Vec::new();
             for (item_id, date, store_id, name, qty, unit_price, incl) in rows_db {
                 let price = unit_price.unwrap_or_else(|| (incl as f64 / qty).round() as i64);
-                let store =
-                    labels_for(conn, "store", store_id.map(|s| s.to_string()).as_deref()).await?;
+                let store = labels_for(
+                    conn,
+                    ledger_id,
+                    "store",
+                    store_id.map(|s| s.to_string()).as_deref(),
+                )
+                .await?;
                 rows.push(StatsRow {
                     keys: vec![json!(date), json!(store_id), json!(item_id)],
                     labels: vec![date.clone(), store, name],
@@ -841,6 +1039,667 @@ pub async fn summarize(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// web analysis aggregation (TASK-89)
+
+/// Grouped aggregates with the counted third column: (key, SUM(amount_incl),
+/// COUNT(DISTINCT receipt_id)), amount desc. The label axis joins
+/// receipt_labels — a receipt with several labels posts its items to several
+/// axis values, so the axis total can exceed the whole amount (the OR filter
+/// semantics) — and appends the unlabeled bucket (key NULL) as its own row.
+async fn axis_grouped(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    r: &Range,
+    axis: Axis,
+    filters: &Filters,
+    filt: &(String, Vec<Bind>),
+) -> sqlx::Result<Vec<(Option<String>, i64, i64)>> {
+    if axis == Axis::Label {
+        let labeled = format!(
+            "SELECT rl.color AS \"k!: String\", SUM(f.amount_incl) AS \"a!: i64\",
+                    COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
+             FROM v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id
+             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{}
+             GROUP BY rl.color ORDER BY 2 DESC",
+            filt.0
+        );
+        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(labeled))
+            .bind(ledger_id)
+            .bind(fmt_date(r.from))
+            .bind(fmt_date(r.to));
+        let mut rows: Vec<(Option<String>, i64, i64)> = bind_all(q, &filt.1)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .map(|(k, a, c)| (Some(k), a, c))
+            .collect();
+        let unlabeled = format!(
+            "SELECT COALESCE(SUM(f.amount_incl), 0), COUNT(DISTINCT f.receipt_id)
+             FROM v_item_facts f
+             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{}
+               AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id)",
+            filt.0
+        );
+        let q = sqlx::query_as::<_, (i64, i64)>(sqlx::AssertSqlSafe(unlabeled))
+            .bind(ledger_id)
+            .bind(fmt_date(r.from))
+            .bind(fmt_date(r.to));
+        if let Some((a, c)) = bind_all(q, &filt.1).fetch_optional(&mut *conn).await?
+            && c > 0
+        {
+            rows.push((None, a, c));
+        }
+        return Ok(rows);
+    }
+    grouped(conn, ledger_id, r, axis.key_expr(filters), filt).await
+}
+
+fn metric_json(metric: Metric, v: Option<f64>) -> Value {
+    match v {
+        None => Value::Null,
+        Some(x) if metric == Metric::Unit => json!(x),
+        Some(x) => json!(x as i64),
+    }
+}
+
+async fn analysis_row(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    axis: Axis,
+    key: Option<&str>,
+    cur: (i64, i64),
+    share_v: Option<f64>,
+) -> sqlx::Result<AnalysisRow> {
+    let (a, c) = cur;
+    let label = labels_for(conn, ledger_id, axis.dim(), key).await?;
+    Ok(AnalysisRow {
+        key: match key {
+            // the string-keyed axes (label color, item 品名); the rest are
+            // numeric ids
+            None => Value::Null,
+            Some(k) if matches!(axis, Axis::Label | Axis::Item) => json!(k),
+            Some(k) => k.parse::<i64>().map(Value::from).unwrap_or(json!(k)),
+        },
+        label,
+        amount: a,
+        count: c,
+        unit: Metric::Unit.value(a, c),
+        share: share_v,
+    })
+}
+
+/// The breakdown endpoint aggregate: the period's totals and the axis values
+/// ranked by the metric (spec_mcp-tools.md 12).
+pub async fn analysis(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    axis: Axis,
+    metric: Metric,
+    range: &Range,
+    filters: &Filters,
+    limit: usize,
+) -> Result<AnalysisResult, FilterError> {
+    let filters = filters.clone().normalized();
+    let filt = filter_sql(conn, ledger_id, &filters).await?;
+    let cur = axis_grouped(conn, ledger_id, range, axis, &filters, &filt).await?;
+
+    // the share base is the axis total (label axis: duplicate postings
+    // included, so the shares sum to 100%)
+    let axis_amount: i64 = cur.iter().map(|v| v.1).sum();
+    let axis_count: i64 = cur.iter().map(|v| v.2).sum();
+    let share_of = |v: &(Option<String>, i64, i64)| -> Option<f64> {
+        match metric {
+            Metric::Amount => share(v.1, axis_amount),
+            Metric::Count => share(v.2, axis_count),
+            Metric::Unit => None,
+        }
+    };
+
+    // rank by the metric value, descending
+    let mut ents = cur;
+    ents.sort_by(|x, y| {
+        metric
+            .value(y.1, y.2)
+            .unwrap_or(0.0)
+            .partial_cmp(&metric.value(x.1, x.2).unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut rows = Vec::new();
+    for e in ents.iter().take(limit) {
+        rows.push(
+            analysis_row(
+                conn,
+                ledger_id,
+                axis,
+                e.0.as_deref(),
+                (e.1, e.2),
+                share_of(e),
+            )
+            .await?,
+        );
+    }
+    let truncated_rows = ents.len().saturating_sub(limit) as i64;
+
+    let (ca, cc) = totals(conn, ledger_id, range, &filt).await?;
+    Ok(AnalysisResult {
+        axis: axis.as_str().into(),
+        metric: metric.as_str().into(),
+        period: range.resolved(),
+        totals: AnalysisTotals {
+            amount: ca,
+            count: cc,
+            unit: Metric::Unit.value(ca, cc),
+            days: (range.to - range.from).num_days() + 1,
+        },
+        rows,
+        truncated_rows,
+        filters: (!filters.is_empty()).then(|| filters.clone()),
+    })
+}
+
+/// Bucket expression per granularity. Week buckets are Monday-anchored
+/// (same rule as the frontend week mode).
+fn bucket_expr(g: Granularity) -> &'static str {
+    match g {
+        Granularity::Day => "f.purchased_on",
+        Granularity::Week => {
+            "date(f.purchased_on, '-' || ((strftime('%w', f.purchased_on)+6)%7) || ' days')"
+        }
+        Granularity::Month => "f.purchased_month",
+    }
+}
+
+/// Zero-filled bucket keys ascending (day = date, week = Monday,
+/// month = "YYYY-MM").
+fn bucket_keys(g: Granularity, r: &Range) -> Vec<String> {
+    match g {
+        Granularity::Day => {
+            let mut out = Vec::new();
+            let mut d = r.from;
+            while d <= r.to {
+                out.push(fmt_date(d));
+                d = d
+                    .succ_opt()
+                    .expect("date iteration ends at chrono MAX before overflow");
+            }
+            out
+        }
+        Granularity::Week => {
+            let mut out = Vec::new();
+            let mut d =
+                r.from - chrono::Duration::days(r.from.weekday().num_days_from_monday() as i64);
+            while d <= r.to {
+                out.push(fmt_date(d));
+                d += chrono::Duration::days(7);
+            }
+            out
+        }
+        Granularity::Month => {
+            let mut out = Vec::new();
+            let mut m = month_start(r.from);
+            while m <= r.to {
+                out.push(m.format("%Y-%m").to_string());
+                m = add_months(m, 1);
+            }
+            out
+        }
+    }
+}
+
+/// The stacked matrix restricted to the top series: (bucket, key, amount,
+/// count). Two-step per design: the whole-range axis ranking fixes the top N
+/// first, this query narrows the matrix with an IN clause.
+#[allow(clippy::too_many_arguments)]
+async fn axis_matrix(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    r: &Range,
+    axis: Axis,
+    filters: &Filters,
+    b_expr: &str,
+    top: &[Option<String>],
+    filt: &(String, Vec<Bind>),
+) -> sqlx::Result<Vec<(String, Option<String>, i64, i64)>> {
+    let solid: Vec<&String> = top.iter().filter_map(|k| k.as_ref()).collect();
+    let ph = vec!["?"; solid.len()].join(", ");
+    let mut out: Vec<(String, Option<String>, i64, i64)> = Vec::new();
+    if axis == Axis::Label {
+        if !solid.is_empty() {
+            let sql = format!(
+                "SELECT {b_expr} AS \"b!: String\", rl.color AS \"k!: String\",
+                        SUM(f.amount_incl) AS \"a!: i64\", COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
+                 FROM v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id
+                 WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{} AND rl.color IN ({ph})
+                 GROUP BY 1, 2",
+                filt.0
+            );
+            let q = sqlx::query_as::<_, (String, String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+                .bind(ledger_id)
+                .bind(fmt_date(r.from))
+                .bind(fmt_date(r.to));
+            let mut q = bind_all(q, &filt.1);
+            for k in &solid {
+                q = q.bind(k.as_str());
+            }
+            out.extend(
+                q.fetch_all(&mut *conn)
+                    .await?
+                    .into_iter()
+                    .map(|(b, k, a, c)| (b, Some(k), a, c)),
+            );
+        }
+        if top.iter().any(|k| k.is_none()) {
+            let sql = format!(
+                "SELECT {b_expr} AS \"b!: String\", SUM(f.amount_incl) AS \"a!: i64\",
+                        COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
+                 FROM v_item_facts f
+                 WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{}
+                   AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id)
+                 GROUP BY 1",
+                filt.0
+            );
+            let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+                .bind(ledger_id)
+                .bind(fmt_date(r.from))
+                .bind(fmt_date(r.to));
+            out.extend(
+                bind_all(q, &filt.1)
+                    .fetch_all(&mut *conn)
+                    .await?
+                    .into_iter()
+                    .map(|(b, a, c)| (b, None, a, c)),
+            );
+        }
+        return Ok(out);
+    }
+    let key = axis.key_expr(filters);
+    let sql = format!(
+        "SELECT {b_expr} AS \"b!: String\", CAST({key} AS TEXT) AS k,
+                SUM(f.amount_incl) AS \"a!: i64\", COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
+         FROM v_item_facts f
+         WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{} AND {key} IN ({ph})
+         GROUP BY 1, 2",
+        filt.0
+    );
+    let q = sqlx::query_as::<_, (String, Option<String>, i64, i64)>(sqlx::AssertSqlSafe(sql))
+        .bind(ledger_id)
+        .bind(fmt_date(r.from))
+        .bind(fmt_date(r.to));
+    let mut q = bind_all(q, &filt.1);
+    for k in &solid {
+        q = q.bind(k.as_str());
+    }
+    out.extend(q.fetch_all(&mut *conn).await?);
+    Ok(out)
+}
+
+/// Per-bucket totals over EVERY axis value (top series + remainder; the
+/// label axis keeps its duplicate postings so bucket_totals - series is the
+/// frontend's "other" segment).
+async fn axis_bucket_totals(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    r: &Range,
+    axis: Axis,
+    b_expr: &str,
+    filt: &(String, Vec<Bind>),
+) -> sqlx::Result<Vec<(String, i64, i64)>> {
+    let base = |table: &str| {
+        format!(
+            "SELECT {b_expr} AS \"b!: String\", COALESCE(SUM(f.amount_incl), 0) AS \"a!: i64\",
+                    COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
+             FROM {table}
+             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?
+             GROUP BY 1"
+        )
+    };
+    if axis == Axis::Label {
+        let labeled = base("v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id");
+        let sql = format!("{labeled}{}", filt.0);
+        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(r.from))
+            .bind(fmt_date(r.to));
+        let mut merged: HashMap<String, (i64, i64)> = bind_all(q, &filt.1)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .map(|(b, a, c)| (b, (a, c)))
+            .collect();
+        let unlabeled = format!(
+            "{} AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id){}",
+            base("v_item_facts f"),
+            filt.0
+        );
+        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(unlabeled))
+            .bind(ledger_id)
+            .bind(fmt_date(r.from))
+            .bind(fmt_date(r.to));
+        for (b, a, c) in bind_all(q, &filt.1).fetch_all(&mut *conn).await? {
+            let e = merged.entry(b).or_insert((0, 0));
+            e.0 += a;
+            e.1 += c;
+        }
+        return Ok(merged.into_iter().map(|(b, (a, c))| (b, a, c)).collect());
+    }
+    let sql = format!("{}{}", base("v_item_facts f"), filt.0);
+    let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+        .bind(ledger_id)
+        .bind(fmt_date(r.from))
+        .bind(fmt_date(r.to));
+    bind_all(q, &filt.1).fetch_all(conn).await
+}
+
+/// The stacked-trend endpoint: zero-filled buckets, the top `limit` series by
+/// whole-range metric total (two-step), per-bucket totals.
+#[allow(clippy::too_many_arguments)]
+pub async fn analysis_trend(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    axis: Axis,
+    metric: Metric,
+    range: &Range,
+    granularity: Granularity,
+    filters: &Filters,
+    limit: usize,
+) -> Result<TrendResult, FilterError> {
+    let filters = filters.clone().normalized();
+    let filt = filter_sql(conn, ledger_id, &filters).await?;
+
+    // step 1: whole-range axis ranking
+    let g = granularity;
+    let mut ranked: Vec<(Option<String>, i64, i64)> =
+        axis_grouped(conn, ledger_id, range, axis, &filters, &filt).await?;
+    ranked.sort_by(|x, y| {
+        metric
+            .value(y.1, y.2)
+            .unwrap_or(0.0)
+            .partial_cmp(&metric.value(x.1, x.2).unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let truncated_rows = ranked.len().saturating_sub(limit) as i64;
+    let top: Vec<Option<String>> = ranked
+        .iter()
+        .take(limit)
+        .map(|(k, _, _)| k.clone())
+        .collect();
+
+    // step 2: the matrix narrowed to the top keys
+    let b_expr = bucket_expr(g);
+    let matrix = axis_matrix(conn, ledger_id, range, axis, &filters, b_expr, &top, &filt).await?;
+    let buckets = bucket_keys(g, range);
+    let cells: HashMap<(Option<String>, String), (i64, i64)> = matrix
+        .into_iter()
+        .map(|(b, k, a, c)| ((k, b), (a, c)))
+        .collect();
+
+    let mut series = Vec::new();
+    for (k, ta, tc) in ranked.iter().take(limit) {
+        let mut values = Vec::with_capacity(buckets.len());
+        for b in &buckets {
+            let (a, c) = cells
+                .get(&(k.clone(), b.clone()))
+                .copied()
+                .unwrap_or((0, 0));
+            values.push(metric_json(metric, metric.value(a, c)));
+        }
+        let label = labels_for(conn, ledger_id, axis.dim(), k.as_deref()).await?;
+        series.push(TrendSeries {
+            key: match k.as_deref() {
+                None => Value::Null,
+                Some(v) if matches!(axis, Axis::Label | Axis::Item) => json!(v),
+                Some(v) => v.parse::<i64>().map(Value::from).unwrap_or(json!(v)),
+            },
+            label,
+            values,
+            total: metric_json(metric, metric.value(*ta, *tc)),
+        });
+    }
+
+    let totals_map: HashMap<String, (i64, i64)> =
+        axis_bucket_totals(conn, ledger_id, range, axis, b_expr, &filt)
+            .await?
+            .into_iter()
+            .map(|(b, a, c)| (b, (a, c)))
+            .collect();
+    let bucket_totals = buckets
+        .iter()
+        .map(|b| {
+            let (a, c) = totals_map.get(b).copied().unwrap_or((0, 0));
+            metric_json(metric, metric.value(a, c))
+        })
+        .collect();
+
+    Ok(TrendResult {
+        axis: axis.as_str().into(),
+        metric: metric.as_str().into(),
+        granularity: g.as_str().into(),
+        period: range.resolved(),
+        buckets,
+        series,
+        bucket_totals,
+        truncated_rows,
+    })
+}
+
+/// The item stats endpoint (the web version of item_price_history): prices
+/// with the unit-price rule, by-store, zero-filled monthly, and the summary.
+/// `item_id` wins over `item_query` (the widget-compatible item_match).
+pub async fn analysis_item(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    item_id: Option<i64>,
+    item_query: Option<&str>,
+    range: &Range,
+    filters: &Filters,
+    max_rows: usize,
+) -> Result<ItemStatsResult, FilterError> {
+    let filters = filters.clone().normalized();
+    let filt = filter_sql(conn, ledger_id, &filters).await?;
+    // the item restriction rides every query after the period binds
+    let (item_frag, item_binds): (String, Vec<Bind>) = match (item_id, item_query) {
+        (Some(id), _) => (" AND f.item_id = ?".into(), vec![Bind::I(id)]),
+        (None, Some(q)) => item_match("f.item_id", q)?,
+        (None, None) => {
+            return Err(FilterError::Invalid(
+                "item_id か item_query のどちらかが必要です".into(),
+            ));
+        }
+    };
+    let where_sql = format!(
+        "f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ? AND f.line_kind = 'item'{item_frag}{}",
+        filt.0
+    );
+    let prices_sql = format!(
+        "SELECT f.item_id AS \"i!: i64\", f.purchased_on AS \"d!: String\", f.store_id, i.unit_price,
+                f.amount_incl AS \"a!: i64\", f.quantity AS \"q!: f64\"
+         FROM v_item_facts f JOIN receipt_items i ON i.id = f.item_id
+         WHERE {where_sql}
+         ORDER BY f.purchased_on, f.item_id LIMIT ?"
+    );
+    let price_q = sqlx::query_as::<_, (i64, String, Option<i64>, Option<i64>, i64, f64)>(
+        sqlx::AssertSqlSafe(prices_sql),
+    )
+    .bind(ledger_id)
+    .bind(fmt_date(range.from))
+    .bind(fmt_date(range.to));
+    let price_q = bind_all(price_q, &item_binds);
+    let price_q = bind_all(price_q, &filt.1);
+    let price_rows = price_q.bind(max_rows as i64).fetch_all(&mut *conn).await?;
+    let total_lines: i64 = {
+        let sql = format!("SELECT COUNT(*) FROM v_item_facts f WHERE {where_sql}");
+        let q = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(range.from))
+            .bind(fmt_date(range.to));
+        let q = bind_scalar(q, &item_binds);
+        bind_scalar(q, &filt.1).fetch_one(&mut *conn).await?
+    };
+
+    // SQLite ROUND() is REAL: CAST keeps MIN/MAX in the INTEGER price domain
+    let unit_expr = "CAST(COALESCE(i.unit_price, ROUND(i.amount_incl / i.quantity)) AS INTEGER)";
+    let (n_lines, amount, min_p, max_p, avg_p, last_on): (
+        i64,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        Option<f64>,
+        Option<String>,
+    ) = {
+        let sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(f.amount_incl), 0),
+                    MIN({unit_expr}), MAX({unit_expr}), AVG({unit_expr}), MAX(f.purchased_on)
+             FROM v_item_facts f JOIN receipt_items i ON i.id = f.item_id
+             WHERE {where_sql}"
+        );
+        let q = sqlx::query_as::<_, _>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(range.from))
+            .bind(fmt_date(range.to));
+        let q = bind_all(q, &item_binds);
+        bind_all(q, &filt.1).fetch_one(&mut *conn).await?
+    };
+
+    let by_store_rows: Vec<(Option<i64>, i64, i64, Option<f64>)> = {
+        let sql = format!(
+            "SELECT f.store_id, COUNT(*), COALESCE(SUM(f.amount_incl), 0), AVG({unit_expr})
+             FROM v_item_facts f JOIN receipt_items i ON i.id = f.item_id
+             WHERE {where_sql} GROUP BY f.store_id ORDER BY 3 DESC"
+        );
+        let q = sqlx::query_as::<_, (Option<i64>, i64, i64, Option<f64>)>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(range.from))
+            .bind(fmt_date(range.to));
+        let q = bind_all(q, &item_binds);
+        bind_all(q, &filt.1).fetch_all(&mut *conn).await?
+    };
+
+    let monthly_rows: Vec<(String, i64, i64)> = {
+        let sql = format!(
+            "SELECT f.purchased_month AS \"ym!: String\", COUNT(*), COALESCE(SUM(f.amount_incl), 0)
+             FROM v_item_facts f WHERE {where_sql} GROUP BY 1"
+        );
+        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(range.from))
+            .bind(fmt_date(range.to));
+        let q = bind_all(q, &item_binds);
+        bind_all(q, &filt.1).fetch_all(&mut *conn).await?
+    };
+
+    // the representative item: the explicit id when given (if it exists in
+    // this ledger), otherwise the latest purchase among the item_query
+    // matches (複数マッチ時は最新購入名の代表)
+    let item = match item_id {
+        Some(id) => sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, name FROM receipt_items WHERE id = ? AND ledger_id = ?",
+        )
+        .bind(id)
+        .bind(ledger_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .map(|(item_id, name)| ItemRef { item_id, name }),
+        None => {
+            let sql = format!(
+                "SELECT f.item_id AS \"i!: i64\" FROM v_item_facts f
+                 WHERE {where_sql} ORDER BY f.purchased_on DESC, f.amount_incl DESC LIMIT 1"
+            );
+            let q = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+                .bind(ledger_id)
+                .bind(fmt_date(range.from))
+                .bind(fmt_date(range.to));
+            let q = bind_scalar(q, &item_binds);
+            match bind_scalar(q, &filt.1).fetch_optional(&mut *conn).await? {
+                Some(i) => {
+                    let name: String = sqlx::query_scalar::<_, String>(
+                        "SELECT name FROM receipt_items WHERE id = ?",
+                    )
+                    .bind(i)
+                    .fetch_optional(&mut *conn)
+                    .await?
+                    .unwrap_or_else(|| "品目不明".into());
+                    Some(ItemRef { item_id: i, name })
+                }
+                None => None,
+            }
+        }
+    };
+
+    let mut prices = Vec::new();
+    for (_i, date, store_id, unit_price, incl, qty) in price_rows {
+        let store_name = labels_for(
+            conn,
+            ledger_id,
+            "store",
+            store_id.map(|s| s.to_string()).as_deref(),
+        )
+        .await?;
+        prices.push(ItemPrice {
+            date,
+            store_id,
+            store_name,
+            unit_price: unit_price.unwrap_or_else(|| (incl as f64 / qty).round() as i64),
+            quantity: qty,
+            amount_incl: incl,
+        });
+    }
+    let mut by_store = Vec::new();
+    let mut stores = Vec::new();
+    for (sid, cnt, amt, avg) in &by_store_rows {
+        let name = labels_for(
+            conn,
+            ledger_id,
+            "store",
+            sid.map(|s| s.to_string()).as_deref(),
+        )
+        .await?;
+        stores.push(name.clone());
+        by_store.push(ItemStoreAgg {
+            store_id: *sid,
+            store_name: name,
+            count: *cnt,
+            amount: *amt,
+            avg_unit_price: avg.map(|v| v.round() as i64),
+        });
+    }
+    let monthly_map: HashMap<String, (i64, i64)> = monthly_rows
+        .into_iter()
+        .map(|(ym, c, a)| (ym, (c, a)))
+        .collect();
+    let mut monthly = Vec::new();
+    let mut m = month_start(range.from);
+    while m <= range.to {
+        let ym = m.format("%Y-%m").to_string();
+        let (c, a) = monthly_map.get(&ym).copied().unwrap_or((0, 0));
+        monthly.push(ItemMonthly {
+            ym,
+            count: c,
+            amount: a,
+        });
+        m = add_months(m, 1);
+    }
+
+    Ok(ItemStatsResult {
+        item,
+        period: range.resolved(),
+        summary: ItemStatsSummary {
+            count: n_lines,
+            amount,
+            avg_unit_price: avg_p.map(|v| v.round() as i64),
+            min_unit_price: min_p,
+            max_unit_price: max_p,
+            last_purchased_on: last_on,
+            stores,
+        },
+        prices,
+        by_store,
+        monthly,
+        truncated_rows: total_lines.saturating_sub(max_rows as i64).max(0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,5 +1749,19 @@ mod tests {
         assert!(p(json!({"preset": "yesterday"})).is_err());
         assert!(parse_period(&json!({"month": 3})).is_err());
         assert!(p(json!({"month": "2026-13"})).is_err());
+    }
+
+    // [covers:web-data-api.analysis-parsers]
+    #[test]
+    fn analysis_axis_metric_granularity_parse() {
+        // axis / metric / granularity の parse と auto 閾値（62/366 日）
+        assert_eq!(Axis::parse("category"), Some(Axis::Category));
+        assert_eq!(Axis::parse("nope"), None);
+        assert_eq!(Metric::parse("unit"), Some(Metric::Unit));
+        assert_eq!(Metric::parse("avg"), None, "IF 固定で unit のみ");
+        assert_eq!(Granularity::auto(62), Granularity::Day);
+        assert_eq!(Granularity::auto(63), Granularity::Week);
+        assert_eq!(Granularity::auto(366), Granularity::Week);
+        assert_eq!(Granularity::auto(367), Granularity::Month);
     }
 }

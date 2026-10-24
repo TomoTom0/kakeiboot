@@ -467,6 +467,34 @@ ORDER BY (i.category_source = 'user') DESC, r.purchased_on DESC
 LIMIT 1;
 ```
 
+分析系 web API（TASK-89。`spec_mcp-tools.md` §12 の /analysis 3 endpoint）の軸集計も `v_item_facts` 上の都度集計（事前集計テーブル無しの維持）:
+
+- 軸キーは category→`category_top_id`（category filter 指定時はその `category_id`）/ store→`store_id` / item→`name`（品名。同名品目=1品目〔`/analysis/item` の item_query と同じ品名概念。REVIEW-13 M-3〕）/ payment_method→`payment_method` / label は `receipt_labels` への JOIN（下記 SQL）。count 系指標は `COUNT(DISTINCT receipt_id)`（レシート件数ベース。「1件あたり」=1レシート平均）。
+- ラベル軸（axis=label）は 1レシート複数ラベルで明細が複数軸値に重複計上され、軸合計が全体金額を超えうる（OR 絞り込みと同型）。share の分母はこの重複込みの軸合計とし、内訳の合計が100%になることを保証する。行名は `ledger_labels.title` 優先（空文字・無題はパレットの既定表示名）、無ラベル行は「ラベルなし」（key NULL の別行）。
+- 積み上げ推移は2段クエリ: 期間全体の軸値合計（`GROUP BY key`）で上位 N 系列を確定してから、`GROUP BY bucket_expr, key` を IN 句で絞り込む。bucket 式は day=`f.purchased_on` / week=月曜アンカーの `date(f.purchased_on, '-' || ((strftime('%w', f.purchased_on)+6)%7) || ' days')` / month=生成列 `f.purchased_month`。bucket 合計（bucket_totals）は系列絞りなしの別クエリ（ラベル軸は重複込みの labeled 分 + unlabeled 分の和）。
+- 品目stats の単価規約は item_price_history と同一（`unit_price` ないし `round(amount_incl / quantity)`）。SQL 内で MIN/MAX/AVG に使うときは `CAST(... AS INTEGER)` を付ける（SQLite の ROUND は REAL を返すため）。
+
+```sql
+-- ラベル軸の軸値集計（重複計上）と無ラベル行（key NULL）
+SELECT rl.color AS "k!: String", SUM(f.amount_incl) AS "a!: i64", COUNT(DISTINCT f.receipt_id) AS "c!: i64"
+FROM v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+GROUP BY rl.color ORDER BY 2 DESC;
+SELECT COALESCE(SUM(f.amount_incl), 0), COUNT(DISTINCT f.receipt_id)
+FROM v_item_facts f
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+  AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id);
+
+-- 積み上げ行列（週 bucket・上位系列を IN 句で絞り込む2段目）
+SELECT date(f.purchased_on, '-' || ((strftime('%w', f.purchased_on)+6)%7) || ' days') AS "b!: String",
+       CAST(f.category_top_id AS TEXT) AS k,
+       SUM(f.amount_incl) AS "a!: i64", COUNT(DISTINCT f.receipt_id) AS "c!: i64"
+FROM v_item_facts f
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+  AND f.category_top_id IN (?4)
+GROUP BY 1, 2;
+```
+
 ## 14. 認証系テーブル
 
 認証・認可フローの詳細は `spec_auth.md` を正本とし、本書はテーブル構造と保存規則を定める。

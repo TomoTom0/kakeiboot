@@ -14,8 +14,9 @@ import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
 // sidebar — a fixed overlay at every width (TASK-33 real-device review:
-// the desktop grid-column fold is gone), open by default on desktop
-// (>= 900px) or a modal drawer opening under the topbar on mobile. The top
+// the desktop grid-column fold is gone), closed by default with an
+// always-on scrim (TASK-89; the old 900px+ default-open is gone), gaining
+// modal-drawer behavior (inert/focus/scroll lock) only under 900px. The top
 // bar carries the brand logo, the page title, the center filter bar
 // (TASK-44 §11: period / label chips on the browsing routes), the ledger
 // switcher and the top-right account menu (settings / connected apps /
@@ -78,15 +79,16 @@ const initial = computed(() => Array.from(session.me?.display_name ?? '?')[0] ??
 
 // --- nav toggle (top-left menu button, TASK-27 §3-3 + TASK-33 overlay) -----------
 // One button, visible at every width, toggling one sidebar state. The
-// sidebar is a fixed overlay at every width (TASK-33 real-device review):
-// at 900px+ it starts open and slides over the main column — no scrim, the
-// main column stays interactive and never moves or reflows. Below 900px it
-// is the modal drawer as before (scrim / inert / focus / scroll lock). The
-// open/closed choice itself survives viewport changes in both directions.
+// sidebar is a fixed overlay at every width, starting closed (TASK-86/89):
+// the old 900px+ default-open is gone. While open, the full-width scrim
+// covers everything below the topbar at every width, so the main column is
+// NOT clickable (an outside tap on the scrim closes the drawer) — only the
+// modal effects (inert / focus / scroll lock) stay narrow-width; the desktop
+// open overlay skips them. The open/closed choice survives viewport changes.
 const desktopQuery = window.matchMedia('(min-width: 900px)')
 const isDesktop = ref(desktopQuery.matches)
-const drawerOpen = ref(desktopQuery.matches)
-// Only the narrow-width open drawer is modal: the scrim, inert, scroll lock
+const drawerOpen = ref(false)
+// Only the narrow-width open drawer is modal: the inert, scroll lock
 // and focus handling key on this, not on the bare open state.
 const drawerModal = computed(() => drawerOpen.value && !isDesktop.value)
 // While the drawer is modal the background feed must not react to arrow
@@ -110,11 +112,13 @@ async function openDrawer(): Promise<void> {
 }
 
 function closeDrawer(): void {
-  // a no-op at 900px+: the desktop overlay closes only via the menu button
-  // (navigation and Escape leave it open)
-  if (!drawerModal.value) return
+  // TASK-89: the drawer closes at every width — an outside tap, Escape and
+  // navigation all close the desktop overlay too. The focus return stays a
+  // modal concern (the desktop overlay never moved the focus).
+  if (!drawerOpen.value) return
+  const wasModal = drawerModal.value
   drawerOpen.value = false
-  menuBtnEl.value?.focus()
+  if (wasModal) menuBtnEl.value?.focus()
 }
 
 function toggleMenu(): void {

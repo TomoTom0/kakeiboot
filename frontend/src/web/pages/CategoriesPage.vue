@@ -1,50 +1,70 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import { useDataApi, type StatsResult, type StatsRow } from '../api/data'
+import { useDataApi, type AnalysisMetric, type AnalysisResult, type AnalysisTrendResult, type StatsRow } from '../api/data'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import DonutChart from '../components/DonutChart.vue'
+import PeriodHeader from '../components/PeriodHeader.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { firstString } from '../composables/receiptContext'
-import { currentTrendKey, dailyRows, trendGranularity, weeklyRows } from '../composables/trend'
+import { currentTrendKey, trendGranularity } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
-import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
-// Category list (read-only, TASK-74 §4-7): the period's total, the category
-// ranking (donut + rows) and the trend. The same-page selection section is
-// gone — a row press drills into /categories/:top (the 未分類 aggregate into
-// /categories/uncategorized; その他 stays a plain row). A legacy ?category=
-// deep link resolves through the catalog and replaces into the hierarchy
-// route (bookmarks from before TASK-74; the app's own links are the new
-// form already). Editing lives in /settings/categories. The period and
-// label filters moved to the topbar center bar (TASK-44 §11): they ride on
-// the period store (period.query / trendQuery already carry label_colors)
-// and this page re-queries through the watches below.
+// Category list (read-only, TASK-89 redesign, the compare side removed): the
+// period header (the whole-ledger totals), the stacked trend (this axis) and
+// the full-category ranking — every real row (limit = stats_max_rows), the
+// composition as the inline bar and the muted "ほか n件・計xx円" rest row
+// folding the tail. A row press drills into /axes/category/<topId>
+// (未分類 into the uncategorized carve-out); editing lives in
+// /settings/categories behind the "..." menu. The legacy ?category= deep
+// link resolution is gone (TASK-89: no redirect compatibility).
 const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
 const session = useSessionStore()
-const catalog = useCatalogStore()
 const { markReady } = usePageReady()
 period.fromQuery(route.query)
 
-/** TASK-55: the trend granularity of the selected period. */
-const gran = computed(() => trendGranularity(period.mode, ...period.range))
-
-const overall = ref<StatsResult | null>(null)
-const trend = ref<StatsResult | null>(null)
+const analysis = ref<AnalysisResult | null>(null)
+const trend = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
+
+const trendMetric = ref<AnalysisMetric>('amount')
+const trendStackedView = ref(true)
+const METRIC_TABS: { id: AnalysisMetric; label: string }[] = [
+  { id: 'amount', label: '金額' },
+  { id: 'count', label: '件数' },
+  { id: 'unit', label: '単価' },
+]
+const metricFormat = computed<Record<AnalysisMetric, (v: number) => string>>(() => ({
+  amount: formatYen,
+  count: (v) => `${Math.round(v).toLocaleString('ja-JP')}件`,
+  unit: (v) => `${(Math.round(v * 10) / 10).toLocaleString('ja-JP')}円`,
+}))
+
+/** the trend window: 12 months through the selected month in month mode,
+ *  the period itself otherwise (the list rule) */
+function trendPeriod(): [string, string] {
+  if (period.mode === 'month') {
+    const q = period.trendQuery()
+    return [q.from!, q.to!]
+  }
+  return period.range
+}
+const gran = computed(() => {
+  const [from, to] = trendPeriod()
+  return trendGranularity(period.mode, from, to)
+})
 
 let seq = 0
 async function load(id?: number): Promise<void> {
@@ -53,22 +73,23 @@ async function load(id?: number): Promise<void> {
   const n = ++seq
   loading.value = true
   error.value = ''
+  const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    // the trend query goes first so the primary by_category call (the one
-    // carrying the selected month/year key) is the load's last stats call.
-    // TASK-55: month granularity keeps monthly_trend; day/week (week mode,
-    // shorter ranges) switch to monthly_overview and build the bars from its
-    // daily_cumulative
-    const [tr, o] = await Promise.all([
-      api.getStats(l, {
-        report: gran.value === 'month' ? 'monthly_trend' : 'monthly_overview',
-        ...period.trendQuery(),
+    const [a, t] = await Promise.all([
+      api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
+      api.getAnalysisTrend(l, {
+        axis: 'category',
+        metric: trendMetric.value,
+        granularity: gran.value,
+        from: trendPeriod()[0],
+        to: trendPeriod()[1],
+        ...labels,
+        limit: 5,
       }),
-      api.getStats(l, { report: 'by_category', ...period.query() }),
     ])
     if (n !== seq) return
-    overall.value = o
-    trend.value = tr
+    analysis.value = a
+    trend.value = t
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -80,41 +101,11 @@ async function load(id?: number): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-watch([() => period.range, () => period.labelQuery], () => void load())
+watch([() => period.range, () => period.labelQuery, trendMetric], () => void load())
 
-// --- the legacy ?category= gate (§4-7) ----------------------------------------
-// resolve the path into its top id and replace into the hierarchy route; an
-// unresolvable path stays on the list (no broken redirect). '未分類' has no
-// catalog node — it maps to the carve-out route directly.
-async function redirectLegacyCategory(): Promise<void> {
-  const path = firstString(route.query.category)
-  if (!path) return
-  try {
-    if (path === '未分類') {
-      await router.replace({ path: '/categories/uncategorized', query: withoutKey('category') })
-      return
-    }
-    await catalog.load()
-    const node = catalog.resolve('item', path)
-    if (!node) return
-    const topId = catalog.parentIdOf('item', node.id) ?? node.id
-    await router.replace({ path: `/categories/${topId}`, query: withoutKey('category') })
-  } catch {
-    // the catalog fetch failing leaves the list as-is
-  }
-}
-function withoutKey(key: string): LocationQueryRaw {
-  const rest: LocationQueryRaw = { ...route.query }
-  delete rest[key]
-  return rest
-}
-void redirectLegacyCategory()
-
-
-// The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
-// standalone manage link on a read-only dashboard. TASK-40 rev2 §2-4 adds
-// the create entry ("大分類を追加" deep-links the manage screen's top add
-// row); viewers get the manage link only — creation stays editor-only.
+// The manage entry lives behind the "..." page menu (TASK-45 §2-4); the
+// create entry ("大分類を追加" deep-links the manage screen's top add row)
+// stays editor-only.
 const canEdit = computed(() => {
   const role = session.me?.ledgers.find((l) => l.id === ledgerId.value)?.role
   return role === 'owner' || role === 'editor'
@@ -129,62 +120,86 @@ const menuItems = computed<PageMenuItem[]>(() => {
   return items
 })
 
-const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
-const totals = computed(() => overall.value?.totals ?? null)
+const totals = computed(() => analysis.value?.totals ?? null)
 
-/** TASK-57 A4: real categories only — 未分類 counts, the folded その他 row
- *  does not (truncated_rows carries how many folded). */
-const categoryCount = computed(() => {
-  const sec = overall.value?.sections[0]
-  return (
-    (sec?.rows ?? []).filter((r) => typeof r.keys[0] === 'number' || r.labels[0] === '未分類').length +
-    (sec?.truncated_rows ?? 0)
-  )
+/** the full ranking: every real row (amount desc) + the rest row */
+const rows = computed<StatsRow[]>(() => {
+  const res = analysis.value
+  if (!res) return []
+  const sorted = [...res.rows].sort((a, b) => b.amount - a.amount)
+  const out: StatsRow[] = sorted.map((r) => ({
+    keys: [r.key],
+    labels: [r.label],
+    value: r.amount,
+    share: r.share ?? undefined,
+  }))
+  if (res.truncated_rows > 0) {
+    // the folded tail's amount: the period total minus the shown rows (the
+    // value cell is money, not the row count — REVIEW-13 M-1)
+    const restAmount = totals.value ? totals.value.amount - sorted.reduce((a, r) => a + r.amount, 0) : 0
+    out.push({
+      keys: [null],
+      labels: [`ほか ${res.truncated_rows}件・計${formatYen(restAmount)}`],
+      value: restAmount,
+      share: undefined,
+    })
+  }
+  return out
 })
 
-const trendRows = computed<StatsRow[]>(() => {
-  if (gran.value === 'month') return trend.value?.sections[0]?.rows ?? []
-  const cum = trend.value?.daily_cumulative ?? []
-  const [from, to] = period.range
-  return gran.value === 'day' ? dailyRows(cum, from, to) : weeklyRows(cum, from, to)
+const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
+const trendStackedBars = computed(() => {
+  const res = trend.value
+  if (!res) return []
+  const top = res.series.slice(0, 5)
+  return res.buckets.map((b, i) => {
+    const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
+    return {
+      key: b,
+      title: b,
+      total: res.bucket_totals[i] ?? 0,
+      segments: [
+        ...top.map((s, si) => ({ label: s.label, value: s.values[i] ?? 0, color: PALETTE[si] ?? 'var(--c-rest)' })),
+        ...(rest > 0 ? [{ label: 'ほか', value: rest, color: 'var(--c-rest)' }] : []),
+      ],
+    }
+  })
 })
-
-const trendCurrent = computed(() => currentTrendKey(gran.value, period.mode, ...period.range, period.month))
-
-/** A bar press moves the period to that granularity's unit (TASK-55). */
+const trendSingle = computed<StatsRow[]>(() =>
+  (trend.value?.buckets ?? []).map((b, i) => ({ keys: [b], labels: [b], value: trend.value?.bucket_totals[i] ?? 0 })),
+)
+const trendCurrent = computed(() => {
+  const [from, to] = trendPeriod()
+  return currentTrendKey(gran.value, period.mode, from, to, period.month)
+})
 function onTrendSelect(key: string): void {
+  if (gran.value === 'day') {
+    void router.push({
+      path: '/receipts',
+      query: { from: key, to: key, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) },
+    })
+    return
+  }
   if (gran.value === 'week') period.setWeek(key)
   else period.setMonth(key)
 }
 
-/** The context the row links carry down a level: the period in its URL form
- * plus the labels (§4-2 — everything passes down). */
-const listQuery = computed(() => ({
-  ...period.urlQuery,
-  ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
-}))
-
-/** A ranking row's destination: keys[0] (the top category id) builds
- * /categories/<topId>; the 未分類 aggregate (keys[0]=null) takes the
- * carve-out; その他 (and any other null key) stays a non-link row. */
+/** A ranking row's destination: keys[0] builds /axes/category/<topId>; the
+ *  未分類 aggregate takes the carve-out; the rest row stays non-link. */
 function rowTo(row: StatsRow): RouteLocationRaw | null {
   const id = row.keys[0]
-  if (typeof id === 'number') return { path: `/categories/${id}`, query: { ...listQuery.value } }
-  if (row.labels[0] === '未分類') return { path: '/categories/uncategorized', query: { ...listQuery.value } }
+  const query = {
+    ...period.urlQuery,
+    ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
+  }
+  if (typeof id === 'number') return { path: `/axes/category/${id}`, query }
+  if (row.labels[0] === '未分類') return { path: '/axes/category/uncategorized', query }
   return null
-}
-
-function diffText(d: number | null | undefined): string {
-  if (d === null || d === undefined || d === 0) return '±0円'
-  return `${d > 0 ? '+' : '−'}${formatYen(Math.abs(d))}`
 }
 </script>
 
 <template>
   <div class="view-page">
-    <!-- the chip-less one-row toolbar (TASK-75 §6-3/§6-5): the "..." menu
-         alone rides the row's right end — no standalone menu row above the
-         dashboard cards -->
     <BrowseToolbar>
       <template #menu>
         <PageMenu
@@ -203,7 +218,7 @@ function diffText(d: number | null | undefined): string {
       {{ error }}
     </p>
 
-    <!-- the detail page's unknown-id redirect lands here with ?missing= -->
+    <!-- the axis detail's unknown-id redirect lands here with ?missing= -->
     <p
       v-if="firstString(route.query.missing)"
       class="msg msg-error"
@@ -214,51 +229,86 @@ function diffText(d: number | null | undefined): string {
     </p>
 
     <div
-      v-if="overall && totals"
-      class="dash-grid"
+      v-if="analysis && totals"
+      class="view-stack"
       :class="{ loading }"
     >
-      <section
-        class="card kpi"
-        data-test="kpi"
-      >
-        <p class="kpi-head">
-          <span class="label">{{ period.label }}の支出</span>
-          <strong
-            class="kpi-value"
-            data-test="total"
-          >{{ formatYen(totals.value) }}</strong>
-          <span
-            v-if="totals.diff !== null"
-            class="chip"
-            :class="totals.diff > 0 ? 'chip-up' : totals.diff < 0 ? 'chip-down' : ''"
-          >{{ period.compareLabel }}比 {{ diffText(totals.diff) }}</span>
-        </p>
-        <!-- the 最多 name keeps the full-text title (review L2): the summary
-             line ellipsizes, the title is the one way to see the whole name -->
-        <p class="kpi-sub">
-          カテゴリ数 {{ categoryCount }} ・ 最多 <span :title="rows[0]?.labels[0] ?? undefined">{{ rows[0]?.labels[0] ?? '-' }}</span> ・ レシート {{ totals.receipts }}件
-        </p>
-      </section>
+      <PeriodHeader
+        :label="`${period.label}の支出`"
+        :total="totals.amount"
+      />
 
       <section
-        class="card"
+        class="zone"
         data-test="trend-card"
       >
-        <h2>支出の推移</h2>
+        <div class="card-head">
+          <h2>支出の推移</h2>
+          <div class="trend-controls">
+            <div
+              class="tabs trend-mode-tabs"
+              role="tablist"
+              aria-label="推移の表示"
+            >
+              <button
+                type="button"
+                class="tab"
+                :class="{ active: trendStackedView }"
+                role="tab"
+                :aria-selected="trendStackedView"
+                data-test="trend-stacked"
+                @click="trendStackedView = true"
+              >
+                積み上げ
+              </button>
+              <button
+                type="button"
+                class="tab"
+                :class="{ active: !trendStackedView }"
+                role="tab"
+                :aria-selected="!trendStackedView"
+                data-test="trend-total"
+                @click="trendStackedView = false"
+              >
+                合計
+              </button>
+            </div>
+            <div
+              class="tabs trend-metric-tabs"
+              role="tablist"
+              aria-label="数値軸"
+            >
+              <button
+                v-for="m in METRIC_TABS"
+                :key="m.id"
+                type="button"
+                class="tab"
+                :class="{ active: trendMetric === m.id }"
+                role="tab"
+                :aria-selected="trendMetric === m.id"
+                :data-test="`trend-metric-${m.id}`"
+                @click="trendMetric = m.id"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+          </div>
+        </div>
         <TrendBars
           v-if="trend"
-          :rows="trendRows"
+          :rows="trendSingle"
+          :stacked="trendStackedView ? trendStackedBars : null"
           :granularity="gran"
-          :span="period.range"
+          :span="trendPeriod()"
           :current="trendCurrent"
+          :format="metricFormat[trendMetric]"
           @select="onTrendSelect"
         />
       </section>
 
       <section
-        class="card wide"
-        data-test="breakdown"
+        class="zone"
+        data-test="ranking"
       >
         <h2>カテゴリ別</h2>
         <p
@@ -267,20 +317,11 @@ function diffText(d: number | null | undefined): string {
         >
           この期間の記録はありません。
         </p>
-        <div
+        <RankedList
           v-else
-          class="donut-wrap"
-        >
-          <DonutChart
-            :rows="rows"
-            :total="totals.value"
-          />
-          <RankedList
-            :rows="rows"
-            :to="rowTo"
-            colors
-          />
-        </div>
+          :rows="rows"
+          :to="rowTo"
+        />
       </section>
     </div>
     <DashSkeleton v-else-if="loading" />

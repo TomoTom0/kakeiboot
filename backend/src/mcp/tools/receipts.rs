@@ -210,6 +210,7 @@ pub async fn get(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     if let Some(n) = &view.note {
         text.push_str(&format!("\nメモ: {}", util::truncate_chars(n, 100)));
     }
+    text.push_str(&format!("\n{}", c.receipt_web_line(view.receipt_id)));
     Ok(result::ok(
         text,
         envelope("receipt", Some(&ledger), &[], json!({ "receipt": view })),

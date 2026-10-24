@@ -46,7 +46,15 @@ pub fn routes(state: AuthApiState) -> Router {
             "/api/ledgers/{ledger_id}/stores/{store_id}/merge",
             post(merge_stores),
         )
-        .route("/api/ledgers/{ledger_id}/stats", get(get_stats))
+        .route("/api/ledgers/{ledger_id}/analysis", get(get_analysis))
+        .route(
+            "/api/ledgers/{ledger_id}/analysis/trend",
+            get(get_analysis_trend),
+        )
+        .route(
+            "/api/ledgers/{ledger_id}/analysis/item",
+            get(get_analysis_item),
+        )
         .route("/api/ledgers/{ledger_id}/labels", get(get_labels))
         .route(
             "/api/ledgers/{ledger_id}/labels/{color}",
@@ -628,16 +636,75 @@ pub async fn post_receipt_labels(
 }
 
 // ---------------------------------------------------------------------------
-// stats (dashboard / analysis screens)
+// analysis (TASK-89: dashboard / analysis screens, spec_mcp-tools.md 12).
+// The old GET /stats web route was removed with the frontend migration (no
+// backward compatibility by user decision 2026-10-23); the MCP
+// summarize_spending tool keeps `domain::stats::summarize` (spec §10).
 
+/// A payment-method query key (TASK-65): one of the nine dto keys, else 400.
+fn parse_payment(p: String) -> Result<String, DataError> {
+    serde_json::from_value::<crate::domain::dto::PaymentMethod>(serde_json::Value::String(p))
+        .map(|v| v.as_str().to_string())
+        .map_err(|_| DataError::invalid())
+}
+
+/// The mutually-exclusive period parse shared by the /analysis endpoints
+/// (month / year / from&to, default `default_period`, JST today).
+fn web_period(
+    month: Option<String>,
+    year: Option<i32>,
+    from: Option<String>,
+    to: Option<String>,
+    default_period: crate::domain::stats::Period,
+) -> Result<crate::domain::stats::Range, DataError> {
+    let period = match (month, year, from, to) {
+        (Some(month), None, None, None) => crate::domain::stats::Period::Month { month },
+        (None, Some(year), None, None) => crate::domain::stats::Period::Year { year },
+        (None, None, Some(from), Some(to)) => crate::domain::stats::Period::Range { from, to },
+        (None, None, None, None) => default_period,
+        _ => return Err(DataError::invalid()),
+    };
+    crate::domain::stats::resolve_period(&period, crate::domain::util::jst_date(now_ms()))
+        .map_err(|_| DataError::invalid())
+}
+
+/// The Filters construction shared by the /analysis endpoints
+/// (query length caps, the payment_method key check, label color parsing).
+#[allow(clippy::too_many_arguments)]
+fn web_filters(
+    limits: &crate::config::McpLimits,
+    category: Option<String>,
+    store: Option<String>,
+    store_category: Option<String>,
+    store_id: Option<i64>,
+    item_query: Option<String>,
+    payment_method: Option<String>,
+    label_colors: Option<String>,
+) -> Result<crate::domain::stats::Filters, DataError> {
+    check_query_len("store", store.as_deref(), limits.max_query_chars)?;
+    check_query_len("item_query", item_query.as_deref(), limits.max_query_chars)?;
+    let label_colors = parse_label_colors(label_colors.as_deref())?;
+    Ok(crate::domain::stats::Filters {
+        category,
+        store,
+        store_category,
+        store_id,
+        payment_method: payment_method.map(parse_payment).transpose()?,
+        item_query,
+        label_colors: (!label_colors.is_empty()).then_some(label_colors),
+    })
+}
+
+/// The period + filter keys shared by the three /analysis endpoints. The
+/// numeric keys (year / store_id) stay strings: `serde(flatten)` buffers
+/// form values as strings and cannot restore numbers. Handlers parse them
+/// (bad values are the same 400).
 #[derive(Debug, Deserialize)]
-pub struct StatsQuery {
-    #[serde(default)]
-    report: Option<String>,
+pub struct AnalysisCommonQuery {
     #[serde(default)]
     month: Option<String>,
     #[serde(default)]
-    year: Option<i32>,
+    year: Option<String>,
     #[serde(default)]
     from: Option<String>,
     #[serde(default)]
@@ -648,83 +715,246 @@ pub struct StatsQuery {
     store: Option<String>,
     #[serde(default)]
     store_category: Option<String>,
-    /// Web-only exact store match (the MCP filters have no store_id)
     #[serde(default)]
-    store_id: Option<i64>,
+    store_id: Option<String>,
     #[serde(default)]
     item_query: Option<String>,
-    /// Exact payment-method match (web only, TASK-65; one of the 9 keys)
     #[serde(default)]
     payment_method: Option<String>,
-    /// Comma-separated palette keys (OR), e.g. `label_colors=red,blue`
     #[serde(default)]
     label_colors: Option<String>,
 }
 
-/// Read-only aggregation for the web screens: the same
-/// `domain::stats::summarize` the MCP summarize_spending tool uses
-/// (spec_mcp-tools.md 10, 12). `report` defaults to monthly_overview; the
-/// period is one of `month=YYYY-MM` / `year=YYYY` / `from&to`, default the
-/// report's default period (JST). The web-only `payment_method` query key
-/// (TASK-65) filters by exact payment method. Any ledger member (viewer
-/// included) may read.
-/// A payment-method query key (TASK-65): one of the nine dto keys, else 400.
-fn parse_payment(p: String) -> Result<String, DataError> {
-    serde_json::from_value::<crate::domain::dto::PaymentMethod>(serde_json::Value::String(p))
-        .map(|v| v.as_str().to_string())
-        .map_err(|_| DataError::invalid())
+impl AnalysisCommonQuery {
+    fn year(&self) -> Result<Option<i32>, DataError> {
+        self.year
+            .as_deref()
+            .map(|y| y.parse::<i32>().map_err(|_| DataError::invalid()))
+            .transpose()
+    }
+
+    fn store_id(&self) -> Result<Option<i64>, DataError> {
+        self.store_id
+            .as_deref()
+            .map(|s| s.parse::<i64>().map_err(|_| DataError::invalid()))
+            .transpose()
+    }
 }
 
-pub async fn get_stats(
+#[derive(Debug, Deserialize)]
+pub struct AnalysisQuery {
+    #[serde(flatten)]
+    common: AnalysisCommonQuery,
+    #[serde(default)]
+    axis: Option<String>,
+    #[serde(default)]
+    metric: Option<String>,
+    /// rows cap, 1..=stats_max_rows, default 50
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrendQuery {
+    #[serde(flatten)]
+    common: AnalysisCommonQuery,
+    #[serde(default)]
+    axis: Option<String>,
+    #[serde(default)]
+    metric: Option<String>,
+    /// day | week | month (omitted = auto: 62/366-day thresholds)
+    #[serde(default)]
+    granularity: Option<String>,
+    /// series cap, 1..=stats_max_rows, default 10
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalysisItemQuery {
+    #[serde(flatten)]
+    common: AnalysisCommonQuery,
+    /// exact item id (wins over item_query)
+    #[serde(default)]
+    item_id: Option<i64>,
+}
+
+fn parse_limit(v: Option<i64>, default: i64, max: usize) -> Result<usize, DataError> {
+    let lim = v.unwrap_or(default);
+    if (1..=max as i64).contains(&lim) {
+        Ok(lim as usize)
+    } else {
+        Err(DataError::invalid())
+    }
+}
+
+fn filter_err(e: crate::domain::stats::FilterError) -> DataError {
+    match e {
+        crate::domain::stats::FilterError::Invalid(_) => DataError::invalid(),
+        crate::domain::stats::FilterError::Db(e) => DataError::sqlx(e),
+    }
+}
+
+/// GET /api/ledgers/{l}/analysis: the period totals and the axis x metric
+/// breakdown in one fetch (Home and the axis-detail screens). Any ledger
+/// member may read.
+pub async fn get_analysis(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(ledger_id): Path<i64>,
-    Query(q): Query<StatsQuery>,
+    Query(q): Query<AnalysisQuery>,
 ) -> Result<Json<Value>, DataError> {
-    use crate::domain::stats::{self, Filters, Period};
+    use crate::domain::stats::{Axis, Metric, Period, analysis};
     let s = session(&state, &headers).await?;
     member_ledger(&state.db, ledger_id, s.user_id).await?;
-    let report = q.report.unwrap_or_else(|| "monthly_overview".into());
-    let period = match (q.month, q.year, q.from, q.to) {
-        (Some(month), None, None, None) => Period::Month { month },
-        (None, Some(year), None, None) => Period::Year { year },
-        (None, None, Some(from), Some(to)) => Period::Range { from, to },
-        (None, None, None, None) => stats::default_period(&report),
-        _ => return Err(DataError::invalid()),
-    };
-    let range = stats::resolve_period(&period, crate::domain::util::jst_date(now_ms()))
-        .map_err(|_| DataError::invalid())?;
-    let max_query_chars = state.tools.limits.max_query_chars;
-    check_query_len("store", q.store.as_deref(), max_query_chars)?;
-    check_query_len("item_query", q.item_query.as_deref(), max_query_chars)?;
-    let label_colors = parse_label_colors(q.label_colors.as_deref())?;
-    let filters = Filters {
-        category: q.category,
-        store: q.store,
-        store_category: q.store_category,
-        store_id: q.store_id,
-        payment_method: q.payment_method.map(parse_payment).transpose()?,
-        item_query: q.item_query,
-        label_colors: (!label_colors.is_empty()).then_some(label_colors),
-    };
+    let axis =
+        Axis::parse(q.axis.as_deref().unwrap_or("category")).ok_or_else(DataError::invalid)?;
+    let metric =
+        Metric::parse(q.metric.as_deref().unwrap_or("amount")).ok_or_else(DataError::invalid)?;
+    let year = q.common.year()?;
+    let store_id = q.common.store_id()?;
+    let range = web_period(
+        q.common.month,
+        year,
+        q.common.from,
+        q.common.to,
+        Period::Preset {
+            preset: "this_month".into(),
+        },
+    )?;
+    let filters = web_filters(
+        &state.tools.limits,
+        q.common.category,
+        q.common.store,
+        q.common.store_category,
+        store_id,
+        q.common.item_query,
+        q.common.payment_method,
+        q.common.label_colors,
+    )?;
+    let limit = parse_limit(q.limit, 50, state.tools.limits.stats_max_rows)?;
     let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
-    let (res, meta) = stats::summarize(
+    let res = analysis(&mut conn, ledger_id, axis, metric, &range, &filters, limit)
+        .await
+        .map_err(filter_err)?;
+    let v = serde_json::to_value(res).map_err(|e| DataError::internal(e.into()))?;
+    Ok(Json(v))
+}
+
+/// GET /api/ledgers/{l}/analysis/trend: the stacked matrix (zero-filled
+/// buckets; week = Monday anchor). Granularity is explicit in practice (the
+/// auto thresholds mirror the frontend display rule).
+pub async fn get_analysis_trend(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(ledger_id): Path<i64>,
+    Query(q): Query<TrendQuery>,
+) -> Result<Json<Value>, DataError> {
+    use crate::domain::stats::{Axis, Granularity, Metric, Period, analysis_trend};
+    let s = session(&state, &headers).await?;
+    member_ledger(&state.db, ledger_id, s.user_id).await?;
+    let axis =
+        Axis::parse(q.axis.as_deref().unwrap_or("category")).ok_or_else(DataError::invalid)?;
+    let metric =
+        Metric::parse(q.metric.as_deref().unwrap_or("amount")).ok_or_else(DataError::invalid)?;
+    let year = q.common.year()?;
+    let store_id = q.common.store_id()?;
+    let range = web_period(
+        q.common.month,
+        year,
+        q.common.from,
+        q.common.to,
+        Period::Preset {
+            preset: "last_12_months".into(),
+        },
+    )?;
+    let g = match q.granularity.as_deref() {
+        Some(v) => Granularity::parse(v).ok_or_else(DataError::invalid)?,
+        None => Granularity::auto((range.to - range.from).num_days() + 1),
+    };
+    let filters = web_filters(
+        &state.tools.limits,
+        q.common.category,
+        q.common.store,
+        q.common.store_category,
+        store_id,
+        q.common.item_query,
+        q.common.payment_method,
+        q.common.label_colors,
+    )?;
+    let limit = parse_limit(q.limit, 10, state.tools.limits.stats_max_rows)?;
+    let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
+    let res = analysis_trend(
+        &mut conn, ledger_id, axis, metric, &range, g, &filters, limit,
+    )
+    .await
+    .map_err(filter_err)?;
+    let v = serde_json::to_value(res).map_err(|e| DataError::internal(e.into()))?;
+    Ok(Json(v))
+}
+
+/// GET /api/ledgers/{l}/analysis/item: the item stats (the web version of
+/// the widget's item_price_history). item_id wins over item_query (the
+/// widget-compatible item match). Default period last_12_months.
+pub async fn get_analysis_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(ledger_id): Path<i64>,
+    Query(q): Query<AnalysisItemQuery>,
+) -> Result<Json<Value>, DataError> {
+    use crate::domain::stats::{Period, analysis_item};
+    let s = session(&state, &headers).await?;
+    member_ledger(&state.db, ledger_id, s.user_id).await?;
+    if q.item_id.is_none()
+        && q.common
+            .item_query
+            .as_deref()
+            .is_none_or(|v| v.trim().is_empty())
+    {
+        return Err(DataError::invalid());
+    }
+    let year = q.common.year()?;
+    let store_id = q.common.store_id()?;
+    let range = web_period(
+        q.common.month,
+        year,
+        q.common.from,
+        q.common.to,
+        Period::Preset {
+            preset: "last_12_months".into(),
+        },
+    )?;
+    let mut filters = web_filters(
+        &state.tools.limits,
+        q.common.category,
+        q.common.store,
+        q.common.store_category,
+        store_id,
+        // the length cap (200 chars) rides web_filters; the item restriction
+        // itself is the item_id/item_query pair, not a filter — cleared right
+        // after so it is not applied twice (spec_mcp-tools.md §12)
+        q.common.item_query.clone(),
+        q.common.payment_method,
+        q.common.label_colors,
+    )?;
+    filters.item_query = None;
+    let mut conn = state.db.acquire().await.map_err(DataError::sqlx)?;
+    let res = analysis_item(
         &mut conn,
         ledger_id,
-        &report,
+        q.item_id,
+        // whitespace-only is the plain "required" 400 above
+        q.common
+            .item_query
+            .as_deref()
+            .filter(|v| !v.trim().is_empty()),
         &range,
         &filters,
         state.tools.limits.stats_max_rows,
     )
     .await
-    .map_err(|e| match e {
-        stats::FilterError::Invalid(_) => DataError::invalid(),
-        stats::FilterError::Db(e) => DataError::sqlx(e),
-    })?;
-    let mut v = serde_json::to_value(res).map_err(|e| DataError::internal(e.into()))?;
-    if let Some(days) = meta.get("daily_cumulative") {
-        v["daily_cumulative"] = days.clone();
-    }
+    .map_err(filter_err)?;
+    let v = serde_json::to_value(res).map_err(|e| DataError::internal(e.into()))?;
     Ok(Json(v))
 }
 

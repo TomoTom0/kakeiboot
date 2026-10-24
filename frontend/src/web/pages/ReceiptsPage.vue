@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import { parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
-import { useDataApi, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsQuery, type StatsResult, type StatsRow } from '../api/data'
+import { useDataApi, type AnalysisResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
@@ -16,7 +16,7 @@ import { usePageReady } from '../composables/usePageReady'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { axisMonthLabels, dayLabel, monthLabel, periodDays, shortDate, shortTime } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
-import { bucketSpan, dailyRows, monthlyRows, spanGranularity, weeklyRows } from '../composables/trend'
+import { bucketSpan, spanGranularity } from '../composables/trend'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
@@ -69,8 +69,8 @@ const receipts = ref<ReceiptSummary[]>([])
 const totalCount = ref(0)
 const sumAmount = ref(0)
 const nextCursor = ref<string | null>(null)
-const overview = ref<StatsResult | null>(null)
-const payments = ref<StatsResult | null>(null)
+const payments = ref<AnalysisResult | null>(null)
+const trendTotals = ref<{ buckets: string[]; totals: (number | null)[] }>({ buckets: [], totals: [] })
 const error = ref('')
 const loading = ref(false)
 // first load finished at least once: until then the screen shows the
@@ -93,7 +93,7 @@ function listQuery(cursor?: string): ReceiptListQuery {
   }
 }
 
-function statsFilters(): StatsQuery {
+function analysisFilters() {
   return {
     ...period.query(),
     ...(filters.store.trim() ? { store: filters.store.trim() } : {}),
@@ -112,18 +112,20 @@ async function load(id?: number): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [list, ov, pm] = await Promise.all([
+    const [list, pm, tr] = await Promise.all([
       api.listReceipts(l, listQuery()),
-      api.getStats(l, { report: 'monthly_overview', ...statsFilters() }),
-      api.getStats(l, { report: 'by_payment_method', ...statsFilters() }),
+      // the payment ranking rides the analysis endpoint (TASK-89: the old
+      // GET /stats web route is gone)
+      api.getAnalysis(l, { axis: 'payment_method', ...analysisFilters(), limit: 50 }),
+      api.getAnalysisTrend(l, { axis: 'category', granularity: spanGranularity(...period.range), ...analysisFilters(), limit: 1 }),
     ])
     if (n !== seq) return
     receipts.value = list.receipts
     totalCount.value = list.total_count
     sumAmount.value = list.sum_amount
     nextCursor.value = list.next_cursor
-    overview.value = ov
     payments.value = pm
+    trendTotals.value = { buckets: tr.buckets, totals: tr.bucket_totals }
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -197,7 +199,7 @@ function clearFilter(key: 'store' | 'item' | 'category'): void {
 }
 
 /** RankedList's select: a payment row press toggles the filter in place (the
- *  aggregate rows — その他 / 支払方法不明, keys[0]=null — stay inert). */
+ *  aggregate rows — ほか / 支払方法不明, keys[0]=null — stay inert). */
 function onPaymentRow(row: StatsRow): void {
   const m = row.keys[0]
   if (typeof m !== 'string') return
@@ -264,6 +266,32 @@ const perDay = computed(() => {
   return Math.round(sumAmount.value / periodDays(from, to))
 })
 
+/** the payment ranking rows: amount desc + the muted rest row (the old
+ *  by_payment_method "その他" fold is the client's now). */
+const paymentRows = computed<StatsRow[]>(() => {
+  const res = payments.value
+  if (!res) return []
+  const sorted = [...res.rows].sort((a, b) => b.amount - a.amount)
+  const out: StatsRow[] = sorted.map((r) => ({
+    keys: [r.key],
+    labels: [r.label],
+    value: r.amount,
+    share: r.share ?? undefined,
+  }))
+  if (res.truncated_rows > 0) {
+    // the folded tail's amount: the period total minus the shown rows (the
+    // value cell is money, not the row count — REVIEW-13 M-1)
+    const restAmount = res.totals.amount - sorted.reduce((a, r) => a + r.amount, 0)
+    out.push({
+      keys: [null],
+      labels: [`ほか ${res.truncated_rows}件・計${formatYen(restAmount)}`],
+      value: restAmount,
+      share: undefined,
+    })
+  }
+  return out
+})
+
 /** TASK-55/A8: the trend card follows the period's length — day (<=62 days,
  *  e.g. a month's 31 bars), Monday-anchored weeks (63..366) or months — so it
  *  never disappears on long periods. The data stays the overview call's
@@ -273,24 +301,21 @@ const trendTitle = computed(() =>
   trendGran.value === 'day' ? '日別の支出' : trendGran.value === 'week' ? '週別の支出' : '月別の支出',
 )
 const trendCols = computed(() => {
-  const cum = overview.value?.daily_cumulative ?? []
+  const { buckets, totals } = trendTotals.value
   const [from, to] = period.range
-  const rows =
-    trendGran.value === 'day'
-      ? dailyRows(cum, from, to)
-      : trendGran.value === 'week'
-        ? weeklyRows(cum, from, to)
-        : monthlyRows(cum, from, to)
-  const max = Math.max(...rows.map((r) => r.value), 1)
-  const title = (key: string) => {
-    if (trendGran.value === 'day') return `${dayLabel(key)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
-    if (trendGran.value === 'month') return `${monthLabel(key)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
+  const max = Math.max(
+    ...totals.map((t) => t ?? 0),
+    1,
+  )
+  const title = (key: string, value: number) => {
+    if (trendGran.value === 'day') return `${dayLabel(key)} ${formatYen(value)}`
+    if (trendGran.value === 'month') return `${monthLabel(key)} ${formatYen(value)}`
     const [lo, hi] = bucketSpan(key, 'week', from, to)
-    return `${shortDate(lo)}〜${shortDate(hi)} ${formatYen(rows.find((r) => r.keys[0] === key)?.value ?? 0)}`
+    return `${shortDate(lo)}〜${shortDate(hi)} ${formatYen(value)}`
   }
-  return rows.map((r) => {
-    const key = String(r.keys[0])
-    return { key, value: r.value, height: r.value ? Math.max(Math.round((r.value / max) * 100), 3) : 0, title: title(key) }
+  return buckets.map((key, i) => {
+    const value = totals[i] ?? 0
+    return { key, value, height: value ? Math.max(Math.round((value / max) * 100), 3) : 0, title: title(key, value) }
   })
 })
 const trendAxis = computed(() => {
@@ -431,7 +456,7 @@ const groups = computed(() => {
           <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
         </p>
         <p class="kpi-sub">
-          レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }} ・ {{ period.compareLabel }} {{ formatYen(overview?.totals.compare_value ?? null) }}
+          レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }}
         </p>
       </section>
 
@@ -443,10 +468,9 @@ const groups = computed(() => {
         <!-- TASK-65: a row press toggles the payment filter in place (the
              null-key aggregates stay inert rows) -->
         <RankedList
-          v-if="(payments?.sections[0]?.rows.length ?? 0) > 0"
-          :rows="payments!.sections[0]!.rows"
+          v-if="paymentRows.length > 0"
+          :rows="paymentRows"
           :select="onPaymentRow"
-          colors
         />
         <p
           v-else

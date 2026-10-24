@@ -1,26 +1,26 @@
 <script setup lang="ts">
-// Loading placeholder for the dash-grid screens (TASK-39 D): the same grid
-// silhouette as the loaded dashboard (kpi + side card + two wide rows),
-// flat single-color blocks — no shimmer, no per-item motion. Decorative
-// blocks are aria-hidden; the screen-reader text carries the loading state.
+// Loading placeholder for the dash-grid screens (TASK-39 D, TASK-89: the
+// reading screens are a one-column zone stack now): the same silhouette as
+// the loaded page (headline block + trend bars + ruled rows), flat
+// single-color blocks — no shimmer, no per-item motion. Decorative blocks
+// are aria-hidden; the screen-reader text carries the loading state.
 </script>
 
 <template>
   <div
-    class="dash-grid skeleton"
+    class="view-stack skeleton"
     aria-hidden="true"
     data-test="loading"
   >
     <p class="sr-only">
       読み込んでいます...
     </p>
-    <section class="card">
+    <section class="zone">
       <span class="sk sk-label" />
       <span class="sk sk-value" />
       <span class="sk sk-line" />
-      <span class="sk sk-line short" />
     </section>
-    <section class="card">
+    <section class="zone">
       <span class="sk sk-label" />
       <div class="sk sk-bars">
         <span
@@ -31,19 +31,9 @@
         />
       </div>
     </section>
-    <section class="card wide">
+    <section class="zone">
       <span class="sk sk-label" />
       <span class="sk sk-line" />
-      <span class="sk sk-line" />
-      <span class="sk sk-line short" />
-    </section>
-    <section class="card">
-      <span class="sk sk-label" />
-      <span class="sk sk-line" />
-      <span class="sk sk-line short" />
-    </section>
-    <section class="card wide">
-      <span class="sk sk-label" />
       <span class="sk sk-line" />
       <span class="sk sk-line short" />
     </section>

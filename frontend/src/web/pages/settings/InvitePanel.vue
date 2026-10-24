@@ -96,13 +96,96 @@ async function copyUrl(row: IssuedRow): Promise<void> {
     class="card"
     data-test="invite-panel"
   >
-    <h2>家計簿を共有</h2>
+    <div class="card-head">
+      <h2>家計簿を共有</h2>
+      <div class="head-actions">
+        <FormDialog
+          v-if="session.ownedLedgers.length > 0"
+          v-model:open="dialogOpen"
+          label="共有 URL を発行"
+          test="invite-dialog"
+        >
+          <template #trigger>
+            <IconButton
+              v-if="session.ownedLedgers.length > 0"
+              icon="plus"
+              label="共有 URL を発行"
+              variant="primary"
+              :disabled="busy"
+              aria-haspopup="dialog"
+              :aria-expanded="dialogOpen"
+              test="invite-issue"
+              @click="openDialog"
+            />
+          </template>
+          <h3>{{ chosenLedger?.name ?? '家計簿' }}を共有</h3>
+          <label class="field"><span>家計簿</span><select
+            v-model="inviteLedgerId"
+            data-test="invite-ledger"
+          >
+            <option
+              v-for="l in session.ownedLedgers"
+              :key="l.id"
+              :value="l.id"
+            >
+              <span
+                class="option-dot"
+                :style="{ background: `var(--ledger-${l.color})` }"
+              />{{ l.name }}
+            </option>
+          </select></label>
+          <label class="field"><span>権限</span><select
+            v-model="inviteRole"
+            data-test="invite-role"
+          >
+            <option value="editor">
+              編集
+            </option>
+            <option value="viewer">
+              閲覧のみ
+            </option>
+          </select></label>
+          <label class="field"><span>メモ</span><input
+            v-model="inviteNote"
+            type="text"
+            placeholder="誰に渡すかのメモ（空欄なら発行日時・運用者のみ閲覧）"
+            maxlength="200"
+            data-autofocus
+            data-test="invite-note"
+          ></label>
+          <p
+            v-if="dialogError"
+            class="msg msg-error"
+            role="alert"
+          >
+            {{ dialogError }}
+          </p>
+          <div class="actions">
+            <button
+              class="btn btn-primary"
+              :disabled="busy"
+              data-test="invite-submit"
+              @click="issueInvite"
+            >
+              発行
+            </button>
+            <button
+              class="btn"
+              :disabled="busy"
+              @click="dialogOpen = false"
+            >
+              やめる
+            </button>
+          </div>
+        </FormDialog>
+      </div>
+    </div>
     <div
       v-if="session.ownedLedgers.length > 0"
       data-test="invite"
     >
       <p class="muted small">
-        家計簿への参加（編集・閲覧）を依頼する共有 URL を発行します。URL は一度だけ表示されます。
+        家計簿への参加を依頼する共有 URL を発行します（URL は一度だけ表示されます）。
       </p>
       <ul
         v-if="issued.length > 0"
@@ -164,83 +247,5 @@ async function copyUrl(row: IssuedRow): Promise<void> {
     >
       家計簿の共有 URL の発行は、家計簿のオーナーのみができます。
     </p>
-    <FormDialog
-      v-model:open="dialogOpen"
-      label="共有 URL を発行"
-      test="invite-dialog"
-    >
-      <template #trigger>
-        <IconButton
-          v-if="session.ownedLedgers.length > 0"
-          icon="plus"
-          label="共有 URL を発行"
-          variant="primary"
-          :disabled="busy"
-          aria-haspopup="dialog"
-          :aria-expanded="dialogOpen"
-          test="invite-issue"
-          @click="openDialog"
-        />
-      </template>
-      <h3>{{ chosenLedger?.name ?? '家計簿' }}を共有</h3>
-      <label class="field"><span>家計簿</span><select
-        v-model="inviteLedgerId"
-        data-test="invite-ledger"
-      >
-        <option
-          v-for="l in session.ownedLedgers"
-          :key="l.id"
-          :value="l.id"
-        >
-          <span
-            class="option-dot"
-            :style="{ background: `var(--ledger-${l.color})` }"
-          />{{ l.name }}
-        </option>
-      </select></label>
-      <label class="field"><span>権限</span><select
-        v-model="inviteRole"
-        data-test="invite-role"
-      >
-        <option value="editor">
-          編集
-        </option>
-        <option value="viewer">
-          閲覧のみ
-        </option>
-      </select></label>
-      <label class="field"><span>メモ</span><input
-        v-model="inviteNote"
-        type="text"
-        placeholder="誰に渡すかのメモ（空欄なら発行日時・運用者のみ閲覧）"
-        maxlength="200"
-        data-autofocus
-        data-test="invite-note"
-      ></label>
-      <p
-        v-if="dialogError"
-        class="msg msg-error"
-        role="alert"
-      >
-        {{ dialogError }}
-      </p>
-      <div class="actions">
-        <button
-          class="btn btn-primary"
-          :disabled="busy"
-          data-test="invite-submit"
-          @click="issueInvite"
-        >
-          発行
-        </button>
-        <button
-          class="btn"
-          :disabled="busy"
-          @click="dialogOpen = false"
-        >
-          やめる
-        </button>
-      </div>
-    </FormDialog>
   </section>
 </template>

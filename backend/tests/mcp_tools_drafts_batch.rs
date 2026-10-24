@@ -1936,6 +1936,10 @@ async fn single_approve_keeps_current_behaviour() {
     let receipt_id = sc["receipt_id"].as_i64().unwrap();
     assert_eq!(sc["idempotent_hit"], json!(false));
     assert!(text_of(&r).contains("登録しました"));
+    // TASK-80: the success text ends with the web deep link of this receipt
+    // [covers:mcp-tools.receipt-web-url-line]
+    let want_url = format!("webで見る: http://localhost:40281/receipts/{receipt_id}");
+    assert!(text_of(&r).contains(&want_url), "{}", text_of(&r));
 
     // resend: idempotent success
     let r = call(
@@ -1963,6 +1967,8 @@ async fn single_approve_keeps_current_behaviour() {
     assert_eq!(r["isError"], json!(true));
     let text = text_of(&r);
     assert!(text.contains("rev 2"), "{text}");
+    // [covers:mcp-tools.receipt-web-url-line] no URL line on error responses
+    assert!(!text.contains("webで見る: "), "{text}");
     assert_eq!(r["structuredContent"]["draft"]["revision"], json!(2));
 
     // closed draft: conflict wording
@@ -1978,6 +1984,12 @@ async fn single_approve_keeps_current_behaviour() {
     assert!(
         text_of(&r).contains("破棄済み"),
         "conflict wording: {}",
+        text_of(&r)
+    );
+    // [covers:mcp-tools.receipt-web-url-line] no URL line on error responses
+    assert!(
+        !text_of(&r).contains("webで見る: "),
+        "no URL line on conflict: {}",
         text_of(&r)
     );
 
@@ -2012,6 +2024,12 @@ async fn single_approve_keeps_current_behaviour() {
     .await;
     assert_eq!(r["isError"], json!(true));
     assert!(text_of(&r).contains("閲覧のみ"), "{}", text_of(&r));
+    // [covers:mcp-tools.receipt-web-url-line] no URL line on error responses
+    assert!(
+        !text_of(&r).contains("webで見る: "),
+        "no URL line for viewer: {}",
+        text_of(&r)
+    );
 
     let other = common::auth::create_user_direct(&s.pool, "Other", None).await;
     let d7 = insert_pending_draft(&s.pool, s.owner, other, OK_PAYLOAD, 1).await;
@@ -2105,6 +2123,21 @@ async fn approve_batch_returns_per_item_results() {
         .collect();
     assert_eq!(tm.len(), 1);
     assert_eq!(tm[0]["detail"]["draft_id"], json!(a5));
+    // TASK-80: every approved receipt_id adds its own web URL line
+    // [covers:mcp-tools.receipt-web-url-line]
+    let text = text_of(&r);
+    let url_lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("webで見る: "))
+        .collect();
+    assert_eq!(url_lines.len(), 3, "3 approved -> 3 URL lines: {text}");
+    for id in [a1, a2, a5] {
+        let rid = results.iter().find(|x| x["draft_id"] == id).unwrap()["receipt_id"]
+            .as_i64()
+            .unwrap();
+        let want_url = format!("webで見る: http://localhost:40281/receipts/{rid}");
+        assert!(url_lines.contains(&want_url.as_str()), "{text}");
+    }
 
     // resend a1: idempotent, still not an error
     let r = call(
@@ -2119,6 +2152,39 @@ async fn approve_batch_returns_per_item_results() {
     let results = r["structuredContent"]["results"].as_array().unwrap();
     assert_eq!(results[0]["outcome"], "idempotent");
     assert!(results[0]["receipt_id"].is_i64());
+    // TASK-80: the idempotent resend keeps its single URL line
+    // [covers:mcp-tools.receipt-web-url-line]
+    let text = text_of(&r);
+    let url_lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("webで見る: "))
+        .collect();
+    assert_eq!(url_lines.len(), 1, "{text}");
+    assert_eq!(
+        url_lines[0],
+        format!(
+            "webで見る: http://localhost:40281/receipts/{}",
+            results[0]["receipt_id"].as_i64().unwrap()
+        )
+    );
+
+    // all-failure call (stale / conflict / not_found): isError with no URL line
+    // [covers:mcp-tools.receipt-web-url-line]
+    let r = call(
+        &s.router,
+        &token,
+        3,
+        "approve_receipt_drafts",
+        json!({"items": [
+            {"draft_id": a3, "revision": 1},
+            {"draft_id": a4, "revision": 1},
+            {"draft_id": 999999, "revision": 1},
+        ]}),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(true));
+    let text = text_of(&r);
+    assert!(!text.contains("webで見る: "), "{text}");
 }
 
 // [covers:mcp-approve-batch.authz-and-not-found-uniform]

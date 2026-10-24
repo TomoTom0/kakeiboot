@@ -23,6 +23,13 @@ MCP経由（ChatGPT等）での操作・閲覧を主とし、web画面を補助�
 - 会話内での修正指示・承認は可
 - 画像入力はstaging（一時DB）に保存し、修正・承認後に本DBへ確定する
 
+## UI設計原則
+
+- UIは構造とメリハリ（方向・長さ・色・符号・位置）で表現する。UIを説明する文字ラベル（内容を説明する見出し・補足文・動詞toggle・実装の分岐名）を置かない。画面に残る語はデータ名（品目・店名等）と操作名（寸法切替等）と比較基準の文脈語（前月比等）のみ
+- 増減・差分は符号+色+長さ（bar）で表す。動詞の過去形（増えた/減った等）や分岐の名前（新しく増えた等）をUI部品のラベル・見出しに使わない。動詞は生成文コンテンツ内のみで成立する
+- 表現物ごとに専用の視覚componentを作る。汎用text部品にdataを流し込んで語で補完する構成を取らない
+- 機能・表現物は要件由来（ユーザーの指示・指摘・承認）を確認してから作る。設計sessionが過去会話の「復元した指示系列」等から新機能を立ち上げない。設計reviewには出自確認を含める
+
 ## 運用
 
 - stg・prodの操作はmiseタスクで行う（作業repoのどこからでも、運用dirへのcd不要）: deployは `mise run stg:deploy` / `prod:deploy`、admin CLIは `mise run stg:admin -- user list` 等、service操作は `mise run stg:service -- status` 等（prodも同様）。実serverは /srv/opt/tomo/run/app/tool/kakeiboot/{stg,prod} の systemd user service（kakeiboot-stg/prod）。作業repoでのserver起動は dev（dev:backend・dev:frontend）まで。詳細は docs/deploy.md

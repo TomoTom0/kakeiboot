@@ -195,6 +195,7 @@ describe('search page: receipts tab', () => {
       q: '牛乳',
       scope: 'period',
       year: '2026',
+      
       labels: 'red',
     })
     expect(list).toHaveBeenLastCalledWith(
@@ -277,7 +278,7 @@ describe('search page: items tab', () => {
     const cat = wrapper.find('[data-test="search-item-category"]')
     expect(cat.exists()).toBe(true)
     const cu = new URL(cat.attributes('href')!, 'http://localhost')
-    expect(cu.pathname).toBe('/categories/1/2')
+    expect(cu.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(cu.searchParams)).toEqual({})
 
     // the scope chip narrows the item query the same way — and the category
@@ -289,13 +290,14 @@ describe('search page: items tab', () => {
       tab: 'items',
       scope: 'period',
       month: '2026-10',
+      
     })
     expect(itemCalls.at(-1)).toEqual([
       1,
       expect.objectContaining({ q: '牛乳', from: '2026-10-01', to: '2026-10-31' }),
     ])
     const cu2 = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(cu2.pathname).toBe('/categories/1/2')
+    expect(cu2.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(cu2.searchParams)).toEqual({ month: '2026-10' })
   })
 
@@ -309,7 +311,7 @@ describe('search page: items tab', () => {
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
     const withLabel = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(withLabel.pathname).toBe('/categories/1/2')
+    expect(withLabel.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(withLabel.searchParams)).toEqual({ month: '2026-10', labels: 'red' })
 
     // a category path the catalog cannot resolve (a deleted / foreign tree)
