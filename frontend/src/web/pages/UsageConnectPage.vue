@@ -17,6 +17,11 @@ import UsageFigure from '../components/usage/UsageFigure.vue'
 // TASK-48: the copy success is the button's own icon swap (copy → check with
 // a pop, .copy-btn.is-done) — no text row joins the URL box, so the box keeps
 // its height; the spoken confirmation is the sr-only status beside it.
+// TASK-81: after the URL box, step-1 carries the ChatGPT-side sub steps
+// (ol.usage-substeps) whose first item links to https://chatgpt.com/ — the
+// connector-add deeplink is undocumented, so the link plus the sub step
+// wording is the practical ceiling. The wording is provisional (specific
+// menu names) until the real-device check generalizes it (design §3.2).
 const url = `${location.origin}/mcp`
 const copied = ref(false)
 const copyFailed = ref(false)
@@ -62,7 +67,7 @@ onUnmounted(() => clearTimeout(restoreTimer))
         <li data-test="step-1">
           <h2>ChatGPT に接続URLを登録する</h2>
           <p>
-            ChatGPT の設定からコネクタ（MCP）の追加画面を開き、下の URL を入力します。スマホの ChatGPT アプリでも同じ手順で接続できます。
+            下の URL をコピーして、ChatGPT のコネクタ（MCP）追加画面に登録します。スマホの ChatGPT アプリでも同じ手順で接続できます。
           </p>
           <div
             class="usage-url"
@@ -99,6 +104,31 @@ onUnmounted(() => clearTimeout(restoreTimer))
               コピーできませんでした。URL を選択してコピーしてください。
             </p>
           </div>
+          <ol
+            class="usage-substeps"
+            data-test="chatgpt-steps"
+          >
+            <li data-test="chatgpt-step-1">
+              <a
+                href="https://chatgpt.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-test="chatgpt-open-link"
+              >ChatGPT を開く</a> を押して、ChatGPT にログインします
+            </li>
+            <li data-test="chatgpt-step-2">
+              設定から「コネクター」（Apps &amp; Connectors）を開きます
+            </li>
+            <li data-test="chatgpt-step-3">
+              「高度な設定」で開発者モードをオンにします（初回のみ）
+            </li>
+            <li data-test="chatgpt-step-4">
+              「コネクタを追加」で名前（例: kakeiboot）と、コピーした URL を入力します
+            </li>
+            <li data-test="chatgpt-step-5">
+              認証画面が開くので、次のステップ 2 でログインと許可を行います
+            </li>
+          </ol>
           <UsageFigure
             id="fig-chatgpt-add"
             caption="ChatGPT のコネクタ（MCP）追加画面"

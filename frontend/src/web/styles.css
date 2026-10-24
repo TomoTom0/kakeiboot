@@ -1753,6 +1753,12 @@ a.sub-row:hover { background: var(--bb-hover); }
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ChatGPT-side sub steps of step-1 (TASK-81): the numbering rides the
+   default decimal list style — no counter chip like the parent .usage-steps,
+   only a light indent and spacing so the parent/child hierarchy reads */
+.usage-substeps { margin: 0.5rem 0 0; padding-left: 1.5rem; }
+.usage-substeps li { margin: 0.25rem 0; }
+
 /* figures of the walkthrough: screenshots at a readable phone width, dashed
    placeholders until an asset is captured */
 .usage-fig { margin: 1rem 0 0; text-align: center; }

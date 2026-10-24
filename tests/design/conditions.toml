@@ -1168,7 +1168,7 @@ expect_return = "user X の未使用 recovery 行は 1 行（新 token）。旧 
 id = "auth-invitation.recovery-ttl-bounds"
 target_function = "admin::parse_ttl"
 source = "docs/spec_auth.md §2-1（recovery 既定 TTL 1時間・--ttl で最大24時間。setup 既定 24時間）・§9"
-source_lines = "backend/tests/admin_cli.rs:731, backend/src/admin.rs:1839"
+source_lines = "backend/tests/admin_cli.rs:731, backend/src/admin.rs:1908"
 description = "recovery の TTL は既定 1 時間で、--ttl に 24 時間超・不正な値は引数エラーになる。setup の既定は 24 時間"
 given = "--ttl 25h・--ttl abc・--ttl 指定なし"
 expect_throw = "25h と abc は引数エラー。指定なしは recovery 1 時間・setup 24 時間"
@@ -1177,7 +1177,7 @@ expect_throw = "25h と abc は引数エラー。指定なしは recovery 1 時�
 id = "auth-invitation.setup-note-required"
 target_function = "admin::validate_args（token issue --kind setup --note 必須）"
 source = "docs/spec_auth.md §2-1・§9（admin token issue --kind setup --note <誰に渡したか>。--note 必須）"
-source_lines = "backend/src/admin.rs:1853"
+source_lines = "backend/src/admin.rs:1922"
 description = "setup token 発行で --note が無い場合は引数エラーになる"
 given = "token issue --kind setup（--note 無し）"
 expect_throw = "引数エラー"
@@ -4567,7 +4567,7 @@ expect_return_shape = "ol.usage-steps に step-1〜step-3（各見出し h2・UR
 id = "web-usage.url-shown"
 target_function = "web/pages/UsageConnectPage.vue（connect-url-box・connect-url・copy-url・copy-done）"
 source = "docs/spec_mcp-tools.md §12（接続URL表示ブロック。接続URLの正本は frontend の runtime 生成）・docs/spec_mcp-tools.md §12（TASK-48: ユーザー指摘「コピーしましたがurlのboxの中に出て表示が崩れて、しかもアニメーションもない。文字で示すのではなく演出で示すべき」→ box 内の完了文言を廃止し copy→check の icon 切替 + pop 演出〔CSS の詳細は web-usage.copy-motion・実測は web-usage.copy-feedback-real〕・読み上げは sr-only の role=status）"
-source_lines = "frontend/tests/unit/web/usage-pages.test.ts:86"
+source_lines = "frontend/tests/unit/web/usage-pages.test.ts:115"
 description = "接続URLは frontend が runtime 生成（location.origin + /mcp。dev / stg / prod に自動追従）し、折返し可能な code 文字列として常時表示する。コピーbutton（icon-only・aria-label「URL をコピー」）で navigator.clipboard.writeText に書き込み、成功すると button の icon が copy から check へ切り替わり（box 内に可視テキストの完了行は増えない）、「コピーしました」は button 直後の visually-hidden（sr-only）な role=status として読み上げにのみ通知される（data-test=copy-done）。数秒後に icon は copy へ戻る。失敗時は msg-error で「コピーできませんでした。URL を選択してコピーしてください。」を表示する（URL は常時選択可能なため fallback 経路は不要）"
 given = "/usage/connect を開き、コピーbuttonを押す（writeText 成功 / 失敗）"
 expect_return_shape = "connect-url の text が `${location.origin}/mcp`（break で折返し）・copy 押下で navigator.clipboard.writeText が同 URL で呼ばれ button の svg が check へ切替（box 内の可視テキストは増えない）し aria-label と title も「コピーしました」へ切替・copy-done（コピーしました）が role=\"status\" の sr-only として存在・数秒後に icon と aria-label が戻る・失敗（reject）で msg-error の案内"
@@ -4576,7 +4576,7 @@ expect_return_shape = "connect-url の text が `${location.origin}/mcp`（break
 id = "web-usage.figures"
 target_function = "web/components/usage/UsageFigure.vue・ConnectFlow.vue（figure・figcaption・placeholder）"
 source = "docs/spec_mcp-tools.md §12（図解: inline SVG 模式図・UsageFigure・placeholder の運用）"
-source_lines = "frontend/tests/unit/web/usage-pages.test.ts:133"
+source_lines = "frontend/tests/unit/web/usage-pages.test.ts:162"
 description = "各ステップの図は figure + figcaption で構成する。接続の流れ（F1）は inline SVG コンポーネント（role=img・aria-label で内容を文章化・コマタイトルのみの text）、自画面・ChatGPT 側のスクショは UsageFigure で出し、src（asset）が無い図は dashed 枠 + 差し替え説明文（note）の placeholder を表示する。期待値は src の中身（画像内容）に依存させない（F2/F6 のスクショ差し替え後に本条件の期待値は反転する: 未配置図が img 表示へ）"
 given = "/usage/connect を開く（asset 未配置の図〔F2/F6〕を含む）"
 expect_return_shape = "各図が figure + figcaption・connect-flow の svg に role=\"img\" と aria-label（接続の流れの説明）・src 無しの figure は placeholder（note に何を差し替えるかの説明）で img 要素は存在しない"
@@ -4585,7 +4585,7 @@ expect_return_shape = "各図が figure + figcaption・connect-flow の svg に 
 id = "web-usage.apps-link"
 target_function = "web/pages/AppsPage.vue（未接続表示の usage-link）"
 source = "docs/spec_mcp-tools.md §12（/apps の未接続表示に「ChatGPTとの接続方法を見る」リンク）"
-source_lines = "frontend/tests/unit/web/usage-pages.test.ts:170"
+source_lines = "frontend/tests/unit/web/usage-pages.test.ts:199"
 description = "/apps の未接続状態（「接続中のアプリはありません。」）には /usage/connect への「ChatGPTとの接続方法を見る」リンクを置く（MCP 登録を探す文脈で最も到達しやすい場所）"
 given = "grants が空の状態で /apps を開く"
 expect_return_shape = "未接続表示（empty）の直後に usage-link（RouterLink /usage/connect・文言「ChatGPTとの接続方法を見る」）がある"
@@ -4598,10 +4598,10 @@ decided_at = "2026-10-16"
 decided_by = "claude"
 
 [[excluded]]
-item = "F2/F6（ChatGPT 側スクショ）の画像内容（スクショの中身・light 固定の配色）と ChatGPT 側の具体的な操作手順（メニュー名・developer mode 要否等）の文言検証"
-source = "docs/spec_mcp-tools.md §12（ChatGPT 側の操作手順は確定できず一般化文言 + placeholder。条件書の期待値は src の中身に依存させない。実機確認後に文言・スクショを差し替え）"
-reason = "画像の内容と ChatGPT 側UIは repo に記録がなく期待値を確定できず、ユーザー実機確認後に差し替える（差し替え手順に web-usage.figures 期待値の反転を含む）。placeholder 分岐と figure 構造は web-usage.figures で、文言の枠組み（3ステップ・許可内容の語彙）は web-usage.connect-steps で条件化済み"
-decided_at = "2026-10-16"
+item = "F2/F6（ChatGPT 側スクショ）の画像内容（スクショの中身・light 固定の配色）とサブ手順文言の内容（メニュー名〔設定・コネクター・開発者モード等〕・developer mode 要否等の妥当性）の文言検証。文言の存在・構造（ol.usage-substeps・li 5件・chatgpt-open-link の href/target/rel・文言「ChatGPT を開く」）は web-usage.chatgpt-link が条件化する"
+source = "docs/spec_mcp-tools.md §12（ChatGPT 側の操作手順は一般化文言 + placeholder。条件書の期待値は src の中身・メニュー名の妥当性に依存させない。実機確認後に文言・スクショを差し替え）・tmp/tasks/tm-81/design_usage-connect-link.md §3.2（サブ手順文言は初期実装の仮文言→実機確認で一般化へ確定する2段階運用）"
+reason = "サブ手順は仮文言（固有メニュー名を含む）を実装済みで、実機確認で実UIに合わせて差し替える。画像は入手後に差し替える（差し替え手順に web-usage.figures 期待値の反転を含む）。差し替えが文言内容の範囲を超えてサブ手順の段数・data-test 構成の変更を伴う場合（例: 実機確認で開発者モード不要と判明し 5→4 段になる等）は excluded の範囲外とし、web-usage.chatgpt-link の期待値（li 件数・chatgpt-step-N）をその時点で改訂する。placeholder 分岐と figure 構造は web-usage.figures で、文言の枠組み（3ステップ・許可内容の語彙）は web-usage.connect-steps で条件化済み"
+decided_at = "2026-10-24"
 decided_by = "claude"
 
 # TASK-36 設定ページの再構成。当初は左ナビ + 右パネルの7パネル構成だったが、実機指摘（2026-10-16 第2弾:
@@ -6133,5 +6133,117 @@ decided_by = "claude"
 item = "TASK-95（閲覧系 word-chrome 除去）のうち条件化しない表示項目: .zone h2/.zone-sub 視覚規則の削除（余白・罫のみの区画表現）・.zone-more の配置規則・.ibtn の anchor 利用時 text-decoration: none・trend-controls/mode/metric tab の dead style 削除。見出しの sr-only 化と icon link の期待は web-home.zone-headings-sr-only・stacked-trend-fixed・web-browse.context-carry の改訂版が担う"
 source = "TASK-95 起票（2026-10-24 ユーザー指摘「文字が大量に残っている[積み上げ 合計 金額 件数 単価]」。UI設計原則: 見出し・語tabでUIを説明しない）"
 reason = "§8「書く/書かない」の書かない該当: 色定数・余白・配置のみで意味のある分岐を持たない表示判断。語tabの不在・sr-only 見出しの存在は各条件の期待値内で担保する"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+# TASK-81 /usage/connect への「ChatGPT を開く」リンク+番号付きサブ手順（先行実装分。テスト先行第1段:
+# 条件書のみ先行追記）。TASK-64 分離案2: コネクタ追加の deeplink は 2026-10 時点で公式文書化がないため、
+# https://chatgpt.com/ へのリンク + ChatGPT 側操作の番号付きサブ手順を現実的上限とする。
+# UsageFigure スクショ差し替え（F2/F6 png 配置）と web-usage.figures 期待値の反転は画像入手後の後続 task
+# へ分離（先行実装では現行の placeholder 期待値・test をそのまま維持）。サブ手順文言の内容（メニュー名の
+# 妥当性）の除外継続と「文言の構造は条件化・文言内容は除外」の区別は、web-usage グループ内 TASK-37 由来の
+# [[excluded]]（F2/F6 の画像内容とサブ手順文言の内容）の文言更新で反映。
+# 正本は docs/spec_mcp-tools.md §12（本taskでリンク・サブ手順の記述追加。設計: tmp/tasks/tm-81/
+# design_usage-connect-link.md v2・REVIEW-14 承認済み）。（条件書先行追記時点の説明: 当時 uncovered・
+# source_lines 空だったが、同一taskの実装・test 追加で covered 化・sync 済み〔REVIEW-16 L-1 対応〕。）
+
+[[condition]]
+id = "web-usage.chatgpt-link"
+target_function = "web/pages/UsageConnectPage.vue（step-1 サブ手順 ol.usage-substeps・chatgpt-open-link）"
+source = "docs/spec_mcp-tools.md §12（/usage/connect step-1。TASK-64分離案2: deeplink非提供のため ChatGPT へのリンク+一般化手順の明記）"
+source_lines = "frontend/tests/unit/web/usage-pages.test.ts:86"
+description = "step-1（接続URLの登録）は URL box の直後に ChatGPT 側の操作を示す番号付きサブ手順を持ち、その手順1に https://chatgpt.com/ への外部リンク「ChatGPT を開く」を含む。リンクは target=_blank・rel=noopener noreferrer。サブ手順の文言は初期実装が仮文言（固有メニュー名を含む）で、実機確認時に一般化へ寄せて確定する運用とし（設計書 §3.2）、文言の内容（メニュー名の妥当性）の検証は実機確認後の差し替えまで除外する（excluded 参照）"
+given = "ログイン済みで /usage/connect を開く"
+expect_return_shape = "step-1 内に ol[data-test=chatgpt-steps] 内に li 5件が DOM 順で並ぶ（番号の描画は list-style: decimal 任せのため、視覚的な番号ではなく DOM 構造・順序で検証する）・その li[data-test=chatgpt-step-1] 内に a[data-test=chatgpt-open-link]（href=https://chatgpt.com/・target=_blank・rel に noopener と noreferrer を含む・文言「ChatGPT を開く」）がある・URL box（connect-url-box）とコピーbutton（copy-url）は従来どおり存在（copy-done はコピー成功時のみ v-if 描画のため本条件の対象外。コピー成功後の表示は url-shown / copy-feedback-real が担う）"
+
+[[excluded]]
+item = "サブ手順 ol の体裁（.usage-substeps の margin・list-style: decimal・親子の視覚階層）と「ChatGPT を開く」リンクの見た目（通常テキストリンク・外部 link icon 非付与）・target=_blank の新 tab 遷移の事前告知（「新しいウィンドウで開く」通知）"
+source = "tmp/tasks/tm-81/design_usage-connect-link.md §3.3（a要素の方針: 見た目は既存の通常テキストリンク・styles.css の新規追加は最小限）・§8（ol の最小 CSS・target=_blank の事前告知なしの割切り。実機確認時の見直し候補）"
+reason = "§8「書く/書かない」の書かない該当: 余白・list-style・装飾のみで意味のある分岐を持たない表示判断。ol・li・a の構造（href/target/rel・li 件数・順序）は web-usage.chatgpt-link が DOM で検証する。事前告知なしは設計の割切りで、文言追記が必要になった場合は実機確認時に判断する"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+# TASK-83 backup自動化の導入（テスト先行第1段: 条件書のみ先行追記）。backend へ admin backup
+# subcommand（§4-5: read-only open・VACUUM INTO・tmp→rename・flat variant）が入るため、既存
+# admin CLI 系 group の慣行（id prefix auth-cli.*・source は docs/spec_auth.md §N）で
+# auth-cli.backup-* 4 条件を追加。正本は docs/spec_auth.md §9（admin backup を TASK-83 実装で
+# 追記。追記後はそちらが正本。設計: tmp/tasks/tm-83/design_backup-automation.md v4〔REVIEW-15
+# 承認済み〕§4-5・§4-1・§7）。テストは backend/tests/admin_cli*.rs へ追加予定（稼働中一貫性は
+# test 内で db へ書込を混ぜて検証〔設計§7〕）。timer・script・unit・mise タスクは cargo/vitest
+# 対象外（stg 実機・手順書ベース検証: 設計§6-2。実績は tm body へ記録）のため下記 [[excluded]]
+# に記録。§4-1 の暗黙前提（画像 file 保存が DB insert より前）の新規条件化も [[excluded]] に
+# 記録（既存条件 mcp-draft-batch.store-failure-outcome と web-data-api.ledger-import 系が同一の
+# 不変条件を検証済みのため。成功経路の順序は実装タスクでの実装順確認に帰属）。実装・
+# [covers:<id>] タグは後続のため、追記直後の本時点で新条件が uncovered で source_lines が空なのは
+# 想定内（TASK-80・81・89 追記時と同じ状況。テストコード作成後に verify-conditions.py が自動 sync する）。
+
+[[condition]]
+id = "auth-cli.backup-snapshot"
+target_function = "admin::run Backup variant（read-only open → VACUUM INTO → fs::rename）"
+source = "docs/spec_auth.md §9（admin backup〔TASK-83 実装で追記予定〕。設計: tmp/tasks/tm-83/design_backup-automation.md v4 §4-5〔REVIEW-15承認済み〕）"
+source_lines = "backend/tests/admin_cli_backup.rs:221"
+description = "admin backup --dest <file> は --config-dir の config から db path を解決して read-only open（SqliteConnectOptions に .read_only(true)・create_if_missing(false)・migration 不実行。既存 db.rs::connect_file は流用しない）で開き、VACUUM INTO を bind parameter で <dest>.tmp へ 1 文実行（transaction 外・auto-commit）した後に fs::rename で dest へ置く。成功時 exit 0 で <dest>.tmp は残存しない。read-only 接続のため本 db への書込・migration 実行は起きない。実装形状は admin::Command への flat なトップレベル variant Backup { dest }（単一動作・引数 1 つのためサブグループを切らない）で、Backup は admin::run の全 variant 共通 connect_file（create_if_missing(true) + run_migrations 付き read-write open）を通らない run 構造とする"
+given = "WAL 運用の実 db（数行のデータあり）に --config-dir 指定で存在しない dest path を指定して admin backup を実行"
+expect_return_shape = "exit 0 で dest に単一 file が存在し <dest>.tmp は無い・source db へ書込・migration 実行が無い（db file が書き換わらない）"
+
+[[condition]]
+id = "auth-cli.backup-integrity"
+target_function = "admin::run Backup variant（VACUUM INTO の snapshot 一貫性）"
+source = "docs/spec_auth.md §9（admin backup〔TASK-83 実装で追記予定〕。設計: tmp/tasks/tm-83/design_backup-automation.md v4 §4-5・§4-1・§8-4）"
+source_lines = "backend/tests/admin_cli_backup.rs:270"
+description = "生成 file は PRAGMA integrity_check が ok の単一 file snapshot になる。VACUUM INTO は read transaction＝WAL reader として動作するため並行 writer をブロックせず（WAL では reader は writer をブロックしない）、稼働中の db へ書込が混ざっていても取得結果は単一時点（時点T）のトランザクション整合を持つ（未 checkpoint の書込が失われない。db.sqlite 単体 copy との差が online backup 必須の根拠）"
+given = "別接続からの書込が行われる稼働中の db（test 内で backup 実行に書込を混ぜる: 設計§7）に対する admin backup"
+expect_return_shape = "生成 file で PRAGMA integrity_check = ok・内容が書込前後の混在でなく単一時点の整合 snapshot（行数等がいずれかの時点の値に一致）"
+
+[[condition]]
+id = "auth-cli.backup-error-exits"
+target_function = "admin::run Backup variant（open error・失敗時の中途 file 掃除）"
+source = "docs/spec_auth.md §9（admin backup〔TASK-83 実装で追記予定〕。設計: tmp/tasks/tm-83/design_backup-automation.md v4 §4-5）"
+source_lines = "backend/tests/admin_cli_backup.rs:361"
+description = "失敗系はすべて非ゼロ exit し中途 file を残さない: dest の親 dir 不在、db file 不在（--config-dir の path 誤り。create_if_missing(false) のため空 db を新規作成しない・migration も実行しない＝Backup variant が共通 connect_file を通らない run 構造であることの観測面）は open error として即座に失敗する。VACUUM INTO 失敗時は tmp を掃除して非ゼロ exit する"
+given = "存在しない親 dir を含む dest path / 存在しない db file path を指す config での admin backup"
+expect_return_shape = "いずれも非ゼロ exit・dest も <dest>.tmp も存在せず・誤指定 path に db file が新規作成されない"
+
+[[condition]]
+id = "auth-cli.backup-tmp-idempotent"
+target_function = "admin::run Backup variant（既存 <dest>.tmp の事前削除）"
+source = "docs/spec_auth.md §9（admin backup〔TASK-83 実装で追記予定〕。設計: tmp/tasks/tm-83/design_backup-automation.md v4 §4-5〔v4 L-1: 既存 tmp 削除による冪等化〕）"
+source_lines = "backend/tests/admin_cli_backup.rs:407"
+description = "VACUUM INTO は出力先 file が既に存在すると失敗する仕様（SQLite は既存 file へ上書きしない）のため、実行前に既存の <dest>.tmp があれば削除してから VACUUM INTO を実行する。kill・OOM 等で tmp が残留していても失敗せず、同名再実行・同日再実行が冪等に走る。dest 自体の既存 file は fs::rename で上書きされる（script 側の日次冪等＝同日再実行は同 dir へ上書き、の下支え）"
+given = "<dest>.tmp が既に存在する状態（前回中断の残留を模擬）と dest が既に存在する状態での再実行"
+expect_return_shape = "いずれも exit 0 で dest が新しい snapshot に更新され・残留 tmp に起因する失敗が起きない"
+
+[[excluded]]
+item = "TASK-83 のうち cargo/vitest 対象外の運用機構: systemd user timer（OnCalendar UTC 19:30=JST 04:30・Persistent=true・RandomizedDelaySec=15m・linger）と unit 2 種（kakeiboot-backup@.service/.timer）・構成 script kakeiboot-backup.sh の全 step（$DEST の mkdir -p・UTC 日付 STAMP〔同日再実行の同一 dir 上書き〕・DB 取得→images rsync --delete なし の順序制御〔逆順禁止〕・COMPLETED marker・last_success・KEEP 既定30の世代ローテーション・COMPLETED なし中途dirの次回成功時削除・失敗時非ゼロexit・usage と環境変数 KEEP override）・mise タスク（<env>:backup・<env>:backup-status・deploy の script 配布行）・shellcheck 等の script 静的検証（設計§7で見送り）・§6-2 の stg 実機検証手順（timer 初回実行と成功確認・失敗注入と翌回回復・復元訓練・prod 適用前の stg 運用期間確認）"
+source = "tmp/tasks/tm-83/design_backup-automation.md v4 §4-3・§4-4・§4-6〜4-9・§6-2・§7〔REVIEW-15承認済み〕"
+reason = "timer・shell script・systemd unit・mise タスクは cargo/vitest の検証対象外で、stg 実機での手順書ベース検証（設計§6-2）に帰属する。実績は TASK-83 の tm body へ記録する（設計§7）"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+[[excluded]]
+item = "read-only open（SQLITE_OPEN_READONLY）での WAL db open が -shm file 利用不可（server 停止中・異常停止直後）で失敗し得る条件（§8-8）"
+source = "tmp/tasks/tm-83/design_backup-automation.md v4 §8-8・§6-1〔REVIEW-15承認済み〕"
+reason = "-shm file の可用性は SQLite 外部の環境状態依存で cargo test では決定的に再現できない。運用では server 停止時の backup 取得を旧来の 3点copy 手順（server 停止して copy。deploy.md へ文書化）で回避し、timer 実行時は server 稼働中のため通常起きない。実機での観察は stg 運用期間確認（§6-2 手順4）に含まれる"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+[[excluded]]
+item = "admin backup の実行を audit_events（DB 監査表）に記録しないこと"
+source = "tmp/tasks/tm-83/design_backup-automation.md v4 §4-5（audit 不記録の設計判断）"
+reason = "操作主体が運用者で日次の noise になるため記録しない旨の設計判断（journal・last_success で足りる）であり、記録する実装経路が存在しないため検証対象の分岐がない。既存 auth-cli.audits-system-actions は token 発行・破壊操作の記録を検証するもので backup はその対象外"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+[[excluded]]
+item = "admin backup の --dest 省略時の引数エラー"
+source = "tmp/tasks/tm-83/design_backup-automation.md v4 §4-5（budget-book admin backup --dest <file>）"
+reason = "clap の required arg 検証で framework 保証済み（§8「書かない」の型システムで保証済みの分岐に相当）。--dest 指定時の解釈（flat variant Backup { dest } としての受け取り）は auth-cli.backup-snapshot の given・description が担う"
+decided_at = "2026-10-24"
+decided_by = "claude"
+
+[[excluded]]
+item = "§4-1 同一時点性の暗黙前提「画像 file 保存が DB insert より前」の新規条件化（設計§7: backend画像保存実装の順序確認を実装タスクの検証条件に含める）"
+source = "tmp/tasks/tm-83/design_backup-automation.md v4 §4-1・§7（REVIEW-15 未判明事項→検証条件化として解消）"
+reason = "同一の不変条件を既存条件が検証済み: mcp-draft-batch.store-failure-outcome は保存失敗注入で images テーブル 0 行（＝fs 書き出しが INSERT に先行）を期待値として明示検証しており、TASK-58 import 経路も web-data-api.ledger-import（file 実在・byte 一致）と web-data-api.ledger-import-invalid（失敗時 file 残存なし・行無増加）で検証済み。成功経路の書込順序そのものは cargo test で観測できる分岐がなく（失敗注入で観測できる上記の副作用のみ）、実装タスクでの実装順確認（domain::images::store_image は fs::write → INSERT INTO images の順）に帰属するため、新設条件は重複する"
 decided_at = "2026-10-24"
 decided_by = "claude"

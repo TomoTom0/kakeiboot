@@ -519,6 +519,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。invite / register の発行は web のみ（CLI では不可） |
 | `admin recovery list [--status open]` / `recovery show <R-番号>` | 回復依頼の一覧・詳細（受付日時、note、候補 user のアカウント番号・表示名・admin_note・系譜・候補の根拠と subject の first / last seen）。一覧の先頭に全体上限の超過件数を表示 |
 | `admin recovery resolve <R-番号> --user <user_id>` / `recovery reject <R-番号> [--reason]` | 帯域外の本人確認後に再登録 URL を発行して解決（`token issue --kind recovery` と同じ処理・確認）／却下 |
+| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/deploy.md`）と script（`scripts/backup/`）から利用 |
 
 確認規則（取り違え・誤操作防止）:
 
@@ -531,6 +532,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `user disable` | 表示名とアカウント番号の再入力 |
 
 - audit: token の発行・失効・使用、パスキー失効、ユーザー無効化、メモ更新、回復依頼の解決・却下、grant / session の失効をすべて `audit_events` に `actor_kind=system` で記録する（`action` は `token_issue` / `token_revoke` / `token_use` / `passkey_revoke` / `user_disable` / `user_note` / `recovery_resolve` / `recovery_reject` / `grant_revoke` / `session_revoke`。CLI 実行時の OS ユーザー名を after_json に含める）。token の平文は audit・ログに残さない。
+- backup の仕様: `admin backup --dest <file>` は db を backup 専用に **read-only open**（`create_if_missing(false)`・migration 不実行。他 variant 共通の read-write 接続〔create + migration 付き〕は使わない）で開き、`VACUUM INTO` を `<dest>.tmp` へ 1 文実行（bind parameter・transaction 外）した後に `fs::rename` で `dest` へ置く。db file 不在（`--config-dir` の path 誤り）は open error として即座に失敗し、**誤 path へ空 DB を新規作成しない**。`VACUUM INTO` は既存 file へ上書きしないため実行前に既存の `<dest>.tmp` を削除する（kill・OOM で tmp が残留していても同名再実行・同日再実行が冪等に走る）。dest の親 dir 不在・`VACUUM INTO` 失敗時は tmp を掃除して非ゼロ exit する（中途 file を残さない）。`VACUUM INTO` は read transaction＝WAL reader として動作するため並行 writer をブロックせず、出力は単一時点のトランザクション整合を持つ単一 file になる（`PRAGMA integrity_check` ok）。audit_events には記録しない（操作主体が運用者で日次実行のため。記録は journal〔systemd unit 経由〕と backup 側の `last_success` file が担う）。
 - 回復の運用手順:
   1. 通常の紛失: 本人確認 → `token issue --kind recovery`（または `recovery resolve`）→ URL を帯域外で渡す → 再登録完了で既存 web session は自動失効。
   2. 乗っ取りが疑われる場合: 本人確認 → `session revoke --all-of` → `grant revoke --all-of` → `passkey revoke --all` → `token issue --kind recovery` の順で攻撃者の経路を閉じてから再登録させる。再登録後、ユーザーは ChatGPT で再接続する。

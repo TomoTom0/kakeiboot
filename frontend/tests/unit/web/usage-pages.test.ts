@@ -83,6 +83,35 @@ describe('UsageConnectPage (/usage/connect)', () => {
     expect(apps[0]!.text()).toContain('接続中のアプリ')
   })
 
+  it('[covers:web-usage.chatgpt-link] step-1 の URL box 直後に ChatGPT 側サブ手順 ol（li 5件・DOM順）があり、手順1は https://chatgpt.com/ を別 tab で開くリンク「ChatGPT を開く」', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/usage/connect')
+    const step1 = wrapper.find('li[data-test="step-1"]')
+    expect(step1.exists()).toBe(true)
+
+    // the ChatGPT-side sub steps sit inside step-1 after the URL box; the
+    // numbering is list-style: decimal, so the sequence is verified on the
+    // DOM order of the five li, not on any rendered numeral
+    const sub = step1.find('ol[data-test="chatgpt-steps"]')
+    expect(sub.exists()).toBe(true)
+    expect(sub.findAll('li').map((li) => li.attributes('data-test'))).toEqual(['chatgpt-step-1', 'chatgpt-step-2', 'chatgpt-step-3', 'chatgpt-step-4', 'chatgpt-step-5'])
+
+    // sub step 1 opens ChatGPT itself: external URL, new tab, no opener leak
+    const link = sub.find('li[data-test="chatgpt-step-1"] a[data-test="chatgpt-open-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('https://chatgpt.com/')
+    expect(link.attributes('target')).toBe('_blank')
+    const rel = link.attributes('rel') ?? ''
+    expect(rel).toContain('noopener')
+    expect(rel).toContain('noreferrer')
+    expect(link.text()).toBe('ChatGPT を開く')
+
+    // regression frame: the URL box and the copy control stay as-is (the
+    // copy-done feedback belongs to url-shown / copy-feedback-real)
+    expect(wrapper.find('[data-test="connect-url-box"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="copy-url"]').exists()).toBe(true)
+  })
+
   it('[covers:web-usage.url-shown] 接続URLは location.origin + /mcp を code 表示し、コピー成功は icon の check 切替 + sr-only の role=status・失敗は msg-error', async () => {
     const expected = `${location.origin}/mcp`
     mockFetch({ 'GET /api/auth/me': { body: ME } })

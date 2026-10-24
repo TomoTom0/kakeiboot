@@ -9,9 +9,11 @@
 //! printed exactly once and never audited or logged.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection, SqlitePool};
 
 use crate::auth::invitation::{self, InvitationKind};
@@ -51,6 +53,12 @@ pub enum Command {
     #[command(subcommand)]
     /// Anonymous recovery request triage.
     Recovery(RecoveryCmd),
+    /// Take a single-file snapshot of the DB into --dest (TASK-83,
+    /// spec_auth.md section 9: read-only open + `VACUUM INTO`).
+    Backup {
+        #[arg(long, value_name = "FILE")]
+        dest: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -299,11 +307,21 @@ fn prompt(p: &mut dyn Prompter, out: &mut dyn Write, msg: &str) -> std::io::Resu
 // entry points
 
 /// Parse argv (after `admin`), load configs, connect the DB, dispatch.
+///
+/// `backup` is dispatched before the shared `db::connect_file` call: it
+/// resolves the db path itself and opens the source read-only (no create,
+/// no migrations), so a misconfigured path must fail the open instead of
+/// creating an empty migrated db (TASK-83, spec_auth.md section 9).
 pub async fn run(args: Vec<String>) -> anyhow::Result<()> {
     let cli = Cli::try_parse_from(std::iter::once("budget-book-admin".to_string()).chain(args))?;
     validate_args(&cli)?;
     let dir = crate::config::Config::resolve_dir(cli.config_dir.clone());
     let cfg = Config::load(&dir)?;
+    if let Command::Backup { dest } = &cli.command {
+        backup(&cfg, dest).await?;
+        println!("backup: {}", dest.display());
+        return Ok(());
+    }
     let pool = crate::db::connect_file(&cfg.database_path(), &cfg.app.database).await?;
     let mut out = std::io::stdout();
     let mut prompter = StdPrompter;
@@ -410,7 +428,58 @@ pub async fn run_with(
             request_number,
             reason,
         }) => recovery_reject(pool, request_number, reason.as_deref(), out).await,
+        // Backup opens its own read-only connection and never uses the
+        // shared pool; `run` dispatches it before connecting (TASK-83).
+        Command::Backup { .. } => anyhow::bail!(
+            "backup resolves its own read-only connection and is only reachable via run()"
+        ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// backup (TASK-83, spec_auth.md section 9)
+
+/// `<dest>.tmp` staging path the snapshot is written to before the rename.
+fn backup_tmp_path(dest: &Path) -> PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".tmp");
+    PathBuf::from(s)
+}
+
+/// `admin backup --dest <file>`: single-file snapshot of the WAL database.
+///
+/// The source is opened read-only (`create_if_missing(false)`, no
+/// migrations — deliberately not `db::connect_file`, which creates and
+/// migrates: a misconfigured path must fail the open, never materialize an
+/// empty migrated db). `VACUUM INTO` runs as a WAL reader, so parallel
+/// writers keep running and the output is one point-in-time-consistent
+/// file. SQLite refuses to overwrite an existing output file, so the tmp is
+/// removed before the run (an interrupted run's leftover cannot wedge
+/// reruns) and again on failure; success ends with `fs::rename` onto the
+/// destination. Not written to audit_events: the actor is the operator and
+/// the daily timer would be audit noise (journal and the backup-side
+/// `last_success` file carry the record).
+async fn backup(cfg: &Config, dest: &Path) -> anyhow::Result<()> {
+    let opts = SqliteConnectOptions::new()
+        .filename(cfg.database_path())
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_millis(cfg.app.database.busy_timeout_ms));
+    let mut conn = SqliteConnection::connect_with(&opts).await?;
+    let tmp = backup_tmp_path(dest);
+    let _ = std::fs::remove_file(&tmp);
+    let tmp_str = tmp.to_string_lossy().into_owned();
+    if let Err(e) = sqlx::query("VACUUM INTO ?")
+        .bind(tmp_str)
+        .execute(&mut conn)
+        .await
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    conn.close().await?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ MCP経由（ChatGPT等）での操作・閲覧を主とし、web画面を補助�
 
 ## 運用
 
-- stg・prodの操作はmiseタスクで行う（作業repoのどこからでも、運用dirへのcd不要）: deployは `mise run stg:deploy` / `prod:deploy`、admin CLIは `mise run stg:admin -- user list` 等、service操作は `mise run stg:service -- status` 等（prodも同様）。実serverは /srv/opt/tomo/run/app/tool/kakeiboot/{stg,prod} の systemd user service（kakeiboot-stg/prod）。作業repoでのserver起動は dev（dev:backend・dev:frontend）まで。詳細は docs/deploy.md
+- stg・prodの操作はmiseタスクで行う（作業repoのどこからでも、運用dirへのcd不要）: deployは `mise run stg:deploy` / `prod:deploy`、admin CLIは `mise run exec-stg -- admin user list` 等、service操作は `mise run stg:service -- status` 等（prodも同様）。実serverは /srv/opt/tomo/run/app/tool/kakeiboot/{stg,prod} の systemd user service（kakeiboot-stg/prod）。作業repoでのserver起動は dev（dev:backend・dev:frontend）まで。詳細は docs/deploy.md
 
 ## タスク運用
 

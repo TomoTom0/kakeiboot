@@ -91,10 +91,12 @@ depends = ["dev:backend", "dev:frontend"]
 # The work repo only runs dev; see docs/deploy.md.
 
 [tasks."stg:deploy"]
-description = "stgへdeploy（build → rsync binary/configs/stg/frontend/dist → kakeiboot-stg再起動 → healthz確認）"
+description = "stgへdeploy（build → rsync binary/backup script/configs/stg/frontend/dist → kakeiboot-stg再起動 → healthz確認）"
 depends = ["build"]
 run = [
   "rsync -a target/debug/budget-book /srv/opt/tomo/run/app/tool/kakeiboot/stg/budget-book",
+  "mkdir -p /srv/opt/tomo/run/app/tool/kakeiboot/stg/bin",
+  "rsync -a scripts/backup/kakeiboot-backup.sh /srv/opt/tomo/run/app/tool/kakeiboot/stg/bin/kakeiboot-backup.sh",
   "rsync -a --delete configs/stg/ /srv/opt/tomo/run/app/tool/kakeiboot/stg/configs/stg/",
   "rsync -a --delete frontend/dist/ /srv/opt/tomo/run/app/tool/kakeiboot/stg/frontend/dist/",
   "systemctl --user restart kakeiboot-stg",
@@ -102,10 +104,12 @@ run = [
 ]
 
 [tasks."prod:deploy"]
-description = "prodへdeploy（build → rsync binary/configs/prod/frontend/dist → kakeiboot-prod再起動 → healthz確認）"
+description = "prodへdeploy（build → rsync binary/backup script/configs/prod/frontend/dist → kakeiboot-prod再起動 → healthz確認）"
 depends = ["build"]
 run = [
   "rsync -a target/debug/budget-book /srv/opt/tomo/run/app/tool/kakeiboot/prod/budget-book",
+  "mkdir -p /srv/opt/tomo/run/app/tool/kakeiboot/prod/bin",
+  "rsync -a scripts/backup/kakeiboot-backup.sh /srv/opt/tomo/run/app/tool/kakeiboot/prod/bin/kakeiboot-backup.sh",
   "rsync -a --delete configs/prod/ /srv/opt/tomo/run/app/tool/kakeiboot/prod/configs/prod/",
   "rsync -a --delete frontend/dist/ /srv/opt/tomo/run/app/tool/kakeiboot/prod/frontend/dist/",
   "systemctl --user restart kakeiboot-prod",
@@ -133,3 +137,32 @@ run = "systemctl --user ${usage_verb} kakeiboot-stg"
 description = "kakeiboot-prodのsystemd user service操作（mise run prod:service -- is-active）"
 usage = "arg \"<verb...>\""
 run = "systemctl --user ${usage_verb} kakeiboot-prod"
+
+# backup (TASK-83): daily systemd user timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
+# （deployで配布）。詳細は docs/deploy.md。
+
+[tasks."stg:backup"]
+description = "stg backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
+run = "systemctl --user start kakeiboot-backup@stg.service"
+
+[tasks."prod:backup"]
+description = "prod backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
+run = "systemctl --user start kakeiboot-backup@prod.service"
+
+[tasks."stg:backup-status"]
+description = "stg backup状態確認（last_success・世代dir一覧・timer・前回実行結果）"
+run = [
+  "sh -c 'echo \"last_success: $(cat /srv/opt/tomo/run/app/tool/kakeiboot/backups/stg/last_success 2>/dev/null || echo none)\"'",
+  "sh -c 'ls -1 /srv/opt/tomo/run/app/tool/kakeiboot/backups/stg 2>/dev/null || true'",
+  "systemctl --user list-timers kakeiboot-backup@stg.timer --no-pager",
+  "systemctl --user show kakeiboot-backup@stg.service -p Result -p ExecMainStatus --no-pager",
+]
+
+[tasks."prod:backup-status"]
+description = "prod backup状態確認（last_success・世代dir一覧・timer・前回実行結果）"
+run = [
+  "sh -c 'echo \"last_success: $(cat /srv/opt/tomo/run/app/tool/kakeiboot/backups/prod/last_success 2>/dev/null || echo none)\"'",
+  "sh -c 'ls -1 /srv/opt/tomo/run/app/tool/kakeiboot/backups/prod 2>/dev/null || true'",
+  "systemctl --user list-timers kakeiboot-backup@prod.timer --no-pager",
+  "systemctl --user show kakeiboot-backup@prod.service -p Result -p ExecMainStatus --no-pager",
+]
