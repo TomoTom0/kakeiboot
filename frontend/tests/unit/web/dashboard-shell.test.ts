@@ -50,6 +50,23 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.kpi-value').exists()).toBe(false)
   })
 
+  it('[covers:web-home.zone-headings-sr-only] zone見出しはsr-only（視覚見出し語なし）・誘導はicon link（aria-label+chevron）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    // the zone headings live in the DOM for the document outline / screen
+    // readers but carry the sr-only class — the page shows no heading text
+    const headings = wrapper.findAll('.zone h2.sr-only')
+    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '支出の内訳', '最近のレシート'])
+    // the section links are icon-only (chevron), not word links
+    const cat = wrapper.find('[data-test="breakdown-more"]')
+    expect(cat.attributes('aria-label')).toBe('カテゴリ別に見る')
+    expect(new URL(cat.attributes('href')!, 'http://localhost').pathname).toBe('/categories')
+    const all = wrapper.find('[data-test="recent-more"]')
+    expect(all.attributes('aria-label')).toBe('すべて見る')
+    expect(new URL(all.attributes('href')!, 'http://localhost').pathname).toBe('/receipts')
+    expect(wrapper.find('.zone h2:not(.sr-only)').exists()).toBe(false)
+  })
+
 
   it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（上位行と同じ形式・非リンク）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
@@ -82,29 +99,26 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(new URL(rows[0]!.attributes('href')!, 'http://localhost').pathname).toBe('/axes/category/4')
   })
 
-  it('[covers:web-home.stacked-trend-toggle] 推移カード: 積み上げ/合計と金額/件数/単価の切替（積み上げは上位セグメント+--c-restの残余・formatで値表記が変わる）', async () => {
+  it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額表記）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
     const card = wrapper.find('[data-test="trend-card"]')
-    // stacked: the current month's column holds both series segments
+    // no mode / metric chrome anywhere in the card (TASK-95: the chart is
+    // the only expression — total height = the period total, colors = the
+    // composition, no word tabs)
+    expect(card.find('[data-test="trend-stacked"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-total"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-metric-count"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-metric-unit"]').exists()).toBe(false)
+    // every column is the stacked money view: the current month holds both
+    // series segments, each titled with the money format
     const col = card.find('[data-test="bar-2026-10"]')
     expect(col.classes()).toContain('stacked')
-    expect(col.findAll('.bar-seg').length).toBe(2)
-    // the total mode returns to a single-series bar
-    await card.find('[data-test="trend-total"]').trigger('click')
-    await settle()
-    expect(wrapper.find('[data-test="bar-2026-10"]').classes()).not.toContain('stacked')
-    expect(wrapper.find('[data-test="bar-2026-10"]').findAll('.bar-seg').length).toBe(0)
-    // the metric tabs swap the number rendering (title / note)
-    const monthTitle = () => wrapper.find('[data-test="bar-2026-10"]').attributes('title')!
-    expect(monthTitle()).toContain('948円')
-    await card.find('[data-test="trend-metric-count"]').trigger('click')
-    await settle()
-    expect(monthTitle()).toContain('3件')
-    expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('件')
-    await card.find('[data-test="trend-metric-unit"]').trigger('click')
-    await settle()
-    expect(monthTitle()).toContain('316円')
+    const segs = col.findAll('.bar-seg')
+    expect(segs.length).toBe(2)
+    expect(segs.some((s) => (s.attributes('title') ?? '').endsWith('円'))).toBe(true)
+    // the current bar's value label is the money total (compressed form)
+    expect(col.find('.bar-val').exists()).toBe(true)
   })
 
   it('[covers:web-home.trend-day-bar-receipts] 日粒度の棒は button で押下可・押下でその日のレシート一覧（/receipts?from=d&to=d）へ・月棒は period 移動', async () => {

@@ -5,7 +5,6 @@ import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
 import {
   useDataApi,
-  type AnalysisMetric,
   type AnalysisResult,
   type AnalysisTrendResult,
   type CategoryNode,
@@ -49,19 +48,6 @@ const loading = ref(false)
 /** The store-category selection of the chip row (single, from the URL). */
 const storeCategory = computed(() => firstString(route.query.store_category))
 
-const trendMetric = ref<AnalysisMetric>('amount')
-const trendStackedView = ref(true)
-const METRIC_TABS: { id: AnalysisMetric; label: string }[] = [
-  { id: 'amount', label: '金額' },
-  { id: 'count', label: '件数' },
-  { id: 'unit', label: '単価' },
-]
-const metricFormat = computed<Record<AnalysisMetric, (v: number) => string>>(() => ({
-  amount: formatYen,
-  count: (v) => `${Math.round(v).toLocaleString('ja-JP')}件`,
-  unit: (v) => `${(Math.round(v * 10) / 10).toLocaleString('ja-JP')}円`,
-}))
-
 function trendPeriod(): [string, string] {
   if (period.mode === 'month') {
     const q = period.trendQuery()
@@ -88,7 +74,7 @@ async function load(id?: number): Promise<void> {
       api.getAnalysis(l, { axis: 'store', metric: 'amount', ...period.query(), ...cat, ...labels, limit: 50 }),
       api.getAnalysisTrend(l, {
         axis: 'store',
-        metric: trendMetric.value,
+        metric: 'amount',
         granularity: gran.value,
         from: trendPeriod()[0],
         to: trendPeriod()[1],
@@ -112,7 +98,7 @@ async function load(id?: number): Promise<void> {
 
 const ledgerId = useLedger((id) => load(id))
 watch(
-  [() => period.range, () => period.labelQuery, () => storeCategory.value, trendMetric],
+  [() => period.range, () => period.labelQuery, () => storeCategory.value],
   () => void load(),
 )
 
@@ -189,9 +175,6 @@ const trendStackedBars = computed(() => {
     }
   })
 })
-const trendSingle = computed<StatsRow[]>(() =>
-  (trend.value?.buckets ?? []).map((b, i) => ({ keys: [b], labels: [b], value: trend.value?.bucket_totals[i] ?? 0 })),
-)
 const trendCurrent = computed(() => {
   const [from, to] = trendPeriod()
   return currentTrendKey(gran.value, period.mode, from, to, period.month)
@@ -267,66 +250,15 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
         class="zone"
         data-test="trend-card"
       >
-        <div class="card-head">
-          <h2>支出の推移</h2>
-          <div class="trend-controls">
-            <div
-              class="tabs trend-mode-tabs"
-              role="tablist"
-              aria-label="推移の表示"
-            >
-              <button
-                type="button"
-                class="tab"
-                :class="{ active: trendStackedView }"
-                role="tab"
-                :aria-selected="trendStackedView"
-                data-test="trend-stacked"
-                @click="trendStackedView = true"
-              >
-                積み上げ
-              </button>
-              <button
-                type="button"
-                class="tab"
-                :class="{ active: !trendStackedView }"
-                role="tab"
-                :aria-selected="!trendStackedView"
-                data-test="trend-total"
-                @click="trendStackedView = false"
-              >
-                合計
-              </button>
-            </div>
-            <div
-              class="tabs trend-metric-tabs"
-              role="tablist"
-              aria-label="数値軸"
-            >
-              <button
-                v-for="m in METRIC_TABS"
-                :key="m.id"
-                type="button"
-                class="tab"
-                :class="{ active: trendMetric === m.id }"
-                role="tab"
-                :aria-selected="trendMetric === m.id"
-                :data-test="`trend-metric-${m.id}`"
-                @click="trendMetric = m.id"
-              >
-                {{ m.label }}
-              </button>
-            </div>
-          </div>
-        </div>
+        <h2 class="sr-only">
+          支出の推移
+        </h2>
         <TrendBars
           v-if="trend"
-          :rows="trendSingle"
-          :stacked="trendStackedView ? trendStackedBars : null"
+          :stacked="trendStackedBars"
           :granularity="gran"
           :span="trendPeriod()"
           :current="trendCurrent"
-          :format="metricFormat[trendMetric]"
           @select="onTrendSelect"
         />
       </section>
@@ -335,7 +267,9 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
         class="zone"
         data-test="ranking"
       >
-        <h2>店別</h2>
+        <h2 class="sr-only">
+          店別
+        </h2>
         <!-- the store-category chip row (single select, D28 §4-2): narrows
              the ranking through the store_category wiring -->
         <div

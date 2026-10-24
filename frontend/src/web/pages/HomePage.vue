@@ -7,7 +7,6 @@ import LabelDots from '@/shared/components/LabelDots.vue'
 import {
   useDataApi,
   type AnalysisAxis,
-  type AnalysisMetric,
   type AnalysisResult,
   type AnalysisTrendResult,
   type ReceiptSummary,
@@ -27,10 +26,10 @@ import { usePeriodStore } from '../stores/period'
 
 // Home (TASK-89 redesign, the compare side removed): one column, four
 // compartments — the period header, the stacked trend, the category
-// breakdown, the recent receipts. The breakdown stays category-fixed; the
-// trend's number axis is a local card concern. The period / label filters
-// live in the shared period store and every card re-queries through the
-// watches below.
+// breakdown, the recent receipts. The breakdown stays category-fixed and
+// the trend is the stacked money view (TASK-95: no mode / metric chrome).
+// The period / label filters live in the shared period store and every
+// card re-queries through the watches below.
 const api = useDataApi()
 const router = useRouter()
 const period = usePeriodStore()
@@ -42,21 +41,6 @@ const trendRes = ref<AnalysisTrendResult | null>(null)
 const recent = ref<ReceiptSummary[]>([])
 const error = ref('')
 const loading = ref(false)
-
-/** the trend card's number axis and mode, same rule */
-const trendMetric = ref<AnalysisMetric>('amount')
-const trendStackedView = ref(true)
-
-const METRIC_TABS: { id: AnalysisMetric; label: string }[] = [
-  { id: 'amount', label: '金額' },
-  { id: 'count', label: '件数' },
-  { id: 'unit', label: '単価' },
-]
-const metricFormat = computed<Record<AnalysisMetric, (v: number) => string>>(() => ({
-  amount: formatYen,
-  count: (v) => `${Math.round(v).toLocaleString('ja-JP')}件`,
-  unit: (v) => `${(Math.round(v * 10) / 10).toLocaleString('ja-JP')}円`,
-}))
 
 /** TASK-55: the trend granularity of the selected period (week -> the
  *  week's days, month/year -> months, a custom range -> by its length). */
@@ -88,7 +72,7 @@ async function load(id?: number): Promise<void> {
       api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
       api.getAnalysisTrend(l, {
         axis: 'category',
-        metric: trendMetric.value,
+        metric: 'amount',
         granularity: gran.value,
         from: trendPeriod()[0],
         to: trendPeriod()[1],
@@ -113,9 +97,8 @@ async function load(id?: number): Promise<void> {
 
 const ledgerId = useLedger((id) => load(id))
 // one array watch so a change that moves both (a ledger switch resetting the
-// labels) fetches once; the local card mode rides its own watch below
+// labels) fetches once
 watch([() => period.range, () => period.labelQuery], () => void load())
-watch(trendMetric, () => void load())
 
 const totals = computed(() => analysis.value?.totals ?? null)
 
@@ -156,9 +139,6 @@ const trendStackedBars = computed(() => {
     }
   })
 })
-const trendSingle = computed<StatsRow[]>(() =>
-  (trendRes.value?.buckets ?? []).map((b, i) => ({ keys: [b], labels: [b], value: trendRes.value?.bucket_totals[i] ?? 0 })),
-)
 const trendCurrent = computed(() => {
   const [from, to] = trendPeriod()
   return currentTrendKey(gran.value, period.mode, from, to, period.month)
@@ -242,66 +222,15 @@ const recentQuery = computed(() => {
         class="zone"
         data-test="trend-card"
       >
-        <div class="card-head">
-          <h2>支出の推移</h2>
-          <div class="trend-controls">
-            <div
-              class="tabs trend-mode-tabs"
-              role="tablist"
-              aria-label="推移の表示"
-            >
-              <button
-                type="button"
-                class="tab"
-                :class="{ active: trendStackedView }"
-                role="tab"
-                :aria-selected="trendStackedView"
-                data-test="trend-stacked"
-                @click="trendStackedView = true"
-              >
-                積み上げ
-              </button>
-              <button
-                type="button"
-                class="tab"
-                :class="{ active: !trendStackedView }"
-                role="tab"
-                :aria-selected="!trendStackedView"
-                data-test="trend-total"
-                @click="trendStackedView = false"
-              >
-                合計
-              </button>
-            </div>
-            <div
-              class="tabs trend-metric-tabs"
-              role="tablist"
-              aria-label="数値軸"
-            >
-              <button
-                v-for="m in METRIC_TABS"
-                :key="m.id"
-                type="button"
-                class="tab"
-                :class="{ active: trendMetric === m.id }"
-                role="tab"
-                :aria-selected="trendMetric === m.id"
-                :data-test="`trend-metric-${m.id}`"
-                @click="trendMetric = m.id"
-              >
-                {{ m.label }}
-              </button>
-            </div>
-          </div>
-        </div>
+        <h2 class="sr-only">
+          支出の推移
+        </h2>
         <TrendBars
           v-if="trendRes"
-          :rows="trendSingle"
-          :stacked="trendStackedView ? trendStackedBars : null"
+          :stacked="trendStackedBars"
           :granularity="gran"
           :span="trendPeriod()"
           :current="trendCurrent"
-          :format="metricFormat[trendMetric]"
           @select="onTrendSelect"
         />
       </section>
@@ -310,13 +239,18 @@ const recentQuery = computed(() => {
         class="zone"
         data-test="breakdown"
       >
-        <div class="card-head">
-          <h2>支出の内訳</h2>
+        <div class="zone-more">
+          <h2 class="sr-only">
+            支出の内訳
+          </h2>
           <RouterLink
             :to="{ path: '/categories', query: { ...period.urlQuery } }"
-            class="more"
+            class="ibtn"
+            aria-label="カテゴリ別に見る"
+            title="カテゴリ別に見る"
+            data-test="breakdown-more"
           >
-            カテゴリ別に見る
+            <AppIcon name="chevron-right" />
           </RouterLink>
         </div>
         <p
@@ -336,13 +270,18 @@ const recentQuery = computed(() => {
         class="zone"
         data-test="recent"
       >
-        <div class="card-head">
-          <h2>最近のレシート</h2>
+        <div class="zone-more">
+          <h2 class="sr-only">
+            最近のレシート
+          </h2>
           <RouterLink
             :to="{ path: '/receipts', query: { ...recentQuery } }"
-            class="more"
+            class="ibtn"
+            aria-label="すべて見る"
+            title="すべて見る"
+            data-test="recent-more"
           >
-            すべて見る
+            <AppIcon name="chevron-right" />
           </RouterLink>
         </div>
         <div

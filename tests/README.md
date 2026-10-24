@@ -92,11 +92,11 @@
 | `frontend/tests/unit/web/vite-proxy.test.ts` | 単体 | Vite dev proxy 構成・dev spa fallback・strictPort [TASK-29] |
 | `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター・ログイン・登録受付・同意（色 chip [TASK-20]・me 確定 [TASK-39]） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内の操作部品の非描画・favicon.svg の実色 |
-| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム再構築 [TASK-89]（期間ヘッダ〔TASK-93 で対比部を欠く形へ〕・積み上げ推移/数値軸・内訳残余行・日棒のレシート遷移）・PeriodHeader/RankedList 部品単体・アプリ骨格（drawer 初期 closed [TASK-89]・メニュー・route.meta 化 [TASK-74]） |
+| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム再構築 [TASK-89]（期間ヘッダ〔TASK-93 で対比部を欠く形へ〕・積み上げ推移〔TASK-95 で金額1形固定・語tabなし〕・zone見出しsr-only+icon link [TASK-95]・内訳残余行・日棒のレシート遷移）・PeriodHeader/RankedList 部品単体・アプリ骨格（drawer 初期 closed [TASK-89]・メニュー・route.meta 化 [TASK-74]） |
 | `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の家計簿名変更 [TASK-20]・既定 badge と⋯の「既定の家計簿にする」[TASK-13]・パスキー・共有/登録 dialog（FormDialog）と発行済み行・招待 ledger 選択 [TASK-46] [TASK-78]・4tab）・接続中のアプリ [TASK-20]・ラベル管理 [TASK-26] |
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
-| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
+| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
 | `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels ヘルパ（軸両端ラベルの書式） [TASK-42] |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |

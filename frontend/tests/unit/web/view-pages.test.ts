@@ -91,9 +91,11 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     // the period context rides the link
     const url = new URL(rows[0]!.attributes('href')!, 'http://localhost')
     expect(url.searchParams.get('month')).toBe('2026-10')
-    // the trend card with the stacked/total and metric tabs
+    // the trend card: the stacked money view, no mode / metric chrome
     expect(wrapper.find('[data-test="trend-card"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="trend-stacked"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col.stacked').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-test="trend-stacked"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="trend-metric-count"]').exists()).toBe(false)
     // the manage entries live behind the "..." menu only
     await expectManageLinkInMenu(wrapper, [
       { test: 'manage-link', label: 'カテゴリを管理', href: '/settings/categories?kind=item' },

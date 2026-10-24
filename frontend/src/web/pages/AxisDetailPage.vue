@@ -9,7 +9,6 @@ import {
   type AnalysisAxis,
   type AnalysisFilters,
   type AnalysisItemResult,
-  type AnalysisMetric,
   type AnalysisResult,
   type AnalysisTrendResult,
   type ReceiptSummary,
@@ -18,6 +17,7 @@ import {
 } from '../api/data'
 import PeriodHeader from '../components/PeriodHeader.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
 import PageHead from '../components/PageHead.vue'
@@ -305,21 +305,6 @@ const storeNameFor = ref<number | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-/** TASK-89: the trend's number axis (amount / count / unit) is a local
- *  concern of this card, like on Home — never in the period store. */
-const trendMetric = ref<AnalysisMetric>('amount')
-
-const METRIC_TABS: { id: AnalysisMetric; label: string }[] = [
-  { id: 'amount', label: '金額' },
-  { id: 'count', label: '件数' },
-  { id: 'unit', label: '単価' },
-]
-const metricFormat = computed<Record<AnalysisMetric, (v: number) => string>>(() => ({
-  amount: formatYen,
-  count: (v) => `${Math.round(v).toLocaleString('ja-JP')}件`,
-  unit: (v) => `${(Math.round(v * 10) / 10).toLocaleString('ja-JP')}円`,
-}))
-
 /** the trend window: a 12-month window through the selected month in month
  *  mode (the CategoryDetailPage rule), the period itself otherwise */
 function trendPeriod(): [string, string] {
@@ -378,7 +363,7 @@ async function load(id?: number): Promise<void> {
         : Promise.resolve(null),
       api.getAnalysisTrend(l, {
         axis: stackAxis.value,
-        metric: trendMetric.value,
+        metric: 'amount',
         granularity: gran.value,
         from: trendPeriod()[0],
         to: trendPeriod()[1],
@@ -451,7 +436,7 @@ async function init(id?: number): Promise<void> {
 }
 // same-component param changes (top -> sub, the ‹ climb, an axis move)
 // reload through here — the page never remounts on its own routes
-watch([() => period.range, () => route.fullPath, () => trendMetric.value], () => void init())
+watch([() => period.range, () => route.fullPath], () => void init())
 // keep labels= in step with the shared store (the topbar chip moves it too)
 watch(
   () => period.labelQuery,
@@ -514,15 +499,6 @@ const trendStacked = computed(() => {
     }
   })
 })
-const trendSingle = computed<StatsRow[]>(() =>
-  (trendRes.value?.buckets ?? []).map((b, i) => ({
-    keys: [b],
-    labels: [b],
-    value: trendRes.value?.bucket_totals[i] ?? 0,
-  })),
-)
-/** displayed mode (v-model target for the tab) */
-const trendStackedView = ref(true)
 const trendCurrent = computed(() => {
   const [from, to] = trendPeriod()
   return currentTrendKey(gran.value, period.mode, from, to, period.month)
@@ -705,66 +681,15 @@ const menuItems = computed<PageMenuItem[]>(() => {
           class="zone"
           data-test="trend-card"
         >
-          <div class="card-head">
-            <h2>支出の推移</h2>
-            <div class="trend-controls">
-              <div
-                class="tabs trend-mode-tabs"
-                role="tablist"
-                aria-label="推移の表示"
-              >
-                <button
-                  type="button"
-                  class="tab"
-                  :class="{ active: trendStackedView }"
-                  role="tab"
-                  :aria-selected="trendStackedView"
-                  data-test="trend-stacked"
-                  @click="trendStackedView = true"
-                >
-                  積み上げ
-                </button>
-                <button
-                  type="button"
-                  class="tab"
-                  :class="{ active: !trendStackedView }"
-                  role="tab"
-                  :aria-selected="!trendStackedView"
-                  data-test="trend-total"
-                  @click="trendStackedView = false"
-                >
-                  合計
-                </button>
-              </div>
-              <div
-                class="tabs trend-metric-tabs"
-                role="tablist"
-                aria-label="数値軸"
-              >
-                <button
-                  v-for="m in METRIC_TABS"
-                  :key="m.id"
-                  type="button"
-                  class="tab"
-                  :class="{ active: trendMetric === m.id }"
-                  role="tab"
-                  :aria-selected="trendMetric === m.id"
-                  :data-test="`trend-metric-${m.id}`"
-                  @click="trendMetric = m.id"
-                >
-                  {{ m.label }}
-                </button>
-              </div>
-            </div>
-          </div>
+          <h2 class="sr-only">
+            支出の推移
+          </h2>
           <TrendBars
             v-if="trendRes"
-            :rows="trendSingle"
-            :stacked="trendStackedView ? trendStacked : null"
+            :stacked="trendStacked"
             :granularity="gran"
             :span="trendPeriod()"
             :current="trendCurrent"
-            :format="metricFormat[trendMetric]"
             @select="onTrendSelect"
           />
         </section>
@@ -773,7 +698,9 @@ const menuItems = computed<PageMenuItem[]>(() => {
           class="zone"
           data-test="cross"
         >
-          <h2>{{ crossTitle }}</h2>
+          <h2 class="sr-only">
+            {{ crossTitle }}
+          </h2>
           <p
             v-if="crossRows.length === 0"
             class="muted empty"
@@ -792,7 +719,9 @@ const menuItems = computed<PageMenuItem[]>(() => {
           class="zone"
           data-test="own"
         >
-          <h2>{{ ownTitle }}</h2>
+          <h2 class="sr-only">
+            {{ ownTitle }}
+          </h2>
           <p
             v-if="ownRows.length === 0"
             class="muted empty"
@@ -813,7 +742,9 @@ const menuItems = computed<PageMenuItem[]>(() => {
           class="zone"
           data-test="item-stats"
         >
-          <h2>品目の記録</h2>
+          <h2 class="sr-only">
+            品目の記録
+          </h2>
           <template v-if="itemStats && itemStats.summary.count > 0">
             <p
               class="muted small"
@@ -827,7 +758,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                 itemStats.summary.stores.length
               }}店
             </p>
-            <h3 class="zone-sub">
+            <h3 class="sr-only">
               価格履歴
             </h3>
             <ul
@@ -846,7 +777,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                 </span>
               </li>
             </ul>
-            <h3 class="zone-sub">
+            <h3 class="sr-only">
               店別
             </h3>
             <ul
@@ -878,14 +809,18 @@ const menuItems = computed<PageMenuItem[]>(() => {
           class="zone"
           data-test="recent"
         >
-          <div class="card-head">
-            <h2>最近のレシート</h2>
+          <div class="zone-more">
+            <h2 class="sr-only">
+              最近のレシート
+            </h2>
             <RouterLink
               :to="allReceiptsTo"
-              class="more"
+              class="ibtn"
+              aria-label="すべて見る"
+              title="すべて見る"
               data-test="all-receipts"
             >
-              すべて見る
+              <AppIcon name="chevron-right" />
             </RouterLink>
           </div>
           <p

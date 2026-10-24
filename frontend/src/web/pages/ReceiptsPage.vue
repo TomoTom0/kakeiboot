@@ -464,7 +464,9 @@ const groups = computed(() => {
         class="card"
         data-test="payments"
       >
-        <h2>支払方法</h2>
+        <h2 class="sr-only">
+          支払方法
+        </h2>
         <!-- TASK-65: a row press toggles the payment filter in place (the
              null-key aggregates stay inert rows) -->
         <RankedList
@@ -484,7 +486,9 @@ const groups = computed(() => {
         class="card wide"
         data-test="daily"
       >
-        <h2>{{ trendTitle }}</h2>
+        <h2 class="sr-only">
+          {{ trendTitle }}
+        </h2>
         <div
           class="daily-bars"
           :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
@@ -514,7 +518,9 @@ const groups = computed(() => {
         class="card wide"
         data-test="receipts"
       >
-        <h2>レシート</h2>
+        <h2 class="sr-only">
+          レシート
+        </h2>
         <p
           v-if="!loading && receipts.length === 0"
           class="empty-state"

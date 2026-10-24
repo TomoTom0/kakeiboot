@@ -434,6 +434,7 @@ html.drawer-lock { overflow: hidden; }
   background: transparent;
   color: var(--bb-fg);
   cursor: pointer;
+  text-decoration: none;
   transition: background-color 0.15s, color 0.15s;
 }
 .ibtn:hover:not(:disabled) { background: var(--bb-hover); }
@@ -963,8 +964,9 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   padding: 1rem 1.25rem;
   min-width: 0;
 }
-.zone h2 { font-size: 0.875rem; font-weight: 600; margin: 0 0 0.5rem; }
-.zone-sub { font-size: 0.875rem; font-weight: 600; margin: 1rem 0 0.25rem; }
+/* TASK-95: the reading zones carry no visible headings (sr-only only) — an
+   icon-only "see the whole axis" link rides the zone's top-right corner */
+.zone-more { display: flex; justify-content: flex-end; margin: -0.25rem -0.75rem 0.25rem 0; }
 
 /* the period header: whitespace + hairline, typography leads — the total
    at 2.25rem/700/tabular-nums is the whole statement */
@@ -985,10 +987,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
-
-/* the trend card's mode / metric tab rows share the plain .tab strip */
-.trend-controls { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; }
-.trend-mode-tabs .tab, .trend-metric-tabs .tab { flex: none; }
 
 /* the stacked bars: segments stack bottom-up inside the column */
 .bar-stack {

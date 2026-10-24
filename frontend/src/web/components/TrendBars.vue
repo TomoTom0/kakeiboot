@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { StatsRow } from '../api/data'
 import { formatYen } from '../composables/format'
 import { axisMonthLabels, dayLabel, monthLabel, shiftDate, shortDate } from '../composables/period'
 import { bucketSpan, type TrendGranularity } from '../composables/trend'
@@ -14,11 +13,9 @@ import { bucketSpan, type TrendGranularity } from '../composables/trend'
 // bar alone. `span` (the charted range) clips the edge weekly buckets'
 // titles to what they actually cover.
 //
-// TASK-89 extensions: `stacked` swaps the single-series rows for stacked
-// columns (top segments + the parent-built grey rest segment — the parent
-// shapes the data, this component only draws); `format` swaps the
-// number rendering of the axis/note/title/value label (default formatYen;
-// counts are integers, unit prices one decimal).
+// TASK-95: the card is the stacked money view only — `stacked` is required
+// (top segments + the parent-built grey rest segment; the parent shapes
+// the data, this component only draws) and the numbers are always formatYen.
 export interface StackedSegment {
   label: string
   value: number
@@ -33,22 +30,15 @@ export interface StackedBar {
 
 const props = withDefaults(
   defineProps<{
-    rows: StatsRow[]
     current?: string | null
     granularity?: TrendGranularity
     span?: [string, string] | null
-    /** stacked columns instead of the single-series rows */
-    stacked?: StackedBar[] | null
-    /** number rendering (labels / titles / the current bar's value) */
-    format?: (v: number) => string
+    /** the stacked columns (TASK-95: required — this view is stacked-only) */
+    stacked: StackedBar[]
   }>(),
-  { current: null, granularity: 'month', span: null, stacked: null, format: undefined },
+  { current: null, granularity: 'month', span: null },
 )
 const emit = defineEmits<{ select: [key: string] }>()
-
-const fmt = computed(() => props.format ?? formatYen)
-
-const keyOf = (r: StatsRow) => String(r.keys[0] ?? r.labels[0] ?? '')
 
 /** a value label for the current bar: big amounts compress to "12k". */
 function valLabel(v: number): string {
@@ -67,35 +57,21 @@ interface BarView {
 }
 
 const bars = computed<BarView[]>(() => {
-  const stacked = props.stacked
-  const raw =
-    stacked !== null && stacked !== undefined
-      ? stacked.map((b) => {
-          let title: string
-          if (props.granularity === 'month') title = `${monthLabel(b.key)}`
-          else if (props.granularity === 'day') title = dayLabel(b.key)
-          else {
-            const [lo, hi] = props.span ? bucketSpan(b.key, 'week', props.span[0], props.span[1]) : [b.key, shiftDate(b.key, 6)]
-            title = `${shortDate(lo)}〜${shortDate(hi)}`
-          }
-          return { key: b.key, title, value: b.total, segments: b.segments }
-        })
-      : props.rows.map((r) => {
-          const key = keyOf(r)
-          let title: string
-          if (props.granularity === 'month') title = `${monthLabel(key)} ${fmt.value(r.value)}`
-          else if (props.granularity === 'day') title = `${dayLabel(key)} ${fmt.value(r.value)}`
-          else {
-            const [lo, hi] = props.span ? bucketSpan(key, 'week', props.span[0], props.span[1]) : [key, shiftDate(key, 6)]
-            title = `${shortDate(lo)}〜${shortDate(hi)} ${fmt.value(r.value)}`
-          }
-          return { key, title, value: r.value, segments: null }
-        })
+  const raw = props.stacked.map((b) => {
+    let title: string
+    if (props.granularity === 'month') title = monthLabel(b.key)
+    else if (props.granularity === 'day') title = dayLabel(b.key)
+    else {
+      const [lo, hi] = props.span ? bucketSpan(b.key, 'week', props.span[0], props.span[1]) : [b.key, shiftDate(b.key, 6)]
+      title = `${shortDate(lo)}〜${shortDate(hi)}`
+    }
+    return { key: b.key, title, value: b.total, segments: b.segments }
+  })
   const max = Math.max(...raw.map((b) => b.value), 1)
   return raw.map((b) => {
     const total = b.value
     const height = Math.max(Math.round((b.value / max) * 100), 2)
-    const segments = (b.segments ?? []).map((s) => ({
+    const segments = b.segments.map((s) => ({
       label: s.label,
       value: s.value,
       color: s.color,
@@ -129,11 +105,11 @@ const note = computed(() => {
   if (props.granularity === 'day') {
     // the day bars' sum is the period total (the KPI's per-day average is
     // its own number — an average over record days would mislead)
-    return `合計 ${fmt.value(bars.value.reduce((a, b) => a + b.value, 0))}`
+    return `合計 ${formatYen(bars.value.reduce((a, b) => a + b.value, 0))}`
   }
   const unit = props.granularity === 'week' ? '週' : '月'
   const avg = v.length ? Math.round(v.reduce((a, b) => a + b.value, 0) / v.length) : 0
-  return `${unit}平均 ${fmt.value(avg)}（記録のある${unit}）`
+  return `${unit}平均 ${formatYen(avg)}（記録のある${unit}）`
 })
 </script>
 
@@ -172,7 +148,7 @@ const note = computed(() => {
               :key="i"
               class="bar-seg"
               :style="{ height: `${s.height}%`, background: s.color }"
-              :title="`${s.label} ${fmt(s.value)}`"
+              :title="`${s.label} ${formatYen(s.value)}`"
             />
           </span>
           <span
