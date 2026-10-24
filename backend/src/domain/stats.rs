@@ -30,7 +30,7 @@ pub enum Period {
     Range { from: String, to: String },
 }
 
-/// A resolved inclusive date range plus the kind used for the compare period.
+/// A resolved inclusive date range plus the kind it was resolved from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Range {
     pub from: NaiveDate,
@@ -55,41 +55,6 @@ impl Range {
             from,
             to,
             label: format!("{}〜{}", fmt_date(from), fmt_date(to)),
-            kind: "days".into(),
-        }
-    }
-
-    /// The same-length period right before (month -> previous month, year ->
-    /// previous year, ranges -> same number of days).
-    pub fn previous(&self) -> Range {
-        if self.kind == "month" {
-            let s = add_months(self.from, -1);
-            return month_range(s);
-        }
-        if self.kind == "year" {
-            return year_range(self.from.year() - 1);
-        }
-        if let Some(n) = self
-            .kind
-            .strip_prefix("months:")
-            .and_then(|n| n.parse::<i32>().ok())
-        {
-            let s = add_months(self.from, -n);
-            let e = add_months(self.from, 0).pred_opt().expect("date");
-            return Range {
-                from: s,
-                to: e,
-                label: format!("{}〜{}", fmt_date(s), fmt_date(e)),
-                kind: self.kind.clone(),
-            };
-        }
-        let days = (self.to - self.from).num_days() + 1;
-        let e = self.from.pred_opt().expect("date");
-        let s = e - chrono::Duration::days(days - 1);
-        Range {
-            from: s,
-            to: e,
-            label: format!("{}〜{}", fmt_date(s), fmt_date(e)),
             kind: "days".into(),
         }
     }
@@ -178,7 +143,7 @@ pub fn parse_period(v: &Value) -> Result<Period, String> {
 // ---------------------------------------------------------------------------
 // analysis (TASK-89 web screens; spec_mcp-tools.md 12, spec_data-model.md
 // 13-3). The /analysis endpoints above `summarize` are web-only: the MCP
-// reports, `Range::previous` and section shapes stay untouched.
+// reports and section shapes stay untouched.
 
 /// The breakdown axis of the web analysis API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -670,13 +635,12 @@ fn key_value(dim: &str, k: Option<&str>) -> Value {
     }
 }
 
-/// Build a top-N + "その他" section with compare values and shares.
+/// Build a top-N + "その他" section with shares.
 #[allow(clippy::too_many_arguments)]
 async fn ranked_section(
     conn: &mut SqliteConnection,
     ledger_id: i64,
     r: &Range,
-    cmp: Option<&Range>,
     dim: &str,
     key_expr: &str,
     filt: &(String, Vec<Bind>),
@@ -686,34 +650,21 @@ async fn ranked_section(
     chart: &str,
 ) -> sqlx::Result<StatsSection> {
     let cur = grouped(conn, ledger_id, r, key_expr, filt).await?;
-    let prev: HashMap<Option<String>, i64> = match cmp {
-        Some(c) => grouped(conn, ledger_id, c, key_expr, filt)
-            .await?
-            .into_iter()
-            .map(|(k, v, _)| (k, v))
-            .collect(),
-        None => HashMap::new(),
-    };
     let total: i64 = cur.iter().map(|x| x.1).sum();
     let mut rows = Vec::new();
     let mut other_v = 0i64;
-    let mut other_c = 0i64;
     let mut other_n = 0i64;
     for (i, (k, v, _)) in cur.iter().enumerate() {
         if i < top {
             let label = labels_for(conn, ledger_id, dim, k.as_deref()).await?;
-            let cv = cmp.map(|_| prev.get(k).copied().unwrap_or(0));
             rows.push(StatsRow {
                 keys: vec![key_value(dim, k.as_deref())],
                 labels: vec![label],
                 value: *v,
-                compare_value: cv,
-                diff: cv.map(|c| v - c),
                 share: share(*v, total),
             });
         } else {
             other_v += v;
-            other_c += prev.get(k).copied().unwrap_or(0);
             other_n += 1;
         }
     }
@@ -722,8 +673,6 @@ async fn ranked_section(
             keys: vec![Value::Null],
             labels: vec!["その他".into()],
             value: other_v,
-            compare_value: cmp.map(|_| other_c),
-            diff: cmp.map(|_| other_v - other_c),
             share: share(other_v, total),
         });
     }
@@ -767,8 +716,6 @@ async fn monthly_section(
             keys: vec![json!(key)],
             labels: vec![format!("{}年{}月", m.year(), m.month())],
             value: got.get(&key).copied().unwrap_or(0),
-            compare_value: None,
-            diff: None,
             share: None,
         });
         m = add_months(m, 1);
@@ -795,17 +742,7 @@ pub async fn summarize(
     // an empty label_colors array is "no filter" (spec 10)
     let filters = filters.clone().normalized();
     let filt = filter_sql(conn, ledger_id, &filters).await?;
-    let compare = !matches!(report, "monthly_trend" | "item_price_history");
-    let cmp = compare.then(|| range.previous());
     let (value, receipts) = totals(conn, ledger_id, range, &filt).await?;
-    let compare_value = match &cmp {
-        Some(c) => Some(totals(conn, ledger_id, c, &filt).await?.0),
-        None => None,
-    };
-    let diff = compare_value.map(|c| value - c);
-    let diff_pct = compare_value
-        .filter(|c| *c != 0)
-        .map(|c| (((value - c) as f64 / c as f64) * 1000.0).round() / 10.0);
     let top = 10usize.min(max_rows);
     let mut notes = Vec::new();
     let mut meta = json!({});
@@ -815,7 +752,6 @@ pub async fn summarize(
                 conn,
                 ledger_id,
                 range,
-                cmp.as_ref(),
                 "category_top",
                 "f.category_top_id",
                 &filt,
@@ -829,7 +765,6 @@ pub async fn summarize(
                 conn,
                 ledger_id,
                 range,
-                cmp.as_ref(),
                 "store",
                 "f.store_id",
                 &filt,
@@ -885,7 +820,6 @@ pub async fn summarize(
                     conn,
                     ledger_id,
                     range,
-                    cmp.as_ref(),
                     dim,
                     expr,
                     &filt,
@@ -902,7 +836,6 @@ pub async fn summarize(
                 conn,
                 ledger_id,
                 range,
-                cmp.as_ref(),
                 "store",
                 "f.store_id",
                 &filt,
@@ -918,7 +851,6 @@ pub async fn summarize(
                 conn,
                 ledger_id,
                 range,
-                cmp.as_ref(),
                 "payment_method",
                 "f.payment_method",
                 &filt,
@@ -973,8 +905,6 @@ pub async fn summarize(
                     keys: vec![json!(date), json!(store_id), json!(item_id)],
                     labels: vec![date.clone(), store, name],
                     value: price,
-                    compare_value: None,
-                    diff: None,
                     share: None,
                 });
             }
@@ -1022,14 +952,7 @@ pub async fn summarize(
         StatsResult {
             report: Some(report.into()),
             period_resolved: range.resolved(),
-            compare_period: cmp.as_ref().map(Range::resolved),
-            totals: StatsTotals {
-                value,
-                compare_value,
-                diff,
-                diff_pct,
-                receipts,
-            },
+            totals: StatsTotals { value, receipts },
             sections,
             notes,
             // echo of the applied filters (omitted when none)
@@ -1710,7 +1633,7 @@ mod tests {
 
     // [covers:mcp-stats.period-resolution]
     #[test]
-    fn periods_and_compare() {
+    fn periods_resolution() {
         let today = d("2026-10-14");
         let p = |v: Value| resolve_period(&parse_period(&v).unwrap(), today);
         let m = p(json!({"preset": "this_month"})).unwrap();
@@ -1719,11 +1642,6 @@ mod tests {
             ("2026-10-01".into(), "2026-10-31".into())
         );
         assert_eq!(m.label, "2026年10月");
-        let prev = m.previous();
-        assert_eq!(
-            (fmt_date(prev.from), fmt_date(prev.to)),
-            ("2026-09-01".into(), "2026-09-30".into())
-        );
         let lm = p(json!({"preset": "last_month"})).unwrap();
         assert_eq!(fmt_date(lm.from), "2026-09-01");
         let y = p(json!({"preset": "last_year"})).unwrap();
@@ -1736,15 +1654,9 @@ mod tests {
             (fmt_date(l3.from), fmt_date(l3.to)),
             ("2026-08-01".into(), "2026-10-31".into())
         );
-        assert_eq!(fmt_date(l3.previous().from), "2026-05-01");
         let mo = p(json!({"month": "2026-02"})).unwrap();
         assert_eq!(fmt_date(mo.to), "2026-02-28");
-        let r = p(json!({"from": "2026-10-01", "to": "2026-10-10"})).unwrap();
-        let rp = r.previous();
-        assert_eq!(
-            (fmt_date(rp.from), fmt_date(rp.to)),
-            ("2026-09-21".into(), "2026-09-30".into())
-        );
+        assert!(p(json!({"from": "2026-10-01", "to": "2026-10-10"})).is_ok());
         assert!(p(json!({"from": "2026-10-10", "to": "2026-10-01"})).is_err());
         assert!(p(json!({"preset": "yesterday"})).is_err());
         assert!(parse_period(&json!({"month": 3})).is_err());

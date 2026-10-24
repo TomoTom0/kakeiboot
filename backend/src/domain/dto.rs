@@ -336,9 +336,6 @@ pub struct PeriodResolved {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatsTotals {
     pub value: i64,
-    pub compare_value: Option<i64>,
-    pub diff: Option<i64>,
-    pub diff_pct: Option<f64>,
     pub receipts: i64,
 }
 
@@ -347,10 +344,6 @@ pub struct StatsRow {
     pub keys: Vec<serde_json::Value>,
     pub labels: Vec<String>,
     pub value: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compare_value: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share: Option<f64>,
 }
@@ -370,7 +363,6 @@ pub struct StatsSection {
 pub struct StatsResult {
     pub report: Option<String>,
     pub period_resolved: PeriodResolved,
-    pub compare_period: Option<PeriodResolved>,
     pub totals: StatsTotals,
     pub sections: Vec<StatsSection>,
     pub notes: Vec<String>,

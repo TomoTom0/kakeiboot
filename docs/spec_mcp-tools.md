@@ -784,14 +784,14 @@ input = {
 type Dim = "month" | "category_top" | "category" | "store" | "payment_method" | "item";
 ```
 
-| report | 内容 | 既定 period | 前期比較 | 表示 |
-|---|---|---|---|---|
-| monthly_overview | 当月合計・前月比、品目カテゴリ大分類内訳、上位店5、直近6か月の月次推移、件数 | this_month | あり | ダッシュボード |
-| by_category | 品目カテゴリ大分類別（`filters.category` 指定でその小分類別） | this_month | あり | 横棒 + 構成比 |
-| by_store | 店別（上位10 + その他） | this_month | あり | 横棒 |
-| monthly_trend | 月別合計（filters 併用でカテゴリ・店の推移） | last_12_months | なし | 縦棒 / 折れ線 |
-| by_payment_method | 支払方法別 | this_month | あり | 横棒 |
-| item_price_history | `filters.item_query` 必須。購入ごとの単価（`unit_price`、無ければ `amount_incl / quantity`）と店 | last_12_months | なし | 点 + 折れ線 |
+| report | 内容 | 既定 period | 表示 |
+|---|---|---|---|
+| monthly_overview | 当月合計、品目カテゴリ大分類内訳、上位店5、直近6か月の月次推移、件数 | this_month | ダッシュボード |
+| by_category | 品目カテゴリ大分類別（`filters.category` 指定でその小分類別） | this_month | 横棒 + 構成比 |
+| by_store | 店別（上位10 + その他） | this_month | 横棒 |
+| monthly_trend | 月別合計（filters 併用でカテゴリ・店の推移） | last_12_months | 縦棒 / 折れ線 |
+| by_payment_method | 支払方法別 | this_month | 横棒 |
+| item_price_history | `filters.item_query` 必須。購入ごとの単価（`unit_price`、無ければ `amount_incl / quantity`）と店 | last_12_months | 点 + 折れ線 |
 
 output:
 
@@ -799,14 +799,12 @@ output:
 Envelope<"stats", {
   report: string | null;
   period_resolved: { from: string; to: string; label: string };   // label 例 "2026年10月"
-  compare_period?: { from; to; label } | null;
-  totals: { value: integer; compare_value?: integer | null; diff?: integer | null; diff_pct?: number | null; receipts: integer };
+  totals: { value: integer; receipts: integer };
   sections: {                         // 単一集計は1要素、monthly_overview は複数
     id: string; title: string;
     dims: Dim[];
     chart: "bar_h" | "bar_v" | "line" | "stacked_bar" | "table" | "scatter_line";
-    rows: { keys: (string | integer | null)[]; labels: string[]; value: integer;
-            compare_value?: integer | null; diff?: integer | null; share?: number }[];
+    rows: { keys: (string | integer | null)[]; labels: string[]; value: integer; share?: number }[];
     truncated_rows?: integer;
   }[];
   notes: string[];                    // 「全体値引は未分類に含む」「未分類 N 円」「ラベル絞り込み: 赤・青（いずれかを含むレシート）」等
@@ -815,10 +813,10 @@ Envelope<"stats", {
 ```
 
 - 指標は `amount_incl` 合計に固定する（値引行を含む。全体値引は「未分類」）。集計クエリは `spec_data-model.md` §13-3 の `v_item_facts`。
-- 前期比較は同じ長さの直前期間（月指定なら前月、任意範囲なら同日数）。上位は10 + 「その他」固定。
+- 前期比較（compare_period・diff）は持たない（TASK-94 で削除）。比較が必要なときは `period` を変えて複数回呼ぶ。上位は10 + 「その他」固定。
 - `filters.store_category` で「今月コンビニでいくら」を表す。
 - web 専用の集計フィルタ（TASK-65）: web の分析系 API（§12 の `GET /api/ledgers/{l}/analysis` 3 endpoint。旧 `GET /stats` は TASK-89 で削除）は `filters` に加え `payment_method`（支払方法の完全一致。9キー以外は 400）を渡せる。`store_id` と同じく `#[serde(skip)]` の web 専用 field のため MCP 入力にもエコーにも現れない（§12 レシート一覧の支払方法絞り込みが集計にも掛かる）。
-- `filters.label_colors`（OR）は「いずれかのラベルを持つレシートの明細をすべて集計」する。filter 条件を全 report と前期比較が共有するため、どの report にも同じ意味で掛かる。ユーザーがラベルのタイトル（例: 旅行）で言った場合は get_catalog の `labels` で色に解決して渡す。
+- `filters.label_colors`（OR）は「いずれかのラベルを持つレシートの明細をすべて集計」する。filter 条件を全 report が共有するため、どの report にも同じ意味で掛かる。ユーザーがラベルのタイトル（例: 旅行）で言った場合は get_catalog の `labels` で色に解決して渡す。
 - 用語の区別: `filters.label_colors` がラベル絞り込みの入出力名。section rows の `labels: string[]` はチャートの軸ラベル（「食費」等）であり別物。
 - structuredContent は数値をモデルが文章化できる最小限（rows は上位10 + その他）とし、グラフ描画用の追加データ（overview の日別累計等）は `_meta` に置く。
 - 予算機能は持たない（データモデルに予算テーブルが無い）。
@@ -843,7 +841,7 @@ Envelope<"stats", {
 | draft_list | get_receipt_drafts（一覧） | pending 一覧。各行に ledger 名、画像状態の文言（`image_display`）、重複の印 | 行タップで詳細（get_receipt_drafts を callTool、widget 内で view 切替） |
 | receipt | get_receipt / update_receipt | draft と同等の表示 + 削除済み表示、ヘッダのラベルは LabelChip 列（名前あり = 名前チップ・名前なし = 文字のない色チップ。`labels`。表示のみ） | なし（編集は会話。ラベルの付け外しも会話の label_receipts） |
 | receipt_list / item_list | search_receipts | 一覧 + 件数・合計、サムネイル、receipts 行のラベル色ドット | 行タップで get_receipt を callTool して詳細へ（戻るボタン） |
-| stats | summarize_spending | sections を chart 種別ごとに描画、合計カード、前期比、適用中のラベル絞り込みのチップ（`filters.label_colors` があれば語「ラベル」+ 選択ラベルの LabelChip（sm）列） | 期間・report の切替（summarize_spending を callTool して widget 内で再描画。envelope の `filters` を引き継ぐため `label_colors` も保たれる）、全画面切替 |
+| stats | summarize_spending | sections を chart 種別ごとに描画、合計カード、適用中のラベル絞り込みのチップ（`filters.label_colors` があれば語「ラベル」+ 選択ラベルの LabelChip（sm）列） | 期間・report の切替（summarize_spending を callTool して widget 内で再描画。envelope の `filters` を引き継ぐため `label_colors` も保たれる）、全画面切替 |
 
 ### 11-3 window.openai の使い方
 
@@ -928,12 +926,12 @@ pending 表示 → [登録] → ボタン disabled + 「登録中」 → callToo
 
 ## 12. web 画面とのサービス層共有
 
-- 業務操作（draft・receipt・catalog・stats・search・ledger 解決・audit）は `domain::*` に置き、MCP adapter（CallToolResult 化）と web adapter（axum JSON）が同じ関数を呼ぶ。閲覧系ダッシュボードの期間は月 / 週 / 年 / 任意期間の4モード（画面間で共有。TASK-53 で週を追加）。週は月曜始まりで `week=YYYY-MM-DD`（週の月曜日。非月曜日が来たら月曜へ正規化）で URL 往復し、ラベルは「2026年10月12日の週」、比較語彙は「前週」、送りは当週の月曜日まで（月モードの当月までと同規則）。backend の `Period` は変更なし（from/to 渡し。前期間は `Range::previous` が同日数の直前を返すため月曜始まり1週間の前週と一致する）。
+- 業務操作（draft・receipt・catalog・stats・search・ledger 解決・audit）は `domain::*` に置き、MCP adapter（CallToolResult 化）と web adapter（axum JSON）が同じ関数を呼ぶ。閲覧系ダッシュボードの期間は月 / 週 / 年 / 任意期間の4モード（画面間で共有。TASK-53 で週を追加）。週は月曜始まりで `week=YYYY-MM-DD`（週の月曜日。非月曜日が来たら月曜へ正規化）で URL 往復し、ラベルは「2026年10月12日の週」、送りは当週の月曜日まで（月モードの当月までと同規則。比較語彙・前期間計算は TASK-93/94 で廃止）。backend の `Period` は変更なし（from/to 渡し）。
 - 入力の主体は `Actor { user_id, kind: Web | Mcp { client_id, grant_id } }` と `TargetLedger`（`spec_auth.md` §5-3）を domain 関数の引数にする。domain は scope を知らず、role と ledger 所属のみ検査する（scope は MCP adapter、CSRF・セッションは web adapter）。
 - 確定レシートの作成は draft の承認 tx（`store::approve_draft`。`spec_data-model.md` §7-5。`receipts.source` は draft の image_status から決まる）1つで行い、MCP の承認 tool（単一・一括）が呼ぶ。web のフォーム直接確定（source=manual）は未実装（web 画面は閲覧中心。本節末尾の web 画面の段）。
 - DTO（`DraftPayload` / `DraftView` / `ReceiptView` / `StatsResult` 等）は `domain::dto` の serde 型とし、MCP の structuredContent と web API の JSON を同じ型で返す。TS 型は `frontend/src/shared/types/` に手書きで保持し、MCP と web で同じ形を共有する。
 - web 画面は閲覧中心（入力は ChatGPT 経由が主）。ホーム・レシート・カテゴリ・店はいずれも期間（月 / 週 / 年 / 任意期間、画面間で共有）付きのダッシュボードで、集計と推移を示す。行の押下は5軸統一の軸詳細 `/axes/*`（TASK-89: `/axes/category/:top[/:sub]`〔大分類/小分類〕・`/axes/category/uncategorized`〔未分類の carve-out〕・`/axes/store/:id`・`/axes/item/:name`〔品名を URL エンコード〕・`/axes/label/:color`・`/axes/payment/:method`。AxisDetailPage 1 component が同骨格で描く: PageHead〔種別/名前/期間合計/⋯menu〕→ 期間ヘッダ〔その軸値に絞った合計〕→ 掛け合わせ chip → 積み上げ推移 → 交差ランキング〔category×store / store×category / item×store / label×category / payment×store。行は相手軸の詳細へのリンクで、掛け合わせは `store_id`・`store_category`・`category`・`labels` query で渡す〕→ カテゴリ軸のみの追加区画〔大分類は小カテゴリ別・小分類は品目一覧〕→ 品目軸のみ品目stats区画〔件数・金額・平均単価・min/max・最終購入・店数の summary+価格履歴〔日付・店名・単価〕+店別集計。`GET /analysis/item` の item_query=品名〕→ 最近の明細。category/store 軸の id 解決は catalog/listStores（誤 id は一覧へ ?missing= 付き replace）、item/label/payment 軸は名前keyで解決処理なし（空データでも骨格を描く）。旧 `/categories/:top`・`/stores/:id` の redirect 互換は無く、未対応 path は既定の / へ redirect する。遷移は右へ進む / 左へ戻るの slide 遷移で、方向は history position と route depth から判定する〔`prefers-reduced-motion: reduce` では無効〕。push 遷移は常に先頭へスクロールし、戻る・進むは履歴位置の復元を試みる（最大1.5秒。replace や同一ページ内の遷移では動かさない））。集計は次段の分析系 web API（`GET /api/ledgers/{l}/analysis` 3 endpoint。旧 `GET /api/ledgers/{l}/stats` は TASK-89 の frontend 全面移行に伴い後方互換なしで削除〔ユーザー指示 2026-10-23〕。MCP の summarize_spending〔§10〕と `domain::stats::summarize` は存続）。レシート一覧 `GET /api/ledgers/{l}/receipts` は from/to・store・category・item_query・`label_colors`（カンマ区切り・OR）・`q`（横断テキスト検索: 品目名 OR 店名/別名。TASK-41）・`store_id`（店の完全一致）・`payment_method`（支払方法の完全一致・9キー以外は 400。TASK-65）で絞り込め、各行に `labels` を載せる。品目単位の一覧 `GET /api/ledgers/{l}/items`（`q`〔品目名のみ〕・from/to・category〔"大分類" or "大分類/小分類"・"未分類" 可〕・`store_id`・`include_deleted`・`label_colors`・limit/cursor。total_count・sum_amount 付き。member なら role を問わず閲覧可）は /search の品物tab の裏側で、`domain::search::search_items` を MCP search_receipts の mode:"items" と共有する（§7-8）。検索語（/receipts・/items・/analysis の `store`・`q`・`item_query` と /stores の `query`）は 200 字上限（`max_query_chars`・§3-5。超過は 400 invalid_request、空白のみは従来どおり絞り込みなし）。レシート詳細（Feed の ReceiptPanel）の閲覧モードでは、品目のカテゴリ（catalog で解決できるもの。未分類・解決できないものはリンクにしない）は `/axes/category/:top[/:sub]` へ、店名は `/axes/store/:id` へ、店カテゴリは `/stores?store_category=` の絞り込みへリンクし、query には購入月（購入日が無ければ現在の期間）を渡す（修正モード中は移動しない）。日別の支出（`.daily-bars`）は期間の日数分の等分トラック（`repeat(N, minmax(0.25rem, 1fr))`・gap 2px・高さ 110px）で、各本の幅は >= 4px（0.25rem・許容 0.05px）を下回らない。推移の粒度は期間の日数で切り替わり（TASK-55: 62日以内は日別・63〜366日は週別〔月曜アンカー〕・366日超は月別の棒。週モード〔TASK-53〕は日数に関係なく日別7本。注記は日別=合計・週別=週平均・月別=月平均〔記録のある週/月〕。棒の無い日・週・月は零埋めする）。月次推移の棒グラフ（TrendBars を共用: ホーム〔月モードは選択月を含む6か月窓〕・カテゴリ/店〔月モードは12か月窓〕）は各棒に月ラベルを付けず（TASK-42）、グラフ直下の軸ラベル（`.axis-ends`）が先頭・末尾の2点だけで期間を示す（両端が同年なら「M月」、年を跨ぐなら「YYYY年M月」）。当月・選択月は棒色の強調のまま、各棒の `title`/`aria-label`（年月+金額）・押下での期間移動（日粒度の棒はその日のレシート一覧へ）・値ラベル（`.bar-val`）は不変。閲覧画面の密度は1カラムの縦積みで統一する（TASK-89。比較・増減機能は TASK-93 で未要求機能として全廃）: 各画面の先頭は期間ヘッダ（カードでなく余白+細罫線の区画。期間label〔例「2026年10月の支出」〕と期間合計の特大数値〔2.25rem/700/tabular-nums〕のみ。KPI カード〔1日あたり等〕は廃止）。ホームは 期間ヘッダ → 積み上げ推移（積み上げ金額の1形固定。TASK-95 で mode/数値軸の語tabは廃止）→ カテゴリ内訳（上位5+残余）→ 最近のレシート、カテゴリ/店の一覧は 期間ヘッダ → 積み上げ推移 → 全量ランキング（limit=stats_max_rows まで実行）を並べる。区画の見出しは視覚テキストを持たず sr-only（TASK-95: 文書構造と読み上げのみ。UIは構造とメリハリで表現し、見出し・語tabで内容を説明しない）、区画への誘導は icon link（chevron・aria-label。breakdown-more/recent-more/all-receipts）。ランキングは RankedList（1行 44px・構成比は独立した meter ではなく行の下端 2px のバー）、上位 N 外の残余は「ほか n件・計xx円」の muted 集計行（非リンク。金額セルは残余金額で件数を金額にしない。backend の truncated_rows は対象期間にデータのある行のみを数える）、最近のレシート行は日付・店名・ラベル・金額の1行 44px、720px 以下はカード gap 0.75rem・カード padding 12px。
-- 分析系の web API（TASK-89。3 route。旧 `GET /api/ledgers/{l}/stats` は frontend 全面移行に伴い削除済み（後方互換なし。MCP 側 summarize_spending と `domain::stats::summarize`・`Range::previous` は存続）。ledger の member なら role を問わず閲覧可・api_guard 配下・rate limit 無し）:
+- 分析系の web API（TASK-89。3 route。旧 `GET /api/ledgers/{l}/stats` は frontend 全面移行に伴い削除済み（後方互換なし。MCP 側 summarize_spending と `domain::stats::summarize` は存続、比較部は TASK-94 で削除）。ledger の member なら role を問わず閲覧可・api_guard 配下・rate limit 無し）:
   - `GET /api/ledgers/{l}/analysis`（期間合計+軸別内訳を Home と軸詳細の 1 fetch で。TASK-93 で比較・増減・新規/消失を全廃し現期間のみ）: query は `axis`（category〔品目カテゴリ大分類。`category` filter 指定時はその小分類=by_category 規約〕|store|item|label|payment_method。既定 category）×`metric`（amount=SUM(amount_incl)〔値引行含む〕|count=COUNT(DISTINCT receipt_id)〔レシート件数ベース〕|unit=amount÷count〔f64 1桁丸め・count=0 は null〕。既定 amount）・期間（month/year/from&to の排他・共通関数 web_period の parse。既定 this_month）・filters（/receipts と共通の web_filters による category/store/store_id/store_category/item_query/payment_method/label_colors・エコーは serde(skip) 規約どおり）・`limit`（1..=stats_max_rows。既定50）。応答は `period`/`totals`（amount・count・unit・days）/`rows`（対象期間にデータのある軸値のみを metric 値降順で上位 limit。「その他」集約行は作らず残余は truncated_rows と totals から frontend が組む。対象期間にデータのない軸値は rows にも truncated_rows にも現れない）/`truncated_rows`（limit を超えた対象期間の軸値の行数）/`filters`。各行は key（品目軸=品名文字列〔同名品目=1品目。`/analysis/item` の item_query と同じ品名概念・REVIEW-13 M-3〕・ラベル軸=色 or null〔無ラベル〕）・label・amount/count/unit・share（=metric 値÷軸合計。metric=unit は null。ラベル軸の軸合計は重複込みで内訳の合計が100%になる）を持つ。
   - `GET /api/ledgers/{l}/analysis/trend`（積み上げ行列）: axis/metric（同上）・`granularity`（day|week|month。省略時 auto: 62日以下=day・366日以下=week・超=month。frontend trend.ts の 62/366 閾値と同値だが表示判断は frontend に残すため明示指定を期待）・期間・filters・`limit`（系列数上限。既定10）。応答は `buckets`（zero-fill 済み昇順。day=日付・week=月曜日・month="YYYY-MM"）・`series`（期間全体の metric 合計降順で上位 limit の {key,label,values〔bucket 順〕,total}。品目軸等の全系列は数千に達しうるため2段クエリ〔期間全体の軸値合計で上位 N を確定→本体を IN 句で絞り込み〕）・`bucket_totals`（各 bucket の全軸値合計=limit 内 series+残余）・`truncated_rows`（落下系列数）。「その他」系列は返さず bucket_totals − series を frontend が作る原則。
   - `GET /api/ledgers/{l}/analysis/item`（品目stats。widget item_price_history の web 版）: `item_id`（優先・widget 互換で残す）または `item_query`（既存 item_match〔FTS trigram>=3字/LIKE〕で品目群にマッチ。品目軸詳細のドリルは品名をこちらへ渡す主経路）のどちらか必須（両方無しは 400。item_query も 200 字上限〔web_filters 経由・REVIEW-13 L-1〕）。期間既定 last_12_months・filters は analysis と同一（item_query は品目選択側に使うため filters としては二重に掛けない）。応答は `item`（{item_id,name}。複数マッチ時は最新購入名の代表・該当なしは null）/`summary`（count=明細行数〔line_kind='item'〕・amount・avg/min/max_unit_price〔単価規約: unit_price ないし round(amount_incl/quantity)。quantity は NOT NULL DEFAULT 1〕・last_purchased_on・stores）/`prices`（date/store_id/store_name/unit_price/quantity/amount_incl の日付昇順・stats_max_rows 上限）/`by_store`（store_id/store_name/count/amount/avg_unit_price）/`monthly`（ym/count/amount の期間内 zero-fill）/`truncated_rows`。

@@ -293,8 +293,8 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
     ledger: LEDGER,
     report,
     period_resolved: { from: '2026-10-01', to: '2026-10-31', label },
-    compare_period: { from: '2026-09-01', to: '2026-09-30', label: '2026年9月' },
-    totals: { value: 52000, compare_value: 48000, diff: 4000, diff_pct: 8.3, receipts: 31 },
+
+    totals: { value: 52000, receipts: 31 },
     notes: ['全体値引は未分類に含む'],
   }
   const byCategory = {
@@ -303,9 +303,9 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
     dims: ['category_top' as const],
     chart: 'bar_h' as const,
     rows: [
-      { keys: [1], labels: ['食費'], value: 30000, compare_value: 28000, diff: 2000, share: 0.577 },
-      { keys: [2], labels: ['日用品'], value: 12000, compare_value: 11000, diff: 1000, share: 0.231 },
-      { keys: [null], labels: ['未分類'], value: 10000, compare_value: 9000, diff: 1000, share: 0.192 },
+      { keys: [1], labels: ['食費'], value: 30000, share: 0.577 },
+      { keys: [2], labels: ['日用品'], value: 12000, share: 0.231 },
+      { keys: [null], labels: ['未分類'], value: 10000, share: 0.192 },
     ],
   }
   const trend = {
@@ -358,7 +358,7 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
         ],
       }
     case 'monthly_trend':
-      return { ...base, compare_period: null, sections: [{ ...trend, chart: 'line' }] }
+      return { ...base, sections: [{ ...trend, chart: 'line' }] }
     case 'by_payment_method':
       return {
         ...base,
@@ -369,8 +369,8 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
             dims: ['payment_method'],
             chart: 'table',
             rows: [
-              { keys: ['credit_card'], labels: ['クレジットカード'], value: 40000, compare_value: 35000, diff: 5000 },
-              { keys: ['cash'], labels: ['現金'], value: 12000, compare_value: 13000, diff: -1000 },
+              { keys: ['credit_card'], labels: ['クレジットカード'], value: 40000 },
+              { keys: ['cash'], labels: ['現金'], value: 12000 },
             ],
           },
         ],
@@ -378,7 +378,6 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
     case 'item_price_history':
       return {
         ...base,
-        compare_period: null,
         sections: [
           {
             id: 'item_price_history',

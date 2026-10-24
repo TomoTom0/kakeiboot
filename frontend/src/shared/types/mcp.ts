@@ -251,8 +251,6 @@ export type StatsRow = {
   keys: (string | Integer | null)[]
   labels: string[]
   value: Integer
-  compare_value?: Integer | null
-  diff?: Integer | null
   share?: number
 }
 
@@ -347,12 +345,8 @@ export type StatsEnvelope = Envelope<
     /** Echo of the applied filters (spec §10), incl. label_colors (TASK-17). */
     filters?: StatsFilters | null
     period_resolved: PeriodResolved
-    compare_period?: PeriodResolved | null
     totals: {
       value: Integer
-      compare_value?: Integer | null
-      diff?: Integer | null
-      diff_pct?: number | null
       receipts: Integer
     }
     sections: StatsSection[]

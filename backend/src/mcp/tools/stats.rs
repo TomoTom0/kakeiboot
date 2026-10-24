@@ -76,17 +76,6 @@ pub async fn summarize(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
         }
     }
     let t = &res.totals;
-    let compare_line = t
-        .compare_value
-        .map(|_| {
-            let d = t.diff.unwrap_or(0);
-            let pct = t
-                .diff_pct
-                .map(|p| format!("（{p:+.1}%）"))
-                .unwrap_or_default();
-            format!(" 前期比 {d:+}{pct}",)
-        })
-        .unwrap_or_default();
     let top_line = res
         .sections
         .first()
@@ -100,11 +89,10 @@ pub async fn summarize(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
         })
         .unwrap_or_default();
     let text = format!(
-        "{}: {}、{}件。{}{}。{}",
+        "{}: {}、{}件。{}。{}",
         res.period_resolved.label,
         yen(t.value),
         t.receipts,
-        compare_line,
         top_line,
         ledger.text_suffix()
     );

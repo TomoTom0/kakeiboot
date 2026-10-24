@@ -18,7 +18,7 @@ describe('stats dashboard', () => {
     expect(heights).toHaveLength(6)
     expect(Math.max(...heights)).toBe(heights[5])
     const card = wrapper.find('[data-test="totals-card"]').text()
-    for (const t of ['52,000円', '31件', '+4,000円', '+8.3%']) expect(card).toContain(t)
+    for (const t of ['52,000円', '31件']) expect(card).toContain(t)
   })
 
   it('[covers:widget.stats-chart-values] chart kinds: stacked_bar, line, table, scatter_line', async () => {
@@ -35,7 +35,7 @@ describe('stats dashboard', () => {
 
     const table = await mountWidget(fakeHost({ toolOutput: statsEnvelope('by_payment_method') }))
     expect(table.wrapper.findAll('[data-chart="table"] tr')).toHaveLength(2)
-    expect(table.wrapper.find('[data-chart="table"]').text()).toContain('-1,000円')
+    expect(table.wrapper.find('[data-chart="table"]').text()).toContain('40,000円')
 
     const scatter = await mountWidget(fakeHost({ toolOutput: statsEnvelope('item_price_history') }))
     const pts = scatter.wrapper.findAll('[data-chart="scatter_line"] circle.bb-chart__point')

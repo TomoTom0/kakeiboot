@@ -14,7 +14,7 @@ import BarVChart from '@/shared/components/charts/BarVChart.vue'
 import LineChart from '@/shared/components/charts/LineChart.vue'
 import ShareBar from '@/shared/components/charts/ShareBar.vue'
 import type { ChartDatum } from '@/shared/components/charts/types'
-import { formatIsoDateJa, formatPct } from '@/shared/format'
+import { formatIsoDateJa } from '@/shared/format'
 import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import { useWidgetStore } from '../stores/widget'
@@ -75,7 +75,7 @@ const labelFilter = computed(() => {
 function rowsToData(section: StatsSection): ChartDatum[] {
   return section.rows.map((r: StatsRow) => {
     if (section.chart === 'scatter_line') return { label: formatIsoDateJa(r.labels[0] ?? ''), sub: r.labels[1] ?? null, value: r.value }
-    return { label: r.labels.join(' / '), value: r.value, compare: r.compare_value ?? null }
+    return { label: r.labels.join(' / '), value: r.value }
   })
 }
 
@@ -179,12 +179,6 @@ async function onPeriod(e: Event) {
       </p>
       <p class="bb-muted bb-small">
         {{ envelope.totals.receipts }}件
-        <template v-if="envelope.compare_period && envelope.totals.diff !== null && envelope.totals.diff !== undefined">
-          ・ {{ envelope.compare_period.label }}比 <MoneyAmount
-            :value="envelope.totals.diff"
-            signed
-          /> （{{ formatPct(envelope.totals.diff_pct) }}）
-        </template>
       </p>
     </section>
 
@@ -201,7 +195,6 @@ async function onPeriod(e: Event) {
       <BarHChart
         v-if="s.chart === 'bar_h'"
         :data="rowsToData(s)"
-        :show-compare="Boolean(envelope.compare_period)"
       />
       <BarVChart
         v-else-if="s.chart === 'bar_v'"
@@ -229,12 +222,6 @@ async function onPeriod(e: Event) {
               {{ r.labels.join(' / ') }}
             </th>
             <td><MoneyAmount :value="r.value" /></td>
-            <td v-if="r.diff !== undefined && r.diff !== null">
-              <MoneyAmount
-                :value="r.diff"
-                signed
-              />
-            </td>
           </tr>
         </tbody>
       </table>

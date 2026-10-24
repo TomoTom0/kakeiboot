@@ -1,4 +1,4 @@
-export type ChartDatum = { label: string; value: number; compare?: number | null; sub?: string | null }
+export type ChartDatum = { label: string; value: number; sub?: string | null }
 
 /** Series colors are CSS variables (spec §11-7). */
 export const SERIES = ['var(--bb-series-1)', 'var(--bb-series-2)', 'var(--bb-series-3)', 'var(--bb-series-4)', 'var(--bb-series-5)', 'var(--bb-series-6)']
