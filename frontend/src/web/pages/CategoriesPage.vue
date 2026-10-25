@@ -39,11 +39,11 @@ const trend = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-/** the trend window: 12 months through the selected month in month mode,
- *  the period itself otherwise (the list rule) */
+/** the trend window: a 6-month window (TASK-100) through the selected month
+ *  in month mode, the period itself otherwise (the list rule) */
 function trendPeriod(): [string, string] {
   if (period.mode === 'month') {
-    const q = period.trendQuery()
+    const q = period.trendQuery(5)
     return [q.from!, q.to!]
   }
   return period.range

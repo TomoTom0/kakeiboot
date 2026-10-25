@@ -98,7 +98,7 @@
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
-| `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels ヘルパ（軸両端ラベルの書式） [TASK-42] |
+| `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100] |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈・URL 同期・着地・優越判定 [TASK-77]・世代ガード [TASK-61]） |

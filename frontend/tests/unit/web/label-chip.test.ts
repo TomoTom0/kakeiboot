@@ -1,21 +1,16 @@
 // The managed-label UI parts (TASK-26): LabelChip (the shared visual of one
-// label), LabelToggleGroup (the five labels as toggle chips shared by the
-// picker and filter popovers) and the LabelFilter toolbar button (word when
-// unselected, color dots when active, a compact icon-only variant). The
-// screen never shows color-name text anywhere (web-labels
-// .no-color-names-on-screen).
-import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+// label) and LabelToggleGroup (the five labels as toggle chips shared by the
+// receipt picker and the search dialog's lower half, TASK-101). The screen
+// never shows color-name text anywhere (web-labels
+// .no-color-names-on-screen). The former LabelFilter button is gone with
+// TASK-101 (label filtering rides the search dialog; filter-bar.test.ts).
+import { mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 import LabelChip from '@/shared/components/LabelChip.vue'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import type { Label, LabelColor } from '@/shared/labels'
-import LabelFilter from '@/web/components/LabelFilter.vue'
 import LabelToggleGroup from '@/web/components/LabelToggleGroup.vue'
-import { setDataApi, type DataApi } from '@/web/api/data'
-import { createMockDataApi } from '@/web/api/data/mock'
-import { useLabelsStore } from '@/web/stores/labels'
-import { useSessionStore } from '@/web/stores/session'
+import { setDataApi } from '@/web/api/data'
 
 const TITLED = { color: 'red', title: '旅行' }
 const BARE = { color: 'blue', title: null }
@@ -127,85 +122,6 @@ describe('LabelToggleGroup', () => {
     for (const b of disabled.findAll('button')) expect(b.attributes('disabled')).toBeDefined()
     wrapper.unmount()
     disabled.unmount()
-  })
-})
-
-describe('LabelFilter button', () => {
-  async function mountFilter(props: { modelValue?: LabelColor[]; compact?: boolean } = {}) {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const api: DataApi = createMockDataApi()
-    Object.assign(api, {
-      listLabels: vi.fn(async () => ({
-        labels: [
-          { color: 'red', title: '旅行' },
-          { color: 'yellow', title: null },
-          { color: 'green', title: null },
-          { color: 'blue', title: null },
-          { color: 'purple', title: null },
-        ],
-      })),
-    })
-    setDataApi(api)
-    const labels = useLabelsStore(pinia)
-    const session = useSessionStore(pinia)
-    session.selectedLedgerId = 1
-    await labels.load(1)
-    await flushPromises()
-    const wrapper = mount(LabelFilter, {
-      props: { modelValue: props.modelValue ?? [], compact: props.compact },
-      global: { plugins: [pinia] },
-      attachTo: document.body.appendChild(document.createElement('div')),
-    })
-    return wrapper
-  }
-
-  it('[covers:web-labels.filter-button] 未選択は語あり、選択中は語なし+点+accent、compact はアイコンのみ、aria-label、解除', async () => {
-    // unselected: the word rides along
-    const plain = await mountFilter()
-    const btn = plain.find('[data-test="label-filter-button"]')
-    expect(btn.text()).toContain('ラベル')
-    expect(btn.attributes('aria-label')).toBe('ラベルで絞り込み')
-    expect(btn.classes()).not.toContain('active')
-    expect(btn.find('.label-filter-dot').exists()).toBe(false)
-
-    // a selection drops the word for the chosen colors' dots
-    const active = await mountFilter({ modelValue: ['red', 'yellow'] })
-    const activeBtn = active.find('[data-test="label-filter-button"]')
-    expect(activeBtn.classes()).toContain('active')
-    expect(activeBtn.text()).not.toContain('ラベル')
-    const dots = activeBtn.findAll('.label-filter-dot')
-    expect(dots).toHaveLength(2)
-    expect(dots[0]!.classes()).toContain('label-red')
-    // aria names the chosen labels (title first, neutral names after)
-    expect(activeBtn.attributes('aria-label')).toBe('ラベルで絞り込み: 旅行、ラベル2')
-
-    // the popover carries the toggle group and the clear button
-    await activeBtn.trigger('click')
-    await flushPromises()
-    const group = active.find('.label-toggle-group')
-    expect(group.exists()).toBe(true)
-    expect(active.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('true')
-    const clear = active.find('[data-test="label-filter-clear"]')
-    expect(clear.attributes('disabled')).toBeUndefined()
-    await clear.trigger('click')
-    expect(active.emitted('update:modelValue')).toEqual([[[]]])
-    // clearing keeps the popover open for further adjustments
-    expect(activeBtn.attributes('aria-expanded')).toBe('true')
-
-    // compact: icon only, no word even when unselected
-    const compact = await mountFilter({ modelValue: [], compact: true })
-    const compactBtn = compact.find('[data-test="label-filter-button"]')
-    expect(compactBtn.classes()).toContain('compact')
-    expect(compactBtn.text()).toBe('')
-
-    // with no selection the clear button is disabled
-    await plain.find('[data-test="label-filter-button"]').trigger('click')
-    await flushPromises()
-    expect(plain.find('[data-test="label-filter-clear"]').attributes('disabled')).toBeDefined()
-
-    expectNoColorNames(plain.text() + active.text() + compact.text(), [])
-    for (const w of [plain, active, compact]) w.unmount()
   })
 })
 

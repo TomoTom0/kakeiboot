@@ -170,7 +170,7 @@ describe('StoresPage (list, TASK-89 redesign)', () => {
 })
 
 describe('AxisDetailPage (TASK-89 §1-(5))', () => {
-  it('[covers:web-axis.unified-skeleton] 大カテゴリ: 同一骨格（PageHead・期間ヘッダ・チップ・推移・交差ランキング・最近の明細）で sidebar のカテゴリ節が active・推移は12か月窓', async () => {
+  it('[covers:web-axis.unified-skeleton][covers:web-browse.trend-month-window] 大カテゴリ: 同一骨格（PageHead・期間ヘッダ・チップ・推移・交差ランキング・最近の明細）で sidebar のカテゴリ節が active・推移は6か月窓', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getAnalysis')
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
@@ -178,8 +178,8 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
     // the cross fetch (store axis, category narrowed) and the sub ranking
     expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'store', category: '食費' }))
     expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'category', category: '食費', limit: 50 }))
-    // the trend rides the 12-month window in month mode
-    expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'category', granularity: 'month', from: '2025-11-01', to: '2026-10-31' }))
+    // the trend rides the 6-month window in month mode
+    expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'category', granularity: 'month', from: '2026-05-01', to: '2026-10-31' }))
     // the skeleton parts all draw
     expect(wrapper.find('[data-test="page-back"]').attributes('aria-label')).toBe('カテゴリ一覧へ戻る')
     expect(wrapper.find('[data-test="total"]').text()).toBe('550円')
@@ -673,10 +673,10 @@ describe('StoresPage long names (TASK-16)', () => {
   })
 })
 
-describe('Dashboard label filter (TASK-17/26/44)', () => {
-  /** Open the topbar label chip's dialog (the toggles live in it, TASK-44). */
+describe('Dashboard label filter (TASK-17/26/44, TASK-101)', () => {
+  /** Open the search dialog (the label toggles live in its lower half, TASK-101). */
   async function openFilter(wrapper: W): Promise<void> {
-    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
   }
 
@@ -685,7 +685,7 @@ describe('Dashboard label filter (TASK-17/26/44)', () => {
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper, router, pinia } = await mountApp('/')
 
-    // Home: the LabelFilter button binds to the period store's labelColors
+    // Home: the dialog's label half binds to the period store's labelColors
     // and both analysis and the recent-receipts listReceipts carry the filter
     await openFilter(wrapper)
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')

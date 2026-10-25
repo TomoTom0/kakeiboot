@@ -141,15 +141,16 @@ describe('SettingsPage', () => {
     expect(rows()[0]!.text()).toContain('家計')
 
     // the retried save goes through and the store update reaches the
-    // LedgerSwitcher on a ledgerScoped screen (/settings/general is not one)
+    // ledger switcher rows on a ledgerScoped screen (/settings/general is
+    // not one; TASK-101 moved the switcher into the account menu)
     await wrapper.find('[data-test="edit-save"]').trigger('click')
     await settle()
     expect(renameLedger).toHaveBeenLastCalledWith(1, { name: '我が家' })
     expect(rows()[0]!.text()).toContain('我が家')
     await router.push('/settings/labels')
     await settle()
-    expect(wrapper.find('[data-test="ledger-switch"]').attributes('aria-label')).toBe('家計簿: 我が家（切り替え）')
-    await wrapper.find('[data-test="ledger-switch"]').trigger('click')
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="ledger-option-1"]').text()).toContain('我が家')
     expect(wrapper.find('[data-test="ledger-option-2"]').text()).toContain('実家の家計')

@@ -1,7 +1,9 @@
-// Ledger colors and the ledger switcher (TASK-16 item 3): initial selection
-// from me.default_ledger_id, the LedgerSwitcher (color chip + popover list)
-// and the top bar color band. The settings-screen color radiogroup is gone
-// (TASK-34: display colors are assigned automatically, not user-chosen).
+// Ledger colors and the ledger switcher (TASK-16 item 3, moved into the
+// account menu by TASK-101): initial selection from me.default_ledger_id,
+// the ledger switcher as a radio section inside the account menu (color
+// chip + name + role + check rows) and the top bar color band. The
+// settings-screen color radiogroup is gone (TASK-34: display colors are
+// assigned automatically, not user-chosen).
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Me } from '@/web/api/auth'
@@ -65,18 +67,21 @@ describe('session.setMe initial ledger', () => {
   })
 })
 
-describe('LedgerSwitcher', () => {
-  it('[covers:web-shell.ledger-switcher] 色チップとアクセシブルネーム、一覧の色・名前・役割・選択中、選ぶと切替えて閉じる', async () => {
+describe('LedgerSwitcher (account menu section)', () => {
+  it('[covers:web-shell.ledger-switcher] accountメニュー内のradio section: 色チップ・名前・役割・選択中check、選ぶと切替えて閉じる（topbarトリガは無い）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: TWO } })
-    const { wrapper, pinia } = await mountApp('/')
-    const trigger = wrapper.find('[data-test="ledger-switch"]')
-    expect(trigger.attributes('aria-label')).toBe('家計簿: default book（切り替え）')
-    expect(trigger.html()).toContain('var(--ledger-teal)')
+    const { wrapper, pinia } = await mountApp('/', { attach: true })
+    // TASK-101: no standalone topbar trigger anymore — the switcher rides
+    // the account menu
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(false)
 
-    await trigger.trigger('click')
+    await wrapper.find('[data-test="account-button"]').trigger('click')
     await settle()
-    const menu = wrapper.find('[data-test="ledger-menu"]')
+    const menu = wrapper.find('[data-test="account-menu"]')
     expect(menu.exists()).toBe(true)
+    const section = menu.find('[role="group"][aria-label="家計簿"]')
+    expect(section.exists()).toBe(true)
     const o1 = wrapper.find('[data-test="ledger-option-1"]')
     const o2 = wrapper.find('[data-test="ledger-option-2"]')
     expect(o1.attributes('role')).toBe('menuitemradio')
@@ -93,20 +98,28 @@ describe('LedgerSwitcher', () => {
     await o2.trigger('click')
     await settle()
     expect(useSessionStore(pinia).selectedLedgerId).toBe(2)
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="ledger-switch"]').attributes('aria-label')).toBe('家計簿: 家族（切り替え）')
+    // selecting closes the account menu and the focus returns to its trigger
+    expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.find('[data-test="account-button"]').element)
     cleanup()
 
-    // a single membership still shows the trigger
+    // a single membership still shows the row
     mockFetch({ 'GET /api/auth/me': { body: { ...TWO, ledgers: [TWO.ledgers[0]] } } })
     const one = await mountApp('/')
-    expect(one.wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    await one.wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(one.wrapper.find('[data-test="ledger-option-1"]').exists()).toBe(true)
     cleanup()
 
-    // not on screens that are not ledger scoped
+    // not on screens that are not ledger scoped: the menu keeps its four
+    // plain items and no radio rows
     mockFetch({ 'GET /api/auth/me': { body: TWO }, 'GET /api/passkeys': { body: [] } })
     const settings = await mountApp('/settings')
-    expect(settings.wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
+    await settings.wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(settings.wrapper.find('[role="group"][aria-label="家計簿"]').exists()).toBe(false)
+    expect(settings.wrapper.find('[data-test="account-menu"] [role="menuitemradio"]').exists()).toBe(false)
+    expect(settings.wrapper.findAll('[data-test="account-menu"] [role="menuitem"]')).toHaveLength(4)
   })
 
   it('[covers:web-shell.ledger-color-band] ledgerScoped の画面で topbar に ledger-scoped と --ledger-current', async () => {

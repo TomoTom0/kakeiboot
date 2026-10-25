@@ -1,12 +1,13 @@
 // TASK-44 stage 1a specs (design: tmp/tasks/tm-28/design_browsing.md
-// §11, rev 3) plus the TASK-41 stage 1b search chip: the topbar's center
-// filter bar — the three always-on chips (period / labels / search,
-// §11-3), their PopoverPanel dialogs (§11-6: PeriodPicker for the period,
-// the label toggle group for labels, the one-line search form for the
-// search chip), and the one-row page toolbar (§11-5; TASK-75 §6-3 merged the
-// filter button and the condition chips into the single row). The
-// /search destination itself is covered by search-page.test.ts. Conditions:
-// web-browse.topbar-filter-bar / web-browse.filter-dialogs /
+// §11, rev 3) plus the TASK-41 stage 1b search chip, reshaped by TASK-101
+// (the label chip is gone; the topbar's center filter bar carries the
+// period / search two chips, §11-3) — their PopoverPanel dialogs (§11-6:
+// PeriodPicker for the period, the two-tier search dialog — the one-line
+// search form on top, the label toggle group + 解除 below, both entered
+// through the search chip), and the one-row page toolbar (§11-5; TASK-75
+// §6-3 merged the filter button and the condition chips into the single
+// row). The /search destination itself is covered by search-page.test.ts.
+// Conditions: web-browse.topbar-filter-bar / web-browse.filter-dialogs /
 // web-search.topbar-entry / web-layout.toolbar-one-row in
 // tests/design/conditions.toml.
 import { readFileSync } from 'node:fs'
@@ -45,7 +46,7 @@ function leafTexts(w: W, testId: string): Set<string> {
 }
 
 /** Open a topbar chip's dialog (PopoverPanel) and wait a tick. */
-async function openDialog(w: W, testId: 'filter-period' | 'filter-labels'): Promise<void> {
+async function openDialog(w: W, testId: 'filter-period' | 'filter-search'): Promise<void> {
   await w.find(`[data-test="${testId}"]`).trigger('click')
   await settle()
 }
@@ -65,8 +66,8 @@ function mediaBlock(head: RegExp): string | undefined {
 }
 
 describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b)', () => {
-  it('[covers:web-browse.topbar-filter-bar] 閲覧系topbar中央に時期・ラベル・検索の3チップ常時（表題とtopbar-actionsの間・aria-label・短縮/フル両要素・選択中accent）', async () => {
-    // a titled label makes the label chip's spoken name visible in the assertions
+  it('[covers:web-browse.topbar-filter-bar] 閲覧系topbar中央に時期・検索の2チップ常時（ラベル選択UIはtopbarに無い・表題とtopbar-actionsの間・aria-label・短縮/フル両要素・選択中accent）', async () => {
+    // a titled label makes the search chip's spoken label names visible
     await api.updateLabelTitle(1, 'red', { title: '旅行' })
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
     const { wrapper, router } = await mountApp('/receipts')
@@ -77,13 +78,13 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
     expect(bar.element.previousElementSibling?.classList.contains('topbar-title')).toBe(true)
     expect(bar.element.nextElementSibling?.classList.contains('topbar-actions')).toBe(true)
 
-    // stage 1b (TASK-41): period + labels + the third search chip
+    // TASK-101: period + search — the two-chip bar; the label chip is gone
+    // and no label selection UI rides the topbar anymore
     const chip = (id: string) => wrapper.find(`header.topbar .topbar-filters [data-test="${id}"]`)
     expect(chip('filter-period').exists()).toBe(true)
-    expect(chip('filter-labels').exists()).toBe(true)
     expect(chip('filter-search').exists()).toBe(true)
+    expect(chip('filter-labels').exists()).toBe(false)
     expect(chip('filter-period').classes()).toContain('filter-chip-btn')
-    expect(chip('filter-labels').classes()).toContain('filter-chip-btn')
     expect(chip('filter-search').classes()).toContain('filter-chip-btn')
     expect(chip('filter-search').classes()).toContain('filter-chip-search')
     // off /search the chip is the plain entry: icon only, no active state
@@ -99,17 +100,17 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
     expect(texts.has('10月')).toBe(true)
     expect(texts.has('2026年10月')).toBe(true)
 
-    // the label chip: unselected is the tag icon only, no active state
-    expect(chip('filter-labels').attributes('aria-label')).toBe('ラベルで絞り込み')
-    expect(chip('filter-labels').find('svg').exists()).toBe(true)
-    expect(chip('filter-labels').classes()).not.toContain('active')
-
-    // a selection turns the chip active with the label names in the aria
-    await openDialog(wrapper, 'filter-labels')
+    // the label selection rides the search chip (TASK-101): the dots, the
+    // accent and the spoken names all surface on filter-search — with no q
+    // running the aria carries the label section alone
+    await openDialog(wrapper, 'filter-search')
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
-    expect(chip('filter-labels').attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
-    expect(chip('filter-labels').classes()).toContain('active')
+    expect(chip('filter-search').classes()).toContain('active')
+    const dots = chip('filter-search').findAll('.label-filter-dot')
+    expect(dots).toHaveLength(1)
+    expect(dots[0]!.classes()).toContain('label-red')
+    expect(chip('filter-search').attributes('aria-label')).toBe('ラベル: 旅行')
 
     // every browsing route carries the bar (§11-3 route.meta.filters),
     // /search included once TASK-41 adds the route
@@ -222,29 +223,31 @@ describe('topbar period dialog (PeriodPicker)', () => {
   })
 })
 
-describe('topbar label dialog', () => {
-  it('[covers:web-browse.filter-dialogs] ラベルdialog: LabelToggleGroup+解除は即時にperiod storeへ出て各ページの再取得へ伝播（dialogは開いたまま）', async () => {
+describe('search dialog lower half (labels)', () => {
+  it('[covers:web-browse.filter-dialogs] 検索dialog下段: LabelToggleGroup+解除は即時にperiod storeへ出て各ページの再取得へ伝播（dialogは開いたまま）', async () => {
     await api.updateLabelTitle(1, 'red', { title: '旅行' })
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const stats = vi.spyOn(api, 'getAnalysis')
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/')
-    const chip = () => wrapper.find('[data-test="filter-labels"]')
+    const chip = () => wrapper.find('[data-test="filter-search"]')
 
-    await openDialog(wrapper, 'filter-labels')
+    await openDialog(wrapper, 'filter-search')
+    // the two-tier search dialog: the form on top, the label half below
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('form.search-dialog').exists()).toBe(true)
     expect(wrapper.find('.label-toggle-group').exists()).toBe(true)
     // nothing selected: the clear button starts disabled
     expect(wrapper.find('[data-test="label-filter-clear"]').attributes('disabled')).toBeDefined()
 
     // toggling red is period.setLabelColors(['red']) at once: Home's
-    // analysis and the recent list re-query with the filter, the chip shows
-    // the selection, and the dialog stays open
+    // analysis and the recent list re-query with the filter, the search chip
+    // shows the selection, and the dialog stays open
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
     expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red'], limit: 50 }))
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
-    expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み: 旅行')
+    expect(chip().attributes('aria-label')).toBe('ラベル: 旅行')
     expect(chip().classes()).toContain('active')
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
 
@@ -255,7 +258,7 @@ describe('topbar label dialog', () => {
     await wrapper.find('[data-test="label-filter-clear"]').trigger('click')
     await settle()
     expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: [], limit: 50 }))
-    expect(chip().attributes('aria-label')).toBe('ラベルで絞り込み')
+    expect(chip().attributes('aria-label')).toBe('検索')
     expect(chip().classes()).not.toContain('active')
   })
 
@@ -264,7 +267,7 @@ describe('topbar label dialog', () => {
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper, router } = await mountApp('/receipts')
 
-    await openDialog(wrapper, 'filter-labels')
+    await openDialog(wrapper, 'filter-search')
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await wrapper.find('[data-test="label-filter-blue"]').trigger('click')
     await settle()
@@ -277,10 +280,11 @@ describe('topbar label dialog', () => {
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const direct = await mountApp('/receipts?labels=red,blue')
-    const chip = direct.wrapper.find('[data-test="filter-labels"]')
+    const chip = direct.wrapper.find('[data-test="filter-search"]')
     expect(chip.classes()).toContain('active')
+    expect(chip.findAll('.label-filter-dot')).toHaveLength(2)
     // untitled labels read their neutral spoken names (red=1, blue=4)
-    expect(chip.attributes('aria-label')).toBe('ラベルで絞り込み: ラベル1、ラベル4')
+    expect(chip.attributes('aria-label')).toBe('ラベル: ラベル1、ラベル4')
   })
 
   it('[covers:web-browse.filter-dialogs] Escape・外側押下でdialogを閉じトリガのチップへフォーカスが戻る', async () => {
@@ -300,8 +304,8 @@ describe('topbar label dialog', () => {
     expect(period().attributes('aria-expanded')).toBe('false')
     expect(document.activeElement).toBe(period().element)
 
-    // an outside pointerdown closes the label dialog the same way
-    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    // an outside pointerdown closes the search dialog the same way
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
     const outside = wrapper.find('.app-main').element
@@ -310,7 +314,7 @@ describe('topbar label dialog', () => {
     }
     await settle()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    expect(document.activeElement).toBe(wrapper.find('[data-test="filter-labels"]').element)
+    expect(document.activeElement).toBe(wrapper.find('[data-test="filter-search"]').element)
   })
 })
 
@@ -338,19 +342,18 @@ describe('topbar search chip (TASK-41 1b)', () => {
     expect(chip().find('.chip-label-q').exists()).toBe(false)
   })
 
-  it('[covers:web-search.topbar-entry] 他ページからの実行: 現在の期間とラベルを引継いで /search?q= へ遷移し dialog は閉じる', async () => {
+  it('[covers:web-search.topbar-entry] 他ページからの実行: 現在の期間とラベルを引継ぎ /search?q= へ遷移し dialog は閉じる', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
     const { wrapper, router } = await mountApp('/receipts')
-    // 2026-10 (the default) + label red selected through the label dialog
-    await openDialog(wrapper, 'filter-labels')
+    // 2026-10 (the default) + label red selected through the search dialog's
+    // lower half — the one open dialog carries both tiers
+    await openDialog(wrapper, 'filter-search')
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
 
     const push = vi.spyOn(router, 'push')
     const chip = () => wrapper.find('[data-test="filter-search"]')
-    await chip().trigger('click')
-    await settle()
-    // an anchored PopoverPanel with the one-line search form
+    // the dialog stays open from the toggle above: the form rides its top tier
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
     expect(chip().attributes('aria-expanded')).toBe('true')
     const input = wrapper.find('[data-test="search-dialog-input"]')

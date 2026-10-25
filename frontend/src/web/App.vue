@@ -18,9 +18,10 @@ import { useSessionStore } from './stores/session'
 // always-on scrim (TASK-89; the old 900px+ default-open is gone), gaining
 // modal-drawer behavior (inert/focus/scroll lock) only under 900px. The top
 // bar carries the brand logo, the page title, the center filter bar
-// (TASK-44 §11: period / label chips on the browsing routes), the ledger
-// switcher and the top-right account menu (settings / connected apps /
-// usage / logout), and an icon tab bar sits at the bottom on mobile.
+// (TASK-44 §11: period / search chips on the browsing routes) and the
+// top-right account menu (settings / connected apps / usage / logout; on
+// the ledger-scoped routes the ledger switcher rides it as a radio section,
+// TASK-101), and an icon tab bar sits at the bottom on mobile.
 // Public screens (login / register / consent) render without the shell.
 const session = useSessionStore()
 const route = useRoute()
@@ -69,7 +70,8 @@ const showFilters = computed(
 const pageTitle = computed(() => (section.value === '' ? '' : SECTION_TITLES[section.value].title))
 const pageIcon = computed(() => (section.value === '' ? undefined : SECTION_TITLES[section.value].icon))
 
-// The selected ledger paints the top bar band and the switcher chip.
+// The selected ledger paints the top bar band (its chip now rides the
+// account menu's radio rows, TASK-101).
 const ledgerColor = computed(() => session.selectedLedger?.color ?? 'teal')
 const shellStyle = computed(() =>
   ledgerScoped.value ? { '--ledger-current': `var(--ledger-${ledgerColor.value})` } : undefined,
@@ -260,7 +262,6 @@ async function logout(): Promise<void> {
              front of the actions; it owns the margin-left:auto push -->
         <TopbarFilterBar v-if="showFilters" />
         <div class="topbar-actions">
-          <LedgerSwitcher v-if="ledgerScoped" />
           <PopoverMenu
             v-model:open="accountOpen"
             class="account-menu"
@@ -287,6 +288,19 @@ async function logout(): Promise<void> {
               <div class="menu-head">
                 <strong>{{ session.me.display_name }}</strong>
               </div>
+              <!-- TASK-101: the ledger switcher rides the account menu as a
+                   radio section on the ledger-scoped routes, separated from
+                   the four plain items by a border-top rule (the menu head
+                   keeps its own border-bottom) -->
+              <LedgerSwitcher
+                v-if="ledgerScoped"
+                @select="close"
+              />
+              <hr
+                v-if="ledgerScoped"
+                class="menu-separator"
+                aria-hidden="true"
+              >
               <RouterLink
                 to="/settings"
                 class="menu-item"

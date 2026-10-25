@@ -212,16 +212,18 @@ test.describe('daily bars (360x780)', () => {
   })
 })
 
-// --- TASK-42 trend axis: the two end labels sit under the outer bars even
-// when the 12-month window overflows the 360px viewport (design:
-// tmp/tasks/tm-42/design_trend-labels.md §1-6 / §4-4). The axis rides inside
-// .trend-wrap (fit-content) so its ends follow the scroll content, not the
-// visible port; jsdom cannot measure this. ---
+// --- TASK-100 trend axes: the 6-month window fits the 360px viewport, each
+// thinned tick label centers under its own bar on the shared grid, the
+// y-axis sits in the left gutter with two gridlines, and the year mode is
+// dense (12 bars, the value labels thin to the 5 tick positions while the
+// hidden values stay reachable via title). Real-browser geometry jsdom
+// cannot measure (design: tmp/tasks/tm-100/design_trend-chart-axes.md
+// §1-3 / §4). ---
 
 test.describe('trend axis (360x780)', () => {
   test.use({ viewport: { width: 360, height: 780 } })
 
-  test('[covers:web-browse.trend-axis-minimal-real] 軸ラベルの両端は棒の両端と一致し月ラベルは存在しない（360px・溢れ）', async ({ page }) => {
+  test('[covers:web-browse.trend-axis-minimal-real][covers:web-browse.trend-month-window][covers:web-browse.trend-y-axis] 6か月窓は360pxに収まり間引きラベルは棒の下中央・y軸は左gutter・yearはdense12本', async ({ page }) => {
     logPageIssues(page, 'trend-axis')
     await installApiStub(page)
     await page.goto('/categories?month=2026-10')
@@ -229,31 +231,83 @@ test.describe('trend axis (360x780)', () => {
     await page.waitForLoadState('networkidle')
     const m = await page.evaluate(() => {
       const rect = (el: Element | null | undefined) => el?.getBoundingClientRect() ?? null
+      const card = document.querySelector('[data-test="trend-card"]')
+      const hscroll = card?.querySelector('.hscroll') ?? null
       const axis = document.querySelector('[data-test="trend-axis"]')
       const spans = axis ? Array.from(axis.querySelectorAll('span')) : []
-      const first = rect(spans[0])
-      const last = rect(spans.at(-1))
-      const barFirst = rect(document.querySelector('[data-test="bar-2025-11"]'))
-      const barLast = rect(document.querySelector('[data-test="bar-2026-10"]'))
-      const wrap = rect(document.querySelector('.trend-wrap'))
-      const axisRect = rect(axis)
+      const cols = card ? Array.from(card.querySelectorAll('.bar-col')) : []
+      // each non-empty label span centers on its own bar column (the spans
+      // and the columns share the index on the common grid)
+      const labelDx = spans
+        .map((s, i): number | null => {
+          if (!(s.textContent ?? '').trim()) return null
+          const sr = rect(s)
+          const cr = rect(cols[i])
+          return sr && cr ? Math.abs(sr.left + sr.width / 2 - (cr.left + cr.width / 2)) : -1
+        })
+        .filter((d): d is number => d !== null)
+      const yAxis = rect(card?.querySelector('.y-axis'))
+      const plot = rect(card?.querySelector('.plot'))
+      const gridTops = Array.from(card?.querySelectorAll('.gridline') ?? []).map((g) => rect(g)?.top ?? -1)
+      const valTops = Array.from(card?.querySelectorAll('.bar-col .bar-val') ?? []).map((v) => rect(v)?.top ?? -1)
       return {
-        missing: !axisRect || !first || !last || !barFirst || !barLast || !wrap,
+        missing: !card || !axis || !hscroll || !yAxis || !plot,
+        barCount: cols.length,
+        overflow: hscroll ? hscroll.scrollWidth - hscroll.clientWidth : -1,
+        labelDx,
+        yAxisRight: yAxis ? yAxis.right : -1,
+        plotLeft: plot ? plot.left : -1,
+        plotTop: plot ? plot.top : -1,
+        plotHeight: plot ? plot.height : -1,
+        gridTops,
         labelCount: document.querySelectorAll('.bar-label').length,
-        firstDx: first && barFirst ? Math.abs(first.left - barFirst.left) : -1,
-        lastDx: last && barLast ? Math.abs(last.right - barLast.right) : -1,
-        axisOverWrap: axisRect && wrap ? axisRect.right - wrap.right : -1,
+        topValTop: valTops.length ? Math.min(...valTops) : -1,
       }
     })
     const dump = JSON.stringify(m)
-    expect(m.missing, 'the trend axis, the wrap and both end bars render').toBe(false)
-    // no per-bar month labels anywhere on the page
+    expect(m.missing, 'the trend card, the axis, the y-axis, the plot and the hscroll render').toBe(false)
+    expect(m.barCount, 'the 6-month window renders 6 bars (no bar-2025-11)').toBe(6)
+    // (1) the 6-month window fits the 360px viewport without scrolling
+    expect(m.overflow, dump).toBeLessThanOrEqual(2)
+    // (2) every non-empty tick label centers under its own bar (±2px)
+    expect(m.labelDx.length, dump).toBe(4)
+    expect(Math.max(...m.labelDx), dump).toBeLessThanOrEqual(2)
+    // (3) the y-axis stays inside the left gutter
+    expect(m.yAxisRight, dump).toBeLessThanOrEqual(m.plotLeft + 2)
+    // (4) the two gridlines: the max line at plot top + 1rem, the mid line
+    // at 50% of the plot height + 0.5rem (±2px)
+    expect(m.gridTops.length, dump).toBe(2)
+    const tops = [...m.gridTops].sort((a, b) => a - b)
+    expect(Math.abs(tops[0]! - (m.plotTop + 16)), dump).toBeLessThanOrEqual(2)
+    expect(Math.abs(tops[1]! - (m.plotTop + m.plotHeight / 2 + 8)), dump).toBeLessThanOrEqual(2)
+    // (5) no per-bar month labels anywhere on the page
     expect(m.labelCount, dump).toBe(0)
-    // the axis ends align with the first / last bar columns (button edges)
-    expect(m.firstDx, dump).toBeLessThanOrEqual(2)
-    expect(m.lastDx, dump).toBeLessThanOrEqual(2)
-    // the axis stays inside the wrap (never wider than the bars)
-    expect(m.axisOverWrap, dump).toBeLessThanOrEqual(2)
+    // (7) headroom: even the tallest bar's value label stays inside the plot
+    expect(m.topValTop, dump).toBeGreaterThanOrEqual(m.plotTop)
+
+    // (6) the year mode is dense: 12 bars still fit the viewport and the
+    // value labels thin to the 5 tick positions (the hidden values stay
+    // reachable via title)
+    await page.goto('/categories?year=2026')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const y = await page.evaluate(() => {
+      const card = document.querySelector('[data-test="trend-card"]')
+      const hscroll = card?.querySelector('.hscroll') ?? null
+      return {
+        barCount: card ? card.querySelectorAll('.bar-col').length : 0,
+        overflow: hscroll ? hscroll.scrollWidth - hscroll.clientWidth : -1,
+        valBars: Array.from(card?.querySelectorAll('.bar-col .bar-val') ?? []).map(
+          (v) => v.closest('button')?.getAttribute('data-test') ?? '',
+        ),
+        hiddenTitle: card?.querySelector('[data-test="bar-2026-02"]')?.getAttribute('title') ?? '',
+      }
+    })
+    const ydump = JSON.stringify(y)
+    expect(y.barCount, ydump).toBe(12)
+    expect(y.overflow, ydump).toBeLessThanOrEqual(2)
+    expect(y.valBars, ydump).toEqual(['bar-2026-01', 'bar-2026-04', 'bar-2026-07', 'bar-2026-10', 'bar-2026-12'])
+    expect(y.hiddenTitle, ydump).toMatch(/^2026年2月 \d+円$/)
   })
 })
 
@@ -330,8 +384,8 @@ for (const spec of [
 
 // --- TASK-44 topbar: the title's 360/390px band switch (§11-4 U10) ---
 // 360px and below: no title at all (like home) / 361-390px: icon only /
-// 391px+: icon + text. The stage-1a two chips must ride along at every band
-// without either the title or the chips going missing.
+// 391px+: icon + text. The TASK-101 period + search two chips must ride
+// along at every band without either the title or the chips going missing.
 
 const TITLE_BANDS = [
   { width: 360, title: 'none', text: 'none' },
@@ -344,7 +398,7 @@ for (const spec of TITLE_BANDS) {
   test.describe(`topbar title ${spec.width}px`, () => {
     test.use({ viewport: { width: spec.width, height: 780 } })
 
-    test('[covers:web-shell.topbar-title-breakpoints-real] 表題は 360/390px 境界で出し分け（時期・ラベルチップとともに欠けない）', async ({ page }) => {
+    test('[covers:web-shell.topbar-title-breakpoints-real] 表題は 360/390px 境界で出し分け（時期・検索チップとともに欠けない）', async ({ page }) => {
       logPageIssues(page, `title${spec.width}`)
       await installApiStub(page)
       await page.goto('/receipts')
@@ -362,7 +416,7 @@ for (const spec of TITLE_BANDS) {
           icon: fact('.topbar-title .icon'),
           chips: {
             period: !!document.querySelector('[data-test="filter-period"]'),
-            labels: !!document.querySelector('[data-test="filter-labels"]'),
+            search: !!document.querySelector('[data-test="filter-search"]'),
           },
         }
       })
@@ -375,9 +429,9 @@ for (const spec of TITLE_BANDS) {
       }
       if (spec.text === 'none') expect(m.text.display, dump).toBe('none')
       else expect(m.text.display, dump).not.toBe('none')
-      // stage 1a: both chips are on the bar at every band
+      // TASK-101: both two-chip bar entries are on the bar at every band
       expect(m.chips.period, dump).toBe(true)
-      expect(m.chips.labels, dump).toBe(true)
+      expect(m.chips.search, dump).toBe(true)
     })
   })
 }

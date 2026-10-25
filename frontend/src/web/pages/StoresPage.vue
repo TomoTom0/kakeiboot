@@ -50,7 +50,7 @@ const storeCategory = computed(() => firstString(route.query.store_category))
 
 function trendPeriod(): [string, string] {
   if (period.mode === 'month') {
-    const q = period.trendQuery()
+    const q = period.trendQuery(5)
     return [q.from!, q.to!]
   }
   return period.range

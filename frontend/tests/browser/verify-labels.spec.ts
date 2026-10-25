@@ -1,9 +1,10 @@
 // TASK-60 real-browser verification (chromium), labels half: the layout
 // facts jsdom cannot compute — the one-line receipt rows staying put with
-// LabelDots inserted, the label UI layout (picker popover containment,
-// topbar chip tap targets, the manage screen) and the titled chips' WCAG
-// contrast in both color schemes. Each test title carries its [covers:<id>]
-// tag for scripts/design/verify-conditions.py; the conditions live in
+// LabelDots inserted, the label UI layout (picker popover containment, the
+// search chip tap target and its dialog's label half — TASK-101 reshaped the
+// topbar entry — the manage screen) and the titled chips' WCAG contrast in
+// both color schemes. Each test title carries its [covers:<id>] tag for
+// scripts/design/verify-conditions.py; the conditions live in
 // tests/design/conditions.toml (design:
 // tmp/tasks/tm-60/design_browser-extension.md §4-2).
 // Run: mise run frontend:browser (or
@@ -77,14 +78,15 @@ test.describe('row labels (360x780)', () => {
   })
 })
 
-// --- label UI layout: the picker popover stays inside the viewport, the
-// topbar chips are 44x44 tap targets, and a selection at 520px-and-below
-// folds to the 5px dots alone ---
+// --- label UI layout (TASK-101 shape): the picker popover stays inside the
+// viewport, the search chip is a 44x44 tap target, its dialog's label half
+// stays inside the dialog, and a selection paints the 5px dots + accent on
+// the chip itself ---
 
 test.describe('label UI (390x780)', () => {
   test.use({ viewport: { width: 390, height: 780 } })
 
-  test('[covers:web-labels.ui-layout-real] picker popover は viewport 内・topbar チップ 44px・選択ドット 5px・520px 以下で icon 折り畳み', async ({ page }) => {
+  test('[covers:web-labels.ui-layout-real] picker popover は viewport 内・検索チップ 44px・dialog 下段は dialog 内・選択ドット 5px', async ({ page }) => {
     logPageIssues(page, 'label-ui')
     await installApiStub(page, { richLabels: true })
 
@@ -114,39 +116,79 @@ test.describe('label UI (390x780)', () => {
     expect(rectInViewport(pop, pop.innerWidth, pop.innerHeight), JSON.stringify(pop)).toBe(true)
     await page.keyboard.press('Escape')
 
-    // (2) the topbar label / search chips are 44x44 squares
+    // (2) the search chip is the 44x44 square entry (the only icon chip on
+    // the two-chip bar now)
     await page.goto('/receipts?month=2026-10')
     await expect(page.locator('.topbar')).toBeVisible()
     await page.waitForLoadState('networkidle')
-    for (const name of ['filter-labels', 'filter-search']) {
-      const box = await page.locator(`[data-test="${name}"]`).boundingBox()
-      expect(box, name).toBeTruthy()
-      // the condition's tolerance is ±0.5 (dot measurements below use the
-      // same explicit form)
-      expect(Math.abs(box!.width - 44), name).toBeLessThanOrEqual(0.5)
-      expect(Math.abs(box!.height - 44), name).toBeLessThanOrEqual(0.5)
-    }
+    const box = await page.locator('[data-test="filter-search"]').boundingBox()
+    expect(box, 'filter-search').toBeTruthy()
+    // the condition's tolerance is ±0.5 (dot measurements below use the
+    // same explicit form)
+    expect(Math.abs(box!.width - 44), 'filter-search').toBeLessThanOrEqual(0.5)
+    expect(Math.abs(box!.height - 44), 'filter-search').toBeLessThanOrEqual(0.5)
 
-    // (3)(4) pick one color: the chip is active with a 5px dot, and the icon
-    // folds away (390 <= 520 while selected)
-    await page.locator('[data-test="filter-labels"]').click()
-    await expect(page.locator('.label-filter .popover-dialog')).toBeVisible()
-    await page.locator('[data-test="label-filter-red"]').click()
-    await expect(page.locator('[data-test="filter-labels"]')).toHaveClass(/active/)
-    const m = await page.evaluate(() => {
-      const chip = document.querySelector('[data-test="filter-labels"]')!
-      const dr = chip.querySelector('.label-filter-dot')?.getBoundingClientRect() ?? null
-      const icon = chip.querySelector('.label-chip-icon')
+    // (3)(4) open the search dialog and pick a color in its lower half: the
+    // label half stays inside the dialog rect and the chip turns active
+    // with a 5px dot
+    await page.locator('[data-test="filter-search"]').click()
+    await expect(page.locator('[role="dialog"]')).toBeVisible()
+    await expect(page.locator('[role="dialog"] .label-toggle-group')).toBeVisible()
+    const fit = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]')!.getBoundingClientRect()
+      const g = document.querySelector('[role="dialog"] .label-toggle-group')!.getBoundingClientRect()
+      const foot = document.querySelector('[role="dialog"] [data-test="label-filter-clear"]')!.getBoundingClientRect()
       return {
-        dotW: dr?.width ?? null,
-        dotH: dr?.height ?? null,
-        iconDisplay: icon ? getComputedStyle(icon).display : 'missing',
+        dLeft: d.left,
+        dRight: d.right,
+        dBottom: d.bottom,
+        groupInside: g.left >= d.left - 0.5 && g.right <= d.right + 0.5 && g.bottom <= d.bottom + 0.5,
+        footInside: foot.right <= d.right + 0.5 && foot.bottom <= d.bottom + 0.5,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        dialogInside: d.left >= 0 && d.right <= window.innerWidth && d.bottom <= window.innerHeight,
       }
+    })
+    const fdump = JSON.stringify(fit)
+    expect(fit.groupInside, 'the label half rides inside the dialog rect').toBe(true)
+    expect(fit.footInside, 'the 解除 button rides inside the dialog rect').toBe(true)
+    expect(fit.dialogInside, fdump).toBe(true)
+    await page.locator('[data-test="label-filter-red"]').click()
+    await expect(page.locator('[data-test="filter-search"]')).toHaveClass(/active/)
+    const m = await page.evaluate(() => {
+      const chip = document.querySelector('[data-test="filter-search"]')!
+      const dr = chip.querySelector('.label-filter-dot')?.getBoundingClientRect() ?? null
+      return { dotW: dr?.width ?? null, dotH: dr?.height ?? null }
     })
     const dump = JSON.stringify(m)
     expect(Math.abs(m.dotW! - 5), dump).toBeLessThanOrEqual(0.5)
     expect(Math.abs(m.dotH! - 5), dump).toBeLessThanOrEqual(0.5)
-    expect(m.iconDisplay, dump).toBe('none')
+  })
+
+  test('[covers:web-browse.filter-dialogs] 検索dialog下段の toggle は即時適用: 再取得と URL labels= 同期・dialog 維持・解除で全消し', async ({ page }) => {
+    logPageIssues(page, 'label-immediate')
+    await installApiStub(page, { richLabels: true })
+    await page.goto('/receipts?month=2026-10')
+    await expect(page.locator('.topbar')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    await page.locator('[data-test="filter-search"]').click()
+    await expect(page.locator('[role="dialog"]')).toBeVisible()
+
+    // toggling red re-queries at once (a fresh receipts response lands) and
+    // the URL picks up labels= while the dialog stays open
+    const requery = page.waitForResponse((r) => /\/api\/ledgers\/1\/receipts/.test(r.url()))
+    await page.locator('[data-test="label-filter-red"]').click()
+    await requery
+    await expect(page).toHaveURL(/labels=red/)
+    expect(await page.locator('[role="dialog"]').isVisible()).toBe(true)
+
+    // 解除 empties the selection: the URL drops labels= after another
+    // re-query, and the dialog still stays up for more adjustments
+    const requery2 = page.waitForResponse((r) => /\/api\/ledgers\/1\/receipts/.test(r.url()))
+    await page.locator('[data-test="label-filter-clear"]').click()
+    await requery2
+    await expect(page).not.toHaveURL(/labels=/)
+    expect(await page.locator('[role="dialog"]').isVisible()).toBe(true)
   })
 })
 

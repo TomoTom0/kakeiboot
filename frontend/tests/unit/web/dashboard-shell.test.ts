@@ -117,8 +117,12 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     const segs = col.findAll('.bar-seg')
     expect(segs.length).toBe(2)
     expect(segs.some((s) => (s.attributes('title') ?? '').endsWith('円'))).toBe(true)
-    // the current bar's value label is the money total (compressed form)
-    expect(col.find('.bar-val').exists()).toBe(true)
+    // TASK-100: every bar carries its value label (the TASK-75 current-only
+    // rule is withdrawn; compactYen — 万/千 compression, no "k" suffix — and
+    // the zero months render the empty string)
+    const vals = card.findAll('.bar-col .bar-val')
+    expect(vals).toHaveLength(6)
+    expect(vals.map((v) => v.text())).toEqual(['', '', '', '', '', '948'])
   })
 
   it('[covers:web-home.trend-day-bar-receipts] 日粒度の棒は button で押下可・押下でその日のレシート一覧（/receipts?from=d&to=d）へ・月棒は period 移動', async () => {
@@ -143,21 +147,44 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     void router
   })
 
-  it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは両端のみ・値ラベルは current のみ', async () => {
+  it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal][covers:web-browse.trend-y-axis][covers:web-browse.trend-note-removed] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは間引き・値ラベルは全棒', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
-    // month mode: a 6-month window, no per-bar labels, axis ends only
+    // month mode: a 6-month window, no per-bar labels, thinned axis ticks
+    // and a value label on every bar (6 bars = non-dense)
     expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(6)
     expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
-    expect(wrapper.find('[data-test="trend-card"] .bar-val').exists()).toBe(true)
-    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['5月', '10月'])
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col .bar-val')).toHaveLength(6)
+    expect(
+      wrapper
+        .find('[data-test="trend-axis"]')
+        .findAll('span')
+        .map((s) => s.text())
+        .filter(Boolean),
+    ).toEqual(['5月', '7月', '9月', '10月'])
+    // the y-axis: three compactYen ticks (mock max 948 -> niceMax 1000)
+    expect(wrapper.find('[data-test="trend-card"] .y-axis').attributes('aria-hidden')).toBe('true')
+    expect(
+      wrapper
+        .find('[data-test="trend-card"] .y-axis')
+        .findAll('span')
+        .map((s) => s.text()),
+    ).toEqual(['1千', '500', '0'])
+    // the note line is gone (TASK-100 removes the trend-note entirely)
+    expect(wrapper.find('[data-test="trend-card"] .trend-note').exists()).toBe(false)
     // a 13-day range gives day bars (the analysis trend endpoint ships the
     // buckets; the span rules live in trendGranularity/spanGranularity)
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const range = await mountApp('/?from=2026-10-03&to=2026-10-15')
     expect(range.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(13)
-    expect(range.wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10/3', '10/15'])
+    expect(
+      range.wrapper
+        .find('[data-test="trend-axis"]')
+        .findAll('span')
+        .map((s) => s.text())
+        .filter(Boolean),
+    ).toEqual(['10/3', '10/6', '10/9', '10/12', '10/15'])
   })
 
   it('[covers:web-shell.loading-skeleton] 初回 loading は view-stack 同形の skeleton（aria-hidden + sr-only 文言）、再取得は既存 stack の dim', async () => {
@@ -177,12 +204,12 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
   })
 
-  it('[covers:web-dashboard.label-filter] topbar ラベルチップは Home の analysis 再取得へ label_colors で流れる', async () => {
+  it('[covers:web-dashboard.label-filter] 検索dialog下段のラベル選択は Home の analysis 再取得へ label_colors で流れる', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getAnalysis')
     const { wrapper } = await mountApp('/')
     expect(spy).not.toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
-    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
@@ -341,9 +368,13 @@ describe('App shell', () => {
     // route.meta and SECTION_TITLES carries search (TASK-74 §4-2)
     expect(wrapper.find('.topbar-title').text()).toBe('検索')
     expect(wrapper.find('.topbar-title svg').exists()).toBe(true)
-    // search joins the ledger-scoped browsing routes: the switcher shows
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    // search joins the ledger-scoped browsing routes: the band is on and the
+    // switcher rides the account menu (TASK-101: no topbar trigger)
     expect(wrapper.find('header.topbar').classes()).toContain('ledger-scoped')
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
     // search is no nav section: none of the four tabs claims it
     for (const n of ['home', 'receipts', 'categories', 'stores']) {
       expect(wrapper.find(`[data-test="nav-${n}"]`).classes()).not.toContain('active')
@@ -373,16 +404,20 @@ describe('App shell', () => {
     expect(m('/apps').section).toBe('apps')
     expect(m('/usage/connect').section).toBe('usage')
 
-    // the manage screen keeps the settings title with its switcher; usage is
-    // not ledger scoped
+    // the manage screen keeps the settings title with its ledger section in
+    // the account menu; usage is not ledger scoped
     await router.push('/settings/categories')
     await settle()
     expect(wrapper.find('.topbar-title').text()).toBe('設定')
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     await router.push('/usage')
     await settle()
     expect(wrapper.find('.topbar-title').text()).toBe('使い方')
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(false)
   })
 
   it('[covers:web-shell.menus] 左上 menu ボタンで drawer を開閉（aria・アイコン・フォーカス・inert・scrim）、右上アカウントメニューからログアウト', async () => {
@@ -456,14 +491,17 @@ describe('App shell', () => {
     expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
     expect(menuBtn().attributes('aria-expanded')).toBe('false')
 
-    // ledger switching is the LedgerSwitcher, not a select
+    // ledger switching is the account menu's radio section, not a select
+    // and not a topbar trigger (TASK-101)
     expect(wrapper.find('[data-test="ledger-select"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
 
     expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(false)
     const accountBtn = wrapper.find('[data-test="account-button"]')
     expect(accountBtn.attributes('aria-haspopup')).toBe('menu')
     await accountBtn.trigger('click')
+    // /stores is ledger scoped: the switcher rides the menu as radio rows
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="account-menu"]').text()).not.toContain(ME.account_number)
     expect(wrapper.find('[data-test="account-menu"]').text()).toContain(ME.display_name)
     const labels = accountItems(wrapper).map((i) => i.text().trim())
@@ -578,19 +616,21 @@ describe('App shell', () => {
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
 
-    // the ledger switcher stays open on a query-only change
+    // the account menu (with the ledger section inside, TASK-101) stays open
+    // on a query-only change
     await router.push('/receipts')
     await settle()
-    await wrapper.find('[data-test="ledger-switch"]').trigger('click')
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(true)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     await router.replace({ path: '/receipts', query: { item: '牛乳' } })
     await settle()
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(true)
 
     // another path closes everything
     await router.push('/stores')
     await settle()
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(false)
     expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
 
@@ -605,8 +645,9 @@ describe('App shell', () => {
   it('[covers:web-shell.popover-menu] PopoverMenu: 矢印キー移動・Escape・外側クリックで閉じフォーカスはトリガへ', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
-    // the top-right account menu is a PopoverMenu with four items (TASK-37
-    // added 使い方)
+    // the top-right account menu is a PopoverMenu; on a ledgerScoped screen
+    // (TASK-101) it opens with the two ledger radio rows above the four
+    // plain items (TASK-37 added 使い方)
     const trigger = () => wrapper.find('[data-test="account-button"]')
     ;(trigger().element as HTMLElement).focus()
     await trigger().trigger('click')
@@ -615,13 +656,16 @@ describe('App shell', () => {
     expect(menu.exists()).toBe(true)
     expect(trigger().attributes('aria-expanded')).toBe('true')
     const items = () => wrapper.findAll('[role="menu"] [role^="menuitem"]').map((i) => i.element)
-    expect(items()).toHaveLength(4)
+    expect(items()).toHaveLength(6)
     keydown('ArrowDown')
     await settle()
+    // the first landing is the leading ledger row, the second the next one
     expect(document.activeElement).toBe(items()[0])
+    expect(items()[0]!.getAttribute('data-test')).toBe('ledger-option-1')
     keydown('ArrowDown')
     await settle()
     expect(document.activeElement).toBe(items()[1])
+    expect(items()[1]!.getAttribute('data-test')).toBe('ledger-option-2')
     keydown('ArrowUp')
     await settle()
     expect(document.activeElement).toBe(items()[0])

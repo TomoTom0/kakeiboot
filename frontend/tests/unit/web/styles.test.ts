@@ -155,7 +155,7 @@ describe('topbar title', () => {
 })
 
 describe('topbar filter bar CSS (TASK-44)', () => {
-  it('[covers:web-browse.topbar-filter-bar] .topbar-filters は flex + margin-left auto、.filter-chip-btn は高さ36px（時期チップ）・pill・surface-2背景・44px タップ領域、ラベルチップは 44px 正方、選択中は accent 枠', () => {
+  it('[covers:web-browse.topbar-filter-bar] .topbar-filters は flex + margin-left auto、.filter-chip-btn は高さ36px（時期チップ）・pill・surface-2背景・44px タップ領域、選択中は accent 枠', () => {
     // the wrapper takes the margin-left:auto over from topbar-actions (§11-6)
     expect(
       rulesFor('.topbar-filters').some(
@@ -173,13 +173,8 @@ describe('topbar filter bar CSS (TASK-44)', () => {
     expect(
       rulesFor('.filter-chip-btn.active').some((r) => decl(r.body, 'border-color') === 'var(--bb-accent)'),
     ).toBe(true)
-    // TASK-60 §9-2 (a): the topbar label chip is a 44px square — the height
-    // and the zero padding lift off the shared 36px pill (which the period
-    // chip keeps riding); the base min-width 44px is the width floor
-    const labelChip = rulesFor('.topbar-label-chip')
-    expect(labelChip.length, '.topbar-label-chip rules').toBeGreaterThan(0)
-    expect(labelChip.some((r) => decl(r.body, 'height') === '44px')).toBe(true)
-    expect(labelChip.some((r) => decl(r.body, 'padding') === '0')).toBe(true)
+    // TASK-101: the label chip is gone with its .topbar-label-chip rules
+    expect(rulesFor('.topbar-label-chip').length, '.topbar-label-chip rules').toBe(0)
   })
 
   it('[covers:web-browse.topbar-filter-bar] .filter-chip-search は 44px 正方・padding 0 のアイコン入口で、検索語の .chip-label-q は max-width + ellipsis に収まる', () => {

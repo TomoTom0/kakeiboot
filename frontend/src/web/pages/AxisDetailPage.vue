@@ -305,11 +305,11 @@ const storeNameFor = ref<number | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-/** the trend window: a 12-month window through the selected month in month
- *  mode (the CategoryDetailPage rule), the period itself otherwise */
+/** the trend window: a 6-month window (TASK-100) through the selected month
+ *  in month mode, the period itself otherwise */
 function trendPeriod(): [string, string] {
   if (period.mode === 'month') {
-    const q = period.trendQuery()
+    const q = period.trendQuery(5)
     return [q.from!, q.to!]
   }
   return period.range

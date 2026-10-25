@@ -867,17 +867,17 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     })
   }
 
-  it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] topbar ラベルチップ+dialog の選択は URL labels に同期し label_colors で流れ、条件チップは1色1チップ（×はその色だけ外す）、行に LabelDots compact', async () => {
+  it('[covers:web-receipts.label-filter][covers:web-labels.no-color-names-on-screen] 検索dialog下段の選択は URL labels に同期し label_colors で流れ、条件チップは1色1チップ（×はその色だけ外す）、行に LabelDots compact', async () => {
     const list = withRowLabels()
     const stats = vi.spyOn(api, 'getAnalysis')
     const { wrapper, router } = await mountApp('/receipts')
 
-    // the label filter moved to the topbar (TASK-44): the chip is icon-only
-    // when unselected and the toggles live in its dialog
-    const chip = wrapper.find('[data-test="filter-labels"]')
+    // the label filter rides the search dialog's lower half (TASK-101): the
+    // search chip is the entry, the toggles live inside its dialog
+    const chip = wrapper.find('[data-test="filter-search"]')
     expect(chip.exists()).toBe(true)
-    expect(chip.attributes('aria-label')).toBe('ラベルで絞り込み')
-    expect(chip.text()).not.toContain('ラベル')
+    expect(chip.attributes('aria-label')).toBe('検索')
+    expect(wrapper.find('[data-test="filter-labels"]').exists()).toBe(false)
     await chip.trigger('click')
     await settle()
 
@@ -889,10 +889,12 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
     // the same-page stats (summary / payments / daily) get the filter too
     expect(stats).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red', 'blue'] }))
-    // both toggles show the pressed state; the topbar chip carries the selection
+    // both toggles show the pressed state; the search chip carries the
+    // selection as dots + accent
     expect(wrapper.find('[data-test="label-filter-red"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.find('[data-test="label-filter-blue"]').attributes('aria-pressed')).toBe('true')
-    expect(wrapper.find('[data-test="filter-labels"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="filter-search"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="filter-search"]').findAll('.label-filter-dot')).toHaveLength(2)
 
     // the condition chips ride the one-row toolbar (TASK-75): one chip per
     // selected color in the FilterChips form — the title when the ledger
@@ -908,13 +910,13 @@ describe('ReceiptsPage label filter (TASK-17)', () => {
     expect(router.currentRoute.value.query['labels']).toBe('blue')
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['blue'] }))
     expect(wrapper.find('[data-test="page-chips"]').text()).not.toContain('red')
-    // the last chip's x clears the selection and the topbar chip follows
+    // the last chip's x clears the selection and the search chip follows
     await wrapper.find('[data-test="page-chips"] [data-test="chip-x-label-blue"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query['labels']).toBeUndefined()
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: [] }))
-    // the topbar chip is back to the unselected state
-    expect(wrapper.find('[data-test="filter-labels"]').classes()).not.toContain('active')
+    // the search chip is back to the unselected state
+    expect(wrapper.find('[data-test="filter-search"]').classes()).not.toContain('active')
 
     // the reserved row-labels element of a labeled row holds the dots
     expect(

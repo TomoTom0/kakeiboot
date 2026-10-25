@@ -257,20 +257,15 @@ html.drawer-lock { overflow: hidden; }
   white-space: nowrap;
 }
 .filter-chip-period .chip-label-short { display: none; }
-/* the topbar label chip (LabelFilter size="topbar"): 44px square (TASK-60
-   §9-2 (a): the height lifts off the shared 36px pill; the base min-width
-   44px is the width floor, padding 0 keeps the icon-only / dots-only states
-   at the square while the 521px+ icon+dots state grows past it), icon only
-   while unselected; the 5px dots of a selection replace the icon at 520px
-   and below (from 521px both ride along) */
-.topbar-label-chip { height: 44px; padding: 0; }
-.topbar-label-chip .label-filter-dot { width: 5px; height: 5px; }
-/* the search chip (TASK-41): the 44px square icon entry (height 44px per
-   TASK-60 §9-2 (a)); with a running q (on /search) the term rides
-   .chip-label-q next to the icon, clamped so a long term cannot push the
-   topbar wide */
+/* the search chip (TASK-41, the label entry too since TASK-101): the 44px
+   square icon entry (height 44px per TASK-60 §9-2 (a)); with a running q
+   (on /search) the term rides .chip-label-q next to the icon, clamped so a
+   long term cannot push the topbar wide — and a label selection rides the
+   same chip as its color dots */
 .filter-chip-search { flex: none; width: 44px; min-width: 44px; height: 44px; padding: 0; }
-.filter-chip-search:has(.chip-label-q) { width: auto; padding: 0 0.7rem; }
+.filter-chip-search:has(.chip-label-q),
+.filter-chip-search:has(.label-filter-dots) { width: auto; padding: 0 0.7rem; }
+.filter-chip-search .label-filter-dot { width: 5px; height: 5px; }
 .chip-label-q {
   min-width: 0;
   max-width: 10rem;
@@ -278,9 +273,14 @@ html.drawer-lock { overflow: hidden; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* the search chip's dialog: one line input + the run button */
+/* the search chip's dialog (two tiers since TASK-101): the one-line input +
+   the run button on top, the label toggles + 解除 below */
 .search-dialog { display: flex; gap: 0.5rem; padding: 0.5rem; min-width: 15rem; }
 .search-dialog input[type='search'] { flex: 1 1 auto; min-width: 0; }
+.search-dialog-labels {
+  padding: 0.5rem 0.5rem 0;
+  border-top: 1px solid var(--bb-border);
+}
 
 .app-main { min-width: 0; }
 
@@ -365,23 +365,9 @@ html.drawer-lock { overflow: hidden; }
 
 .main-col { min-height: 100vh; min-width: 0; }
 
-/* ledger switcher: color chip + book icon; the name rides along on desktop */
-.ledger-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  min-height: 38px;
-  padding: 0.25rem 0.55rem;
-  border: 1px solid var(--bb-border);
-  border-radius: 999px;
-  background: var(--bb-surface);
-  color: var(--bb-fg);
-  font: inherit;
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.ledger-trigger:hover { border-color: color-mix(in srgb, var(--ledger-current) 45%, var(--bb-border)); }
-.ledger-name { font-weight: 600; font-size: 0.9rem; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ledger color chip + book icon: the account menu's radio rows (TASK-101
+   moved the switcher in from its own topbar trigger), reused as a plain
+   display chip on the apps / consent / settings-general screens */
 .ledger-chip {
   display: inline-grid;
   place-items: center;
@@ -452,7 +438,22 @@ html.drawer-lock { overflow: hidden; }
 .popover-menu { position: relative; }
 .popover-trigger { display: inline-flex; }
 .account-menu .popover-panel { min-width: 15rem; }
-.ledger-switch .popover-panel { min-width: 16rem; }
+/* the ledger section inside the account menu (TASK-101): the radio rows sit
+   right under the menu head and above the separator — the row grid keeps
+   the name on one ellipsized line inside the 15rem panel (the full name
+   lives in the accessible name and the settings screen) */
+.ledger-menu-section { display: flex; flex-direction: column; gap: 2px; margin-bottom: 0.2rem; }
+.ledger-menu-section .ledger-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* the owner row renders no role label, so auto-placement would park the
+   check one gap short of the edge — pin it to the last column so every
+   selected row reads flush right (REVIEW-19) */
+.ledger-menu-section .ledger-check { grid-column: 4; }
+.menu-separator { border: 0; border-top: 1px solid var(--bb-border); margin: 0.3rem 0; }
 
 /* shared popover panel (PopoverPanel.vue, TASK-27 §4): a non-modal
    role=dialog anchored under the trigger; --popover-shift (usePopover)
@@ -565,9 +566,8 @@ html.drawer-lock { overflow: hidden; }
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
   }
   .main-col { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
-  /* menu button + full logo; the name leaves the ledger chip */
+  /* menu button + full logo */
   .menu-btn { width: 44px; height: 44px; }
-  .ledger-name { display: none; }
   .app-main { padding: 1rem; }
 
   /* the settings tab strip scrolls sideways when the four tabs do not
@@ -917,6 +917,9 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   gap: 0.5rem;
   min-width: 0;
   height: 150px;
+  /* the gridlines are absolutely positioned siblings' overlays: keep the
+     bars above them in paint order */
+  position: relative;
 }
 .bar-col {
   display: flex;
@@ -926,8 +929,12 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   height: 100%;
   gap: 4px;
   /* the column is a button (a press jumps to that month, TASK-44 §11-5):
-     strip the control look so it renders as the plain bar column */
-  padding: 0;
+     strip the control look so it renders as the plain bar column. The 1rem
+     top padding is the value label's headroom (TASK-100 H3): .bar-val
+     (0.7rem/line-height 1 ≈ 11.2px) + gap 4px = 15.2px ≤ 16px, so a 95-100%
+     bar's label never clips out of the scroll port. The column is
+     border-box, so the bar heights' 100% is the content box below it */
+  padding: 1rem 0 0;
   border: 0;
   background: none;
   font: inherit;
@@ -943,10 +950,80 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 }
 .bar-col:hover .bar { background: color-mix(in srgb, var(--bb-accent) 55%, var(--bb-accent-soft)); }
 .bar-col.current .bar { background: var(--bb-accent); }
-.bar-val { font-size: 0.7rem; color: var(--bb-muted); font-variant-numeric: tabular-nums; }
-/* the trend axis (first/last month ends, TASK-42) rides inside .trend-wrap
-   so its ends follow the scroll content, not the visible port */
-.trend-wrap { width: fit-content; min-width: 100%; }
+.bar-val {
+  font-size: 0.7rem;
+  color: var(--bb-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1;
+}
+/* the trend card (TASK-100): a 2-column grid — the y-axis gutter and the
+   plot — over a label row. Dense month windows (> 6 bars) fix the wrap to
+   the container width (fit-content would let intrinsic track/label sizes
+   widen it past 360px); the minmax(0, 1fr) tracks split the rest equally */
+.trend-wrap {
+  width: fit-content;
+  min-width: 100%;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 0.25rem;
+}
+.trend-wrap.dense { width: 100%; }
+/* the y-axis: sticky at the scroll port's left edge (background = the zone
+   surface, light/dark both) so it never drifts out of view on horizontal
+   scrolls. The padding-top aligns the ticks with the bar area (below the
+   headroom); the font-size lives here, not in a template class */
+.y-axis {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bb-surface);
+  padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 0.7rem;
+  color: var(--bb-muted);
+  font-variant-numeric: tabular-nums;
+}
+.y-axis span { line-height: 1; }
+.plot { position: relative; min-width: 0; }
+/* hairline guides: the max line sits at the 100%-height top (headroom
+   below the top edge), the mid line at the bar area's middle. Never
+   intercepts a bar press */
+.gridline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--bb-border);
+  pointer-events: none;
+}
+/* the thinned tick row shares .bars' grid (same template + gap), so each
+   span centers under its bar; grid-column: 2 keeps it out of the y gutter */
+.axis-labels {
+  grid-column: 2;
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+.axis-labels span { text-align: center; white-space: nowrap; }
+.trend-wrap.dense .bars,
+.trend-wrap.dense .axis-labels { gap: 0.25rem; }
+/* the dense window-end ticks flush to their cell ends: a nowrap line
+   wider than its ~17px cell overflows the span box, and no text-align
+   moves that overflow (chromium clamps the line's start edge to the
+   cell's, so the end tick "12月" hung ~14px out the right edge and fed
+   .hscroll's scrollable overflow a phantom 14px scroll). Sizing the end
+   spans to their text and pinning them to the cell ends keeps the box —
+   and the text inside it — within the plot (the neighbor cells are empty
+   spans), so the dense window stays scroll-free; the mid ticks sit far
+   from the port edges and keep centering */
+.trend-wrap.dense .axis-labels span:first-child { width: max-content; }
+.trend-wrap.dense .axis-labels span:last-child { width: max-content; justify-self: end; }
+/* the window-ends axis (TASK-42) of ReceiptsPage's inline daily card —
+   the trend card moved to .axis-labels (TASK-100) but this stays */
 .axis-ends { display: flex; justify-content: space-between; margin-top: 0.4rem; }
 
 /* ------------------------------------------------ reading screens (TASK-89)
@@ -1194,7 +1271,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 .card-head h3 { margin-top: 1rem; }
 .hint { margin: 0.75rem 0 0; }
-.trend-note { margin: 0.5rem 0 0; }
 .link-btn {
   padding: 0;
   border: 0;
@@ -1457,32 +1533,10 @@ a.sub-row:hover { background: var(--bb-hover); }
 .label-picker .label-anim-leave-from { max-width: 16rem; opacity: 1; }
 .label-picker .label-anim-move { transition: transform 0.2s ease; }
 
-/* filter (toolbar, TASK-26 2-4): one button, max 88px. Unselected carries
-   the word; a selection shows 6px dots and the accent border instead */
-.label-filter { position: relative; display: inline-flex; }
-.label-filter-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 88px;
-  height: 36px;
-  margin: -4px 0;
-  padding: 0 10px;
-  border: 1px solid var(--bb-border);
-  border-radius: 999px;
-  background: var(--bb-surface);
-  color: var(--bb-fg);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-.label-filter-btn.active { border-color: var(--bb-accent); color: var(--bb-accent); }
-.label-filter-btn.compact {
-  width: 44px;
-  height: 44px;
-  justify-content: center;
-  padding: 0;
-}
-.label-filter-word { white-space: nowrap; }
+/* label filter selection display (TASK-26 2-4; the old filter button is
+   gone since TASK-101): the dots ride the topbar search chip (5px there)
+   while the dialog lower tier keeps the 6px form; the foot + clear button
+   move with it */
 .label-filter-dots { display: inline-flex; gap: 2px; }
 .label-filter-dot { width: 6px; height: 6px; border-radius: 50%; }
 .label-filter-foot { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
@@ -1865,9 +1919,6 @@ a.sub-row:hover { background: var(--bb-hover); }
   .topbar-logo-full { display: none; }
   .topbar-logo-compact { display: inline-flex; }
   .topbar-filters { gap: 4px; }
-  /* a selected label chip drops to the dots alone (§11-3): the icon gives
-     way at the same 520px boundary as the logo */
-  .topbar-label-chip.active .label-chip-icon { display: none; }
   .item-edit { grid-template-columns: 1fr 1fr; }
   .auth { padding-top: 2rem; }
 }
@@ -1885,16 +1936,18 @@ a.sub-row:hover { background: var(--bb-hover); }
 }
 @media (max-width: 360px) {
   .topbar-title { display: none; }
-  /* the band's budget counts the mark alone (28px, §11-4): with the three
-     filter chips the compact logo's "kb" word makes the topbar 9px over */
+  /* the band's budget counts the mark alone (28px, §11-4): with the filter
+     chips the compact logo's "kb" word makes the topbar over */
   .topbar-logo-compact .logo-word { display: none; }
-  /* /search is ledger-scoped since TASK-74, so the band carries the ledger
-     chip too: the q word on the search chip (18px over the 44px icon entry)
-     made the topbar 13px over. The word folds away here — the same recipe
-     as the logo's "kb" — leaving the icon entry (aria-label keeps the term
-     and the page's own input shows it in full) */
-  .filter-chip-search:has(.chip-label-q) { width: 44px; padding: 0; }
+  /* the search chip returns to the 44px icon entry here: the q word
+     (.chip-label-q) and the label selection's dot column both fold away —
+     the same recipe as the logo's "kb" (TASK-101 carried the label entry
+     onto this chip). aria-label keeps the term and the label names, the
+     page's own input shows the term in full */
+  .filter-chip-search:has(.chip-label-q),
+  .filter-chip-search:has(.label-filter-dots) { width: 44px; padding: 0; }
   .chip-label-q { display: none; }
+  .label-filter-dots { display: none; }
 }
 
 /* the period chip swaps to the short label within the 56px budget through
