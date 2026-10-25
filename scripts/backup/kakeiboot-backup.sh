@@ -59,11 +59,17 @@ echo "db: $DEST/$STAMP/db.sqlite ($(stat -c '%s bytes' "$DEST/$STAMP/db.sqlite")
 
 # 2. images: append-onlyミラー（--deleteなし・追加/更新のみ。世代ローテーション
 #    もしない: どの過去DB世代の参照画像も残り続ける保証）。
-#    srcはconfig [maintenance] image_root の既定path前提（不在ならrsyncが
-#    errorで検知する）。
-t0=$(date +%s)
-rsync -a --stats "$SRC/var/$env/images/" "$DEST/images/"
-echo "images: $DEST/images/ ($(( $(date +%s) - t0 ))s)"
+#    srcはconfig [maintenance] image_root の既定path前提。src dir不在は
+#    正常状態（backendは初回画像保存時にdirを作るため、画像ゼロ環境では
+#    存在しない）なので skip する（TASK-97実機検証で判明・画像未保存環境
+#    でbackup全体が失敗するのを防ぐ）。
+if [ -d "$SRC/var/$env/images" ]; then
+    t0=$(date +%s)
+    rsync -a --stats "$SRC/var/$env/images/" "$DEST/images/"
+    echo "images: $DEST/images/ ($(( $(date +%s) - t0 ))s)"
+else
+    echo "images: src不在（画像未保存）のためskip: $SRC/var/$env/images"
+fi
 
 # 3. 完了marker（UTC時刻入り）と last_success（ISO8601 UTC）。このscriptの
 #    途中で失敗した場合はここへ到達しない＝last_successは更新されない。
