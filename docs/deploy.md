@@ -104,7 +104,6 @@ scriptの処理（この順序で固定）:
 backup先と構成:
 
 - backup先root: `/srv/opt/tomo/run/app/tool/kakeiboot/backups/<env>/`（運用dirの外・同一disk。運用dir再作成・誤操作の影響を受けない最後の砒）
-- 同一diskのため machine・disk自体の障害からは守らない。**local以外（off-machine）へのbackup拡張は将来検討事項**（2026-10-24ユーザー指示。候補: restic/borg等の暗号化増分tool・NAS・別machineへのrsync。DB一貫snapshotの生成は `admin backup` が既に担うため、転送先の追加・世代構成の見直しが主題）
 - `backups/<env>/<date>/db.sqlite`: 日次世代dir（UTC日付。同日再実行は同dirへ上書き＝冪等）
 - `backups/<env>/images/`: append-only単一ミラー（世代ローテーションなし。orphan cleanupで実運用dirから消えた画像も残るが無害）
 - 対象外: configs（git管理・deployでrsync）・frontend/dist（build成果物）・binary
