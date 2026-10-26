@@ -231,10 +231,11 @@ describe('branch transition (login/logout shell swap)', () => {
     expect(publicRoot.isConnected).toBe(false)
     expect(document.querySelector('.shell')).not.toBe(null)
     // home mounted exactly once — the leaving branch never fetched. One
-    // Home load issues two analysis-path calls since TASK-93 (the category
-    // breakdown and the trend), so exactly-once = 2
+    // Home load issues three analysis-path calls: the category breakdown
+    // and the month-window trend since TASK-93, plus TASK-103's week fetch
+    // (getAnalysisTrend granularity:week limit:1), so exactly-once = 3
     await settle()
-    expect(statsCalls()).toHaveLength(2)
+    expect(statsCalls()).toHaveLength(3)
   })
 
   it('[covers:web-shell.page-transition] logout（replace→clear）は shell の fade-out → login の fade-in', async () => {

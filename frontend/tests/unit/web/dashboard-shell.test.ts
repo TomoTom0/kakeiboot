@@ -27,8 +27,9 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     const spy = vi.spyOn(api, 'getAnalysis')
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const { wrapper } = await mountApp('/')
-    // the three loads: the category analysis (the period header total and
-    // the breakdown), the stacked trend and the recent receipts
+    // the four loads (TASK-103 adds the month-mode week fetch): the category
+    // analysis (the period header total and the breakdown), the stacked
+    // trend, the week rows and the recent receipts
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith(1, { axis: 'category', metric: 'amount', month: '2026-10', limit: 50 })
     expect(trendSpy).toHaveBeenCalledWith(1, {
@@ -38,6 +39,17 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       from: '2026-05-01',
       to: '2026-10-31',
       limit: 5,
+    })
+    // TASK-103: the month mode's fourth load — the selected month's week
+    // buckets (limit 1: the rows read bucket_totals, not the series)
+    expect(trendSpy).toHaveBeenCalledTimes(2)
+    expect(trendSpy).toHaveBeenCalledWith(1, {
+      axis: 'category',
+      metric: 'amount',
+      granularity: 'week',
+      from: '2026-10-01',
+      to: '2026-10-31',
+      limit: 1,
     })
     // the period header: the period label and the big total — no compare
     // selector, no diff values, no KPI card
@@ -56,7 +68,7 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // the zone headings live in the DOM for the document outline / screen
     // readers but carry the sr-only class — the page shows no heading text
     const headings = wrapper.findAll('.zone h2.sr-only')
-    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '支出の内訳', '最近のレシート'])
+    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '支出の内訳', '最近のレシート'])
     // the section links are icon-only (chevron), not word links
     const cat = wrapper.find('[data-test="breakdown-more"]')
     expect(cat.attributes('aria-label')).toBe('カテゴリ別に見る')
@@ -145,6 +157,77 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(week.router.currentRoute.value.path).toBe('/receipts')
     expect(week.router.currentRoute.value.query).toMatchObject({ from: '2026-10-10', to: '2026-10-10' })
     void router
+  })
+
+  it('[covers:web-home.week-card] 週ごとの支出zone: 月モードは選択月の各週（月曜アンカー）の全幅button行で押下は週モードへ、週/年/rangeはzoneなし・ラベル絞り込みは週fetchへ流れる', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
+    const { wrapper } = await mountApp('/')
+    const zone = () => wrapper.find('[data-test="week-card"]')
+    // month mode: the selected month's weeks as Monday-anchored rows — the
+    // first bucket's Monday lives in September so its label clips at the
+    // month edge, and the month's three receipts (948円) all sit in the
+    // 10/5 week (the zero rows keep their 0円 stubs)
+    expect(zone().exists()).toBe(true)
+    const rows = zone().findAll('button.week-row')
+    expect(rows.map((b) => b.attributes('data-test'))).toEqual([
+      'row-2026-09-28',
+      'row-2026-10-05',
+      'row-2026-10-12',
+      'row-2026-10-19',
+      'row-2026-10-26',
+    ])
+    expect(rows.map((b) => b.find('.week-label').text())).toEqual([
+      '10/1〜10/4',
+      '10/5〜10/11',
+      '10/12〜10/18',
+      '10/19〜10/25',
+      '10/26〜10/31',
+    ])
+    expect(rows.map((b) => b.find('.amount').text())).toEqual(['0円', '948円', '0円', '0円', '0円'])
+    // today (2026-10-15) highlights the row of the week holding it
+    expect(zone().find('[data-test="row-2026-10-12"]').classes()).toContain('current')
+    // a label filter rides the week fetch too (label_colors like the others)
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+      granularity: 'week',
+      from: '2026-10-01',
+      to: '2026-10-31',
+      limit: 1,
+      label_colors: ['red'],
+    }))
+    // a row press moves the shared period into that week's week mode and the
+    // month-only zone disappears with the mode itself
+    await zone().find('[data-test="row-2026-10-05"]').trigger('click')
+    await settle()
+    const store = (await import('@/web/stores/period')).usePeriodStore()
+    expect(store.mode).toBe('week')
+    expect(store.week).toBe('2026-10-05')
+    expect(zone().exists()).toBe(false)
+    // week / year / range modes never mount the zone and stay at the single
+    // trend call (day or month granularity — no week-bucket fetch)
+    for (const path of ['/?week=2026-10-05', '/?year=2026', '/?from=2026-10-03&to=2026-10-15']) {
+      cleanup()
+      mockFetch({ 'GET /api/auth/me': { body: ME } })
+      const other = vi.spyOn(api, 'getAnalysisTrend')
+      const m = await mountApp(path)
+      expect(m.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
+      expect(other).toHaveBeenCalledTimes(1)
+    }
+    // a range spanning exactly the month draws the zone again once the month
+    // tab returns (the mode change must re-run the load)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const back = await mountApp('/?from=2026-10-01&to=2026-10-31')
+    expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
+    await back.wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    await back.wrapper.find('[data-test="mode-month"]').trigger('click')
+    await settle()
+    expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(true)
   })
 
   it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal][covers:web-browse.trend-y-axis][covers:web-browse.trend-note-removed] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは間引き・値ラベルは全棒', async () => {

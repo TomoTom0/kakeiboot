@@ -17,10 +17,12 @@ import DashSkeleton from '../components/DashSkeleton.vue'
 import PeriodHeader from '../components/PeriodHeader.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendBars from '../components/TrendBars.vue'
+import WeekRows from '../components/WeekRows.vue'
+import type { WeekRow } from '../components/WeekRows.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
-import { currentTrendKey, trendGranularity } from '../composables/trend'
+import { bucketSpan, currentTrendKey, trendGranularity } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
 import { usePeriodStore } from '../stores/period'
 
@@ -38,6 +40,7 @@ period.fromQuery(useRoute().query)
 
 const analysis = ref<AnalysisResult | null>(null)
 const trendRes = ref<AnalysisTrendResult | null>(null)
+const weekRes = ref<AnalysisTrendResult | null>(null)
 const recent = ref<ReceiptSummary[]>([])
 const error = ref('')
 const loading = ref(false)
@@ -68,7 +71,7 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    const [a, tr, r] = await Promise.all([
+    const [a, tr, r, wk] = await Promise.all([
       api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
       api.getAnalysisTrend(l, {
         axis: 'category',
@@ -80,11 +83,26 @@ async function load(id?: number): Promise<void> {
         limit: 5,
       }),
       api.listReceipts(l, { from: period.range[0], to: period.range[1], limit: 5, ...labels }),
+      // TASK-103: the month mode's week rows — the selected month only, week
+      // buckets; limit 1 keeps the one series we never read (bucket_totals is
+      // the whole point)
+      ...(period.mode === 'month'
+        ? [api.getAnalysisTrend(l, {
+            axis: 'category',
+            metric: 'amount',
+            granularity: 'week',
+            from: period.range[0],
+            to: period.range[1],
+            ...labels,
+            limit: 1,
+          })]
+        : []),
     ])
     if (n !== seq) return
     analysis.value = a
     trendRes.value = tr
     recent.value = r.receipts
+    weekRes.value = wk ?? null
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -97,8 +115,12 @@ async function load(id?: number): Promise<void> {
 
 const ledgerId = useLedger((id) => load(id))
 // one array watch so a change that moves both (a ledger switch resetting the
-// labels) fetches once
-watch([() => period.range, () => period.labelQuery], () => void load())
+// labels, or a tab switch moving range and mode together) fetches once;
+// mode is an explicit watch source on its own — the reload on a mode change
+// must not ride on range's reference comparison (the range computed always
+// returns a fresh array, which today happens to fire the watcher anyway —
+// that is an implementation detail, not a contract)
+watch([() => period.range, () => period.labelQuery, () => period.mode], () => void load())
 
 const totals = computed(() => analysis.value?.totals ?? null)
 
@@ -156,6 +178,23 @@ function onTrendSelect(key: string): void {
   }
   if (gran.value === 'week') period.setWeek(key)
   else period.setMonth(key)
+}
+
+// --- the month mode's week rows (TASK-103) ----------------------------------------
+const weeks = computed<WeekRow[]>(() => {
+  const res = weekRes.value
+  if (!res || period.mode !== 'month') return []
+  const [from, to] = period.range
+  return res.buckets.map((b, i) => {
+    const [lo, hi] = bucketSpan(b, 'week', from, to)
+    return { key: b, label: `${shortDate(lo)}〜${shortDate(hi)}`, total: res.bucket_totals[i] ?? 0 }
+  })
+})
+const weekCurrent = computed(() =>
+  currentTrendKey('week', period.mode, period.range[0], period.range[1], period.month),
+)
+function onWeekSelect(key: string): void {
+  period.setWeek(key)
 }
 
 // --- the category breakdown (§4 案: RankedList + the rest row) --------------------
@@ -232,6 +271,21 @@ const recentQuery = computed(() => {
           :span="trendPeriod()"
           :current="trendCurrent"
           @select="onTrendSelect"
+        />
+      </section>
+
+      <section
+        v-if="period.mode === 'month' && weeks.length > 0"
+        class="zone"
+        data-test="week-card"
+      >
+        <h2 class="sr-only">
+          週ごとの支出
+        </h2>
+        <WeekRows
+          :weeks="weeks"
+          :current="weekCurrent"
+          @select="onWeekSelect"
         />
       </section>
 
