@@ -62,11 +62,24 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.kpi-value').exists()).toBe(false)
   })
 
-  it('[covers:web-home.zone-headings-sr-only] zone見出しはsr-only（視覚見出し語なし）・誘導はicon link（aria-label+chevron）', async () => {
+  // TASK-105 test-first intermediate state: web-home.zone-headings-sr-only
+  // (TASK-95) was abolished for web-common.zone-headings-visible, but the
+  // implementation has not landed yet, so the expectations below still pin the
+  // CURRENT sr-only form to keep the suite green. Post-implementation
+  // revision targets (design tmp/tasks/tm-105/design_dashboard-visual.md §1):
+  //   - `.zone h2`（AxisDetail の cross/own/item-stats 内 h3 も）は sr-only を
+  //     持たず可視 class `zone-title` を持つ（1つ目の findAll は
+  //     `.zone .zone-head h2.zone-title` へ・最後の not(sr-only) 期待は反転）
+  //   - 見出しは `.zone-head` 行の左要素で、zone-more icon link
+  //     （breakdown-more / recent-more）は `.zone-head` の最後の子（単独行
+  //     `.zone-more` は廃止）
+  //   - 見出し文言はこの4つのまま流用（新規考案なし）
+  it('[covers:web-common.zone-headings-visible] zone見出し（TASK-105で可視zone-title化。実装前は従来のsr-only形を維持）・誘導はicon link（aria-label+chevron）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
     // the zone headings live in the DOM for the document outline / screen
     // readers but carry the sr-only class — the page shows no heading text
+    // （実装後は可視 h2.zone-title が .zone-head 内に並ぶ形へ改訂）
     const headings = wrapper.findAll('.zone h2.sr-only')
     expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '支出の内訳', '最近のレシート'])
     // the section links are icon-only (chevron), not word links
@@ -80,6 +93,13 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
   })
 
 
+  // TASK-105 post-implementation revision targets for this test
+  // (web-home.breakdown-rest-row revised + web-common.series-color-assignment,
+  // design §4-2): every row — top rows AND the「ほか」rest row — gains the
+  // leading 12px round swatch `.ranked-swatch`（background: var(--rank-color)）,
+  // RankedList sets `--rank-color: seriesColor(row.keys[0] ?? null, axis)` on
+  // each row, the top rows' swatch + in-row bar carry the series color and the
+  //「ほか n件・計xx円」row resolves to var(--series-rest).
   it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（上位行と同じ形式・非リンク）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     // seven top categories this month (five extra items on receipt 102)
@@ -111,6 +131,15 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(new URL(rows[0]!.attributes('href')!, 'http://localhost').pathname).toBe('/axes/category/4')
   })
 
+  // TASK-105 post-implementation revision targets for this test
+  // (web-home.stacked-trend-fixed revised, design §4-1): the segment colors
+  // become seriesColor(s.key, axis) CSS variable refs — the mock's current
+  // month holds 食費 (id 1) -> var(--series-1) and 日用品 (id 4) ->
+  // var(--series-4) — the residual「ほか」segment is var(--series-rest), the
+  // hover titles gain the share form「名称 〜円（n%）」（total>0 ガード）,
+  // value-0 series segments are omitted from the assembly, and .bar-seg gains
+  // min-height: 2px + the 1px var(--bb-surface) border between adjacent
+  // segments（背景色・title 以外の既存期待は不変）.
   it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額表記）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')

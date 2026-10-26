@@ -8,6 +8,16 @@
 // implementation lands. The page mounts then pin the wiring — a window move
 // re-fetches the trend endpoint only (the breakdown / recent and the
 // TASK-103 week fetch stay in load()).
+//
+// TASK-108 page-turn revision (design: tmp/tasks/tm-108/
+// design_trend-window-page.md §4): prev/next step the window by its own
+// width (month 6 / year 12 — a page never overlaps the one before), next
+// clamps the offset to 0 in one press, and the committed window's identity
+// (windowKey, '<from>..<to>') gates the bars' v-if and keys the slide
+// transition (direction / transitionName — the first insertion and a
+// same-window refetch never slide). Test-first again: the page-turn
+// expectations and the windowKey/direction/transitionName tests are red
+// until the composable / component revisions land.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -44,8 +54,20 @@ async function mountWindow(axis: () => AnalysisAxis = () => 'category') {
   return win
 }
 
+/** The calendar months 'YYYY-MM' covering [from, to] inclusive — the
+ * page-turn no-overlap proof reads the computed windows, not literals. */
+function monthsBetween(from: string, to: string): string[] {
+  const [fy, fm] = from.slice(0, 7).split('-').map(Number) as [number, number]
+  const [ty, tm] = to.slice(0, 7).split('-').map(Number) as [number, number]
+  const months: string[] = []
+  for (let t = fy * 12 + fm - 1, end = ty * 12 + tm - 1; t <= end; t++) {
+    months.push(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`)
+  }
+  return months
+}
+
 describe('useTrendWindow (composable, TASK-104)', () => {
-  it('[covers:web-home.trend-window] 窓計算: month初期窓はtrendQuery(5)と一致・offset=1で両端1か月過去・yearは12か月でperiod.rangeと一致（anchor右端12月）・week/rangeは選択期間のまま', async () => {
+  it('[covers:web-home.trend-window] 窓計算: month初期窓はtrendQuery(5)と一致・prevでoffset=6の丸ごとページ送り（前ページと月の重複なし）・yearは12か月でperiod.rangeと一致（anchor右端12月）・prevでoffset=12・week/rangeは選択期間のまま', async () => {
     const period = usePeriodStore()
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const win = await mountWindow()
@@ -65,20 +87,31 @@ describe('useTrendWindow (composable, TASK-104)', () => {
       to: '2026-10-31',
       limit: 5,
     })
-    // offset=1: both edges move one month into the past
+    // TASK-108: prev turns the whole page — offset += span (month 6): the
+    // window swaps to 2025-11..2026-04, sharing no month with the page before
+    const initialMonths = monthsBetween(win.window.value[0], win.window.value[1])
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(1)
-    expect(win.window.value).toEqual(['2026-04-01', '2026-09-30'])
+    expect(win.offset.value).toBe(6)
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
+    expect(
+      initialMonths.filter((m) => monthsBetween(win.window.value[0], win.window.value[1]).includes(m)),
+      'a page never overlaps the one before it',
+    ).toEqual([])
     // year mode: the anchor is the year's December — offset=0 equals
     // period.range exactly (v2 REVIEW-21 no-regress guarantee)
     period.mode = 'year'
     await settle()
     expect(win.window.value).toEqual(period.range)
     expect(win.window.value).toEqual(['2026-01-01', '2026-12-31'])
+    const initialYearMonths = monthsBetween(win.window.value[0], win.window.value[1])
     win.prev()
     await settle()
-    expect(win.window.value).toEqual(['2025-12-01', '2026-11-30'])
+    expect(win.offset.value).toBe(12)
+    expect(win.window.value).toEqual(['2025-01-01', '2025-12-31'])
+    expect(initialYearMonths.filter((m) => monthsBetween(win.window.value[0], win.window.value[1]).includes(m))).toEqual(
+      [],
+    )
     // week / range: inactive — the window stays the selected period itself
     period.setWeek('2026-10-05')
     await settle()
@@ -91,7 +124,7 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.window.value).toEqual(['2026-10-03', '2026-10-15'])
   })
 
-  it('[covers:web-home.trend-window] offset操作: nextはoffset=0で無効（canNext=offset>0・未来方向なし）・focus変更（月・ラベル・家計簿）でoffset=0リセット', async () => {
+  it('[covers:web-home.trend-window] offset操作: nextはoffset=0で無効（canNext=offset>0・未来方向なし）・prev→offset=6・next→0へ一発復帰（span刻み・中間offset非経由）・focus変更（月・ラベル・家計簿）でoffset=0リセット', async () => {
     const period = usePeriodStore()
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const win = await mountWindow()
@@ -103,15 +136,18 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(trendSpy).toHaveBeenCalledTimes(1)
     win.prev()
     await settle()
+    expect(win.offset.value).toBe(6)
     expect(win.canNext.value).toBe(true)
     win.next()
     await settle()
+    // one press pays the whole span back: 6 -> 0 directly, never through an
+    // intermediate offset (the page-turn contract, TASK-108 §1-2)
     expect(win.offset.value).toBe(0)
     expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
     // a focus change resets the window to the new month's initial one
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(1)
+    expect(win.offset.value).toBe(6)
     period.setMonth('2026-09')
     await settle()
     expect(win.offset.value).toBe(0)
@@ -178,9 +214,103 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(trendSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('[covers:web-home.trend-window-slide] windowKey・direction・transitionName: 初回fetchまでkey=null（TrendBarsのv-if源）・確定でkeyは<from>..<to>と即時描画のname空文字・同窓再fetchでkey不変・prev/nextは方向別name・focus変更は直近方向を継承・連打は最終窓のみ採用・nextはspan未満offsetを0へクランプ', async () => {
+    const period = usePeriodStore()
+    // bind the real method before the spy: the in-flight gate below calls it
+    const orig = api.getAnalysisTrend.bind(api)
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
+    const win = useTrendWindow({ axis: () => 'category' })
+    // before the first response the committed window is null (the v-if gate
+    // source) and the transition name is '' — nothing has been painted yet
+    expect(win.windowKey.value).toBe(null)
+    expect(win.transitionName.value).toBe('')
+    useSessionStore().selectedLedgerId = 1
+    await settle()
+    // the first commit is the range identity (label_colors never in it) and
+    // the very first insertion paints instantly: no slide (slideReady stays
+    // false through the null -> value change, TASK-108 §1-4)
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.transitionName.value).toBe('')
+    // a same-window refetch (label_colors added) really re-fetches but keeps
+    // the key: a recolour of the same window never slides
+    period.setLabelColors(['red'])
+    await settle()
+    expect(trendSpy).toHaveBeenLastCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.transitionName.value).toBe('')
+    // prev: the direction is recorded, the key becomes the new page's range
+    // and the name turns direction-specific
+    win.prev()
+    await settle()
+    expect(win.direction.value).toBe('prev')
+    expect(win.offset.value).toBe(6)
+    expect(win.windowKey.value).toBe('2025-11-01..2026-04-30')
+    expect(win.transitionName.value).toBe('trend-slide-back')
+    // next: the mirrored pair
+    win.next()
+    await settle()
+    expect(win.direction.value).toBe('next')
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.transitionName.value).toBe('trend-slide-forward')
+    // the guards record no direction and fire no fetch (a disable-state
+    // press never moves the window — the §1-2 contract)
+    const calls = trendSpy.mock.calls.length
+    win.next() // offset=0: no-op
+    win.canPrev.value = false
+    win.prev()
+    win.canPrev.value = true
+    await settle()
+    expect(win.direction.value).toBe('next')
+    expect(trendSpy.mock.calls.length).toBe(calls)
+    // a focus change mid-fetch keeps the OLD key until the response lands
+    // (the bars never leave the last committed window) and inherits the last
+    // recorded direction (no per-focus direction estimation, §1-3)
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    trendSpy.mockImplementation(async (...args: Parameters<typeof orig>) => {
+      await gate
+      return orig(...args)
+    })
+    period.setMonth('2026-09')
+    await settle()
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.transitionName.value).toBe('trend-slide-forward')
+    release()
+    await settle()
+    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
+    expect(win.transitionName.value).toBe('trend-slide-forward')
+    // a double prev fires two fetches; the seq guard keeps only the last —
+    // the committed key is the offset=12 page, swapped in once (the page is
+    // anchored to September, the month set above: 2025-04..2025-09)
+    win.prev()
+    win.prev()
+    await settle()
+    expect(win.offset.value).toBe(12)
+    expect(win.windowKey.value).toBe('2025-04-01..2025-09-30')
+    expect(win.transitionName.value).toBe('trend-slide-back')
+    // the Math.max clamp guard: a hypothetical sub-span offset (only reachable
+    // by a future change) still returns to 0 in one press
+    win.offset.value = 3
+    win.next()
+    expect(win.offset.value).toBe(0)
+    await settle()
+    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
+  })
+
+  // TASK-105 post-implementation revision targets for this test
+  // (web-home.trend-window description revised — the window / offset / fetch
+  // expectations above and below stay untouched, design §4-1): the stacked
+  // assembly reads `seriesColor(s.key, axis)` instead of the PALETTE array —
+  // for this fixture's series keys 0..4 the colors become
+  // ['var(--series-7)', 'var(--series-1)', 'var(--series-2)', 'var(--series-3)',
+  //  'var(--series-4)'] (key 0: (0-1 mod 7 + 7) % 7 = 6) and the residual
+  // 「ほか」segment var(--series-rest); value-0 series segments are omitted
+  // from the assembly (the zero bucket below then holds only the >0 series);
+  // the PALETTE constant itself is deleted from trendWindow.ts.
   it('[covers:web-home.trend-window] stacked組立はcomposable集約: series上位5+残余「ほか」segment+PALETTE割当（--c1〜c5・残余は--c-rest・ゼロ窓は残余なし）', async () => {
     // seven series in the endpoint's total order: the top five keep the
     // palette, the tail (20 + 10) folds into the grey rest segment
+    // （実装後は上記 TASK-105 注記の seriesColor 写像値へ期待値を改訂）
     const res: AnalysisTrendResult = {
       axis: 'category',
       metric: 'amount',
@@ -216,40 +346,46 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.stacked.value[1]!.segments.map((s: Seg) => s.label)).toEqual(['s0', 's1', 's2', 's3', 's4'])
   })
 
-  it('[covers:web-home.trend-window-floor] 全0打ち切り: offset>=1の窓が総和0でprev disable・nextで復帰・初期窓（offset=0）の全0ではdisableしない', async () => {
-    // records in 2026-06 and 2026-10 only: every window through offset=4
-    // still holds June; the offset=5 window (2025-12..2026-05) is all zero
+  it('[covers:web-home.trend-window-floor] 全0打ち切り: ページ送り先のoffset=6窓は記録があれば有効のまま・offset=12の全0窓でprev disable・nextでoffset=6へ復帰・初期窓（offset=0）の全0ではdisableしない', async () => {
+    // records in 2025-12, 2026-06 and 2026-10 — the two-page structure of
+    // TASK-108 §4-6: the offset=6 page (2025-11..2026-04) holds the 2025-12
+    // record, the offset=12 page (2025-05..2025-10) is the all-zero floor
     await api.updateReceipt(1, 102, { revision: 1, set: { purchased_on: '2026-06-15' } })
+    await api.updateReceipt(1, 103, { revision: 1, set: { purchased_on: '2025-12-10' } })
     const period = usePeriodStore()
     const win = await mountWindow()
+    // the initial page (2026-05..2026-10) holds the June / October records
     expect(win.canPrev.value).toBe(true)
-    for (let offset = 1; offset <= 4; offset++) {
-      win.prev()
-      await settle()
-      expect(win.offset.value).toBe(offset)
-      expect(win.canPrev.value, `offset=${offset}`).toBe(true)
-    }
-    // offset=5: the all-zero window shows and prev disables (the practical
-    // floor against the zero-filling endpoint)
+    // page 2 (offset=6): the 2025-12 record keeps the bucket total > 0 —
+    // prev stays enabled (the old offset=1..4 walk collapses into this page)
     win.prev()
     await settle()
-    expect(win.window.value).toEqual(['2025-12-01', '2026-05-31'])
-    expect(win.canPrev.value).toBe(false)
-    // next returns to the June window and prev re-enables
-    win.next()
-    await settle()
-    expect(win.offset.value).toBe(4)
-    expect(win.canPrev.value).toBe(true)
-    // an all-zero INITIAL window (2026-04 selected, records in 06/10) never
-    // disables prev — a record-less month must still show the months before
-    period.setMonth('2026-04')
-    await settle()
+    expect(win.offset.value).toBe(6)
     expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
     expect(win.canPrev.value).toBe(true)
+    // page 3 (offset=12) is all zero: prev disables (the practical floor
+    // against the zero-filling endpoint)
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(1)
-    expect(win.canPrev.value).toBe(false) // the slid-to window is all zero
+    expect(win.offset.value).toBe(12)
+    expect(win.window.value).toEqual(['2025-05-01', '2025-10-31'])
+    expect(win.canPrev.value).toBe(false)
+    // next returns to the 2025-12 page and prev re-enables
+    win.next()
+    await settle()
+    expect(win.offset.value).toBe(6)
+    expect(win.canPrev.value).toBe(true)
+    // an all-zero INITIAL window (2025-04 selected: 2024-11..2025-04) never
+    // disables prev — a record-less month must still show the months before
+    period.setMonth('2025-04')
+    await settle()
+    expect(win.window.value).toEqual(['2024-11-01', '2025-04-30'])
+    expect(win.canPrev.value).toBe(true)
+    win.prev()
+    await settle()
+    expect(win.offset.value).toBe(6)
+    expect(win.window.value).toEqual(['2024-05-01', '2024-10-31'])
+    expect(win.canPrev.value).toBe(false) // the paged-to window is all zero
   })
 })
 
@@ -264,12 +400,14 @@ describe('TrendWindow (component, TASK-104)', () => {
     ],
   }
 
-  it('[covers:web-home.trend-window] 前次button対（aria-label「前の範囲」「次の範囲」・.trend-nav・disabled受け渡し・select再送出）・nav=falseでbutton非表示', async () => {
+  it('[covers:web-home.trend-window] 前次button対（aria-label「前の範囲」「次の範囲」・.trend-nav・disabled受け渡し・select再送出）・windowKey=nullでTrendBars未描画（v-ifゲート）・値で描画・nav=falseでbutton非表示', async () => {
     const w = mount(TrendWindow, {
       props: {
         nav: true,
         canPrev: false,
         canNext: true,
+        windowKey: '2026-05-01..2026-10-31',
+        transitionName: '',
         stacked: [COL],
         granularity: 'month',
         span: ['2026-05-01', '2026-10-31'] as [string, string],
@@ -295,6 +433,15 @@ describe('TrendWindow (component, TASK-104)', () => {
     // a bar press re-emits select through the wrapper
     await w.find('[data-test="bar-2026-10"]').trigger('click')
     expect(w.emitted('select')).toEqual([['2026-10']])
+    // the v-if gate (TASK-108 §1-4 / §4-7): until the first window commits
+    // (windowKey=null) the bars do not render at all; a committed key draws
+    // them (both directions pinned — the transition class checks live in the
+    // browser spec, @vue/test-utils cannot advance a real transition)
+    expect(w.find('[data-test="trend"]').exists()).toBe(true)
+    await w.setProps({ windowKey: null })
+    expect(w.find('[data-test="trend"]').exists()).toBe(false)
+    await w.setProps({ windowKey: '2026-05-01..2026-10-31' })
+    expect(w.find('[data-test="trend"]').exists()).toBe(true)
     // week / range screens pass nav=false: the pair is gone, the bars stay
     await w.setProps({ nav: false })
     expect(w.find('[data-test="trend-prev"]').exists()).toBe(false)
@@ -304,7 +451,7 @@ describe('TrendWindow (component, TASK-104)', () => {
 })
 
 describe('page wiring (Home / view pages, TASK-104)', () => {
-  it('[covers:web-home.trend-window] Home月モード: prev押下で棒key群が1か月スライドしfocus不変・analysis/recentとweek fetchは走らない・nextは初期窓でdisable', async () => {
+  it('[covers:web-home.trend-window] Home月モード: prev押下で棒key群が窓幅（6か月）ページ送りされfocus不変・analysis/recentとweek fetchは走らない・nextは初期窓でdisable', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const analysisSpy = vi.spyOn(api, 'getAnalysis')
     const listSpy = vi.spyOn(api, 'listReceipts')
@@ -322,14 +469,14 @@ describe('page wiring (Home / view pages, TASK-104)', () => {
     const w0 = weekCalls().length
     await wrapper.find('[data-test="trend-prev"]').trigger('click')
     await settle()
-    expect(keys()).toEqual(['bar-2026-04', 'bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09'])
+    expect(keys()).toEqual(['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04'])
     expect(monthCalls()).toHaveLength(2)
     expect(monthCalls().at(-1)![1]).toMatchObject({
       axis: 'category',
       metric: 'amount',
       granularity: 'month',
-      from: '2026-04-01',
-      to: '2026-09-30',
+      from: '2025-11-01',
+      to: '2026-04-30',
       limit: 5,
     })
     // the window move re-fetches the trend only: the breakdown / recent and
@@ -354,7 +501,7 @@ describe('page wiring (Home / view pages, TASK-104)', () => {
     const { wrapper } = await mountApp('/')
     const keys = () => wrapper.findAll('[data-test="trend-card"] .bar-col').map((b) => b.attributes('data-test'))
     const store = (await import('@/web/stores/period')).usePeriodStore()
-    await wrapper.find('[data-test="trend-prev"]').trigger('click') // offset=1
+    await wrapper.find('[data-test="trend-prev"]').trigger('click') // offset=6
     await settle()
     // the period chip's month step (2026-10 -> 2026-09) resets the window to
     // September's initial one — the offset did not survive the focus change
@@ -370,17 +517,20 @@ describe('page wiring (Home / view pages, TASK-104)', () => {
     expect(store.month).toBe('2026-10')
     expect(keys()).toEqual(['bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09', 'bar-2026-10'])
     // a bar press is a focus move (setMonth): the window resets around the
-    // pressed month even from a slid position
+    // pressed month even from a paged position — bar-2025-12 sits inside the
+    // paged window (2025-11..2026-04), a month clearly outside the initial
+    // one (TASK-108 §4-8: the old bar-2026-04 press landed on the window
+    // edge, where the reset's before/after were indistinguishable)
     await wrapper.find('[data-test="trend-prev"]').trigger('click')
     await settle()
-    await wrapper.find('[data-test="bar-2026-04"]').trigger('click')
+    await wrapper.find('[data-test="bar-2025-12"]').trigger('click')
     await settle()
     expect(store.mode).toBe('month')
-    expect(store.month).toBe('2026-04')
-    expect(keys()).toEqual(['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04'])
+    expect(store.month).toBe('2025-12')
+    expect(keys()).toEqual(['bar-2025-07', 'bar-2025-08', 'bar-2025-09', 'bar-2025-10', 'bar-2025-11', 'bar-2025-12'])
   })
 
-  it('[covers:web-home.trend-window] 年モードは12本のまま1か月スライド・週・期間モードは前次buttonなし（窓は選択期間・7本日棒のまま）', async () => {
+  it('[covers:web-home.trend-window] 年モードは12本のまま12か月分ページ送り（bar-2025-01〜12）・週・期間モードは前次buttonなし（窓は選択期間・7本日棒のまま）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const year = await mountApp('/?year=2026')
     const ykeys = () => year.wrapper.findAll('[data-test="trend-card"] .bar-col').map((b) => b.attributes('data-test'))
@@ -401,18 +551,18 @@ describe('page wiring (Home / view pages, TASK-104)', () => {
     await year.wrapper.find('[data-test="trend-prev"]').trigger('click')
     await settle()
     expect(ykeys()).toEqual([
+      'bar-2025-01',
+      'bar-2025-02',
+      'bar-2025-03',
+      'bar-2025-04',
+      'bar-2025-05',
+      'bar-2025-06',
+      'bar-2025-07',
+      'bar-2025-08',
+      'bar-2025-09',
+      'bar-2025-10',
+      'bar-2025-11',
       'bar-2025-12',
-      'bar-2026-01',
-      'bar-2026-02',
-      'bar-2026-03',
-      'bar-2026-04',
-      'bar-2026-05',
-      'bar-2026-06',
-      'bar-2026-07',
-      'bar-2026-08',
-      'bar-2026-09',
-      'bar-2026-10',
-      'bar-2026-11',
     ])
     // week / range: the pair never renders and the window stays the period
     for (const path of ['/?week=2026-10-05', '/?from=2026-10-03&to=2026-10-15']) {

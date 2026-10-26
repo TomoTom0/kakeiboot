@@ -1,11 +1,15 @@
 // The trend chart's movable window (TASK-104, design: tmp/tasks/tm-104/
 // design_trend-window.md): the offset/window state, the trend fetch and the
 // stacked assembly live in this one composable shared by the four trend
-// screens (Home / Categories / Stores / AxisDetail). month/year slide their
-// window one bucket (a month) into the past per prev press without touching
-// the focus (the period store); week/range keep the selected period itself.
-// The window is ephemeral: mode/range/labelQuery/ledger changes reset it to
-// the initial one (offset=0).
+// screens (Home / Categories / Stores / AxisDetail). month/year page their
+// window by its own width (month 6 / year 12 months — TASK-108: a page never
+// overlaps the one before it) per prev press without touching the focus (the
+// period store); week/range keep the selected period itself. The window is
+// ephemeral: mode/range/labelQuery/ledger changes reset it to the initial one
+// (offset=0). TASK-108 adds the committed window's identity (windowKey) and
+// the direction record: the window swap slides (direction-named transition)
+// only when the committed range itself changes — a same-window refetch
+// (labelQuery, refresh) and the very first insertion never slide.
 import { computed, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue'
 import { useDataApi, type AnalysisAxis, type AnalysisFilters, type AnalysisTrendQuery, type AnalysisTrendResult } from '../api/data'
 import type { StackedBar } from '../components/TrendBars.vue'
@@ -33,6 +37,9 @@ export interface TrendWindowState {
   stacked: ComputedRef<StackedBar[]>
   /** the charted [from, to] (offset applied; period.range while inactive) */
   window: ComputedRef<[string, string]>
+  /** the committed window's identity '<from>..<to>' — null until the first
+   *  response: TrendBars' v-if gate and the slide transition key (TASK-108) */
+  windowKey: Ref<string | null>
   /** the trend granularity of the current window */
   granularity: ComputedRef<TrendGranularity>
   /** month/year only — the prev/next pair renders only while true */
@@ -42,6 +49,11 @@ export interface TrendWindowState {
   canPrev: Ref<boolean>
   /** offset > 0 */
   canNext: ComputedRef<boolean>
+  /** the direction of the last window move — the transitionName source
+   *  (TASK-108: focus changes inherit the last recorded direction) */
+  direction: Ref<'prev' | 'next'>
+  /** '' until the first window has painted, then the direction's slide name */
+  transitionName: ComputedRef<string>
   loading: Ref<boolean>
   prev(): void
   next(): void
@@ -65,21 +77,46 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
   const canPrev = ref(true)
 
   const active = computed(() => period.mode === 'month' || period.mode === 'year')
+  /** the page-turn step — the window's own width: a page never overlaps the
+   *  previous one (TASK-108). month slides 6 months, year 12. week/range
+   *  never page (active=false keeps the window and prev/next away from it) */
+  const span = computed(() => (period.mode === 'month' ? 6 : 12))
   const window = computed<[string, string]>(() => {
     if (!active.value) return period.range
     // the anchor is the window's RIGHT edge: the selected month, or the
     // year's December (offset=0 equals trendQuery(5) / period.range — the
     // no-regress guarantee of §1)
     const anchor = period.mode === 'month' ? period.month : `${period.year}-12`
-    const span = period.mode === 'month' ? 6 : 12
     const right = shiftMonth(anchor, -offset.value)
-    const left = shiftMonth(anchor, -(offset.value + span - 1))
+    const left = shiftMonth(anchor, -(offset.value + span.value - 1))
     return [`${left}-01`, monthEnd(right)]
   })
   const granularity = computed(() =>
     active.value ? 'month' : trendGranularity(period.mode, window.value[0], window.value[1]),
   )
   const canNext = computed(() => offset.value > 0)
+  /** the direction of the last window move ('prev' into the past / 'next'
+   *  back toward the initial window) — the transitionName source (§1-3).
+   *  Focus changes (month chip, bar press, label/ledger switch) inherit the
+   *  last recorded direction: their entry points are too varied to define a
+   *  direction of their own */
+  const direction = ref<'prev' | 'next'>('prev')
+  /** the committed window's identity '<from>..<to>' — the slide fires only
+   *  when this changes: a same-range refetch (labelQuery change, refresh)
+   *  keeps it, so the bars never slide for a recolour of the same window.
+   *  null until the first response — TrendWindow renders no bars yet (v-if) */
+  const windowKey = ref<string | null>(null)
+  /** false until the first window has been painted — the very first v-if
+   *  insertion must not slide (Vue runs an enter transition on a v-if
+   *  insertion even without appear); every later window swap slides */
+  const slideReady = ref(false)
+  watch(windowKey, (_nv, ov) => {
+    if (ov !== null) slideReady.value = true
+  })
+  /** '' = no transition classes (instant paint) until after the first insert */
+  const transitionName = computed(() =>
+    slideReady.value ? (direction.value === 'prev' ? 'trend-slide-back' : 'trend-slide-forward') : '',
+  )
 
   const stacked = computed<StackedBar[]>(() => {
     const res = result.value
@@ -145,6 +182,9 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
       const res = await api.getAnalysisTrend(a.l, a.query)
       if (n === seq) {
         result.value = res
+        // the committed identity swaps with the result itself (label_colors
+        // never in it): the slide fires only on a committed range change
+        windowKey.value = `${a.query.from}..${a.query.to}`
         lastDone = key
         if (lastError !== null) {
           lastError = null
@@ -170,7 +210,9 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
 
   // focus changes reset the window to the initial one and refetch. mode is an
   // explicit source (the reload on a mode change must not ride on range's
-  // reference comparison — the range computed always returns a fresh array)
+  // reference comparison — the range computed always returns a fresh array).
+  // windowKey stays at its last committed value through the reset (fetch in
+  // flight): TrendBars keeps drawing the old window until the response lands
   watch(
     [() => period.mode, () => period.range, () => period.labelQuery, () => session.selectedLedgerId],
     () => {
@@ -183,17 +225,35 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
 
   function prev(): void {
     if (!canPrev.value) return
-    offset.value++
+    direction.value = 'prev'
+    offset.value += span.value
     void run()
   }
   function next(): void {
     if (offset.value <= 0) return
-    offset.value--
+    direction.value = 'next'
+    offset.value = Math.max(0, offset.value - span.value)
     void run()
   }
   function refresh(): void {
     void run()
   }
 
-  return { result, stacked, window, granularity, active, offset, canPrev, canNext, loading, prev, next, refresh }
+  return {
+    result,
+    stacked,
+    window,
+    windowKey,
+    granularity,
+    active,
+    offset,
+    canPrev,
+    canNext,
+    direction,
+    transitionName,
+    loading,
+    prev,
+    next,
+    refresh,
+  }
 }

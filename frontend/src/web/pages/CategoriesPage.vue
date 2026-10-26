@@ -198,6 +198,8 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
           :nav="win.active.value"
           :can-prev="win.canPrev.value"
           :can-next="win.canNext.value"
+          :window-key="win.windowKey.value"
+          :transition-name="win.transitionName.value"
           @prev="win.prev"
           @next="win.next"
           @select="onTrendSelect"

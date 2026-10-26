@@ -518,3 +518,55 @@ test.describe('apps grant ledger chip (390x780)', () => {
     expect(m.h, dump).toBeGreaterThan(0)
   })
 })
+
+// --- TASK-105 series palette (design: tmp/tasks/tm-105/
+// design_dashboard-visual.md §3): the series tokens are defined for both
+// light and dark and the trend segments follow the scheme live. Written
+// test-first: red until the implementation lands. The probe-element recipe is
+// the grant-chip test's (resolve the token through a computed background so
+// the comparison sees the same engine normalization as the segment's paint). ---
+
+test.describe('series tokens dark switch (390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  test('[covers:web-common.series-color-assignment] dark theme で series token が切替わる（食費 segment は light/dark 各々の --series-1 実効値・行swatchも同時に入れ替わる）', async ({ page }) => {
+    logPageIssues(page, 'series-dark')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    // the mock's top series is 食費 (category id 1 -> slot 1 -> --series-1);
+    // its breakdown row reads the same key
+    const sample = () =>
+      page.evaluate(() => {
+        const seg = Array.from(document.querySelectorAll('[data-test="bar-2026-10"] .bar-seg')).find((s) =>
+          (s.getAttribute('title') ?? '').startsWith('食費'),
+        )
+        const row = Array.from(document.querySelectorAll('[data-test="breakdown"] .ranked-row')).find((r) =>
+          (r.querySelector('.ranked-label')?.textContent ?? '').trim() === '食費',
+        )
+        const probe = document.createElement('span')
+        probe.style.background = 'var(--series-1)'
+        document.body.appendChild(probe)
+        const token = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return {
+          seg: seg ? getComputedStyle(seg).backgroundColor : null,
+          swatch: row?.querySelector('.ranked-swatch') ? getComputedStyle(row.querySelector('.ranked-swatch')!).backgroundColor : null,
+          token,
+        }
+      })
+    const light = await sample()
+    await page.emulateMedia({ colorScheme: 'dark' })
+    const dark = await sample()
+    const dump = `light ${JSON.stringify(light)} / dark ${JSON.stringify(dark)}`
+    // the light scheme paints the light token and dark the dark token
+    expect(light.seg, dump).toBe(light.token)
+    expect(dark.seg, dump).toBe(dark.token)
+    // the row swatch follows in lockstep with the segment
+    expect(light.swatch, dump).toBe(light.seg)
+    expect(dark.swatch, dump).toBe(dark.seg)
+    // non-vacuous: the two schemes really carry different token values
+    expect(dark.token, dump).not.toBe(light.token)
+  })
+})

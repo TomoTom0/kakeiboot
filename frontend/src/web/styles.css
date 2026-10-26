@@ -1047,9 +1047,25 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.25rem;
+  overflow: hidden; /* clip the slide's ±100% enter drifts (TASK-108) */
 }
 .trend-window > .hscroll { min-width: 0; } /* keep the middle column shrinkable */
 .trend-nav { width: 44px; height: 44px; }
+/* the trend window's page-turn slide (TASK-108): the page transitions'
+   grammar (220ms cubic-bezier(.2,.7,.2,1), enter from a full width, leave
+   drifting 30% + fade) minus the absolute positioning — mode="out-in" never
+   shows both windows, so the leaving chart keeps its flow height. prev
+   (into the past) enters from the left; next (back to now) from the right */
+.trend-slide-back-enter-from { transform: translateX(-100%); }
+.trend-slide-back-leave-to { transform: translateX(30%); opacity: 0; }
+.trend-slide-forward-enter-from { transform: translateX(100%); }
+.trend-slide-forward-leave-to { transform: translateX(-30%); opacity: 0; }
+.trend-slide-back-enter-active,
+.trend-slide-back-leave-active,
+.trend-slide-forward-enter-active,
+.trend-slide-forward-leave-active {
+  transition: transform 220ms cubic-bezier(.2, .7, .2, 1), opacity 220ms;
+}
 /* the window-move loading: the same fade as .view-stack.loading, zone-scoped */
 .zone.is-loading { opacity: 0.6; }
 
@@ -2028,6 +2044,16 @@ a.sub-row:hover { background: var(--bb-hover); }
   .slide-forward-leave-to,
   .slide-back-enter-from,
   .slide-back-leave-to { transform: none; }
+  /* the trend window's page-turn slide is off as well (TASK-108): the swap
+     becomes an instant replace, the 220ms fade included */
+  .trend-slide-back-enter-active,
+  .trend-slide-back-leave-active,
+  .trend-slide-forward-enter-active,
+  .trend-slide-forward-leave-active { transition: none; }
+  .trend-slide-back-enter-from,
+  .trend-slide-back-leave-to,
+  .trend-slide-forward-enter-from,
+  .trend-slide-forward-leave-to { transform: none; }
   .msg, .skeleton .sk { animation: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */

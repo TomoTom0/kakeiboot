@@ -101,6 +101,7 @@
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
 | `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100] |
 | `frontend/tests/unit/web/trend-window.test.ts` | 単体 | トレンド窓移動 [TASK-104]（useTrendWindow composable: 窓計算〔month=trendQuery(5)・year=period.range 無後退〕・offset 操作・refresh 冪等ガード・ledger 未確定 fetch なし・stacked 組立集約・全0窓の過去側打ち切り・TrendWindow 前次button・窓移動は trend API のみ再fetch） |
+| `frontend/tests/unit/web/series-color.test.ts` | 単体 | 系列色の決定的割当 seriesColor（number は (id-1) mod 7 循環 slot・null=--series-rest・string は FNV-1a % 7・label 軸は管理色固定表 red〜purple と範囲外 fallback・追加不変） [TASK-105] |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈・URL 同期・着地・優越判定 [TASK-77]・世代ガード [TASK-61]） |
@@ -108,7 +109,7 @@
 | `frontend/tests/unit/web/receipt-context.test.ts` | 単体 | 文脈 query ↔ ReceiptListQuery の対称変換 [TASK-17]（payment_method は9キー検証で不明値を落とす [TASK-65]） |
 | `frontend/tests/unit/web/ledger-switcher.test.ts` | 単体 | 家計簿の色と切替（初期選択・チップ・色帯） |
 | `frontend/tests/unit/web/brand-logo.test.ts` | 単体 | BrandLogo の2形態（full/compact・word prop・role=img） |
-| `frontend/tests/unit/web/styles.test.ts` | 単体 | styles.css の静的検査（grid・パレット・topbar・toolbar・密度・popover 化） [TASK-44] [TASK-75] [TASK-76] |
+| `frontend/tests/unit/web/styles.test.ts` | 単体 | styles.css の静的検査（grid・パレット・topbar・toolbar・密度・popover 化・系列token/--dash-cols/.zone--list/swatch の実装後検査 block〔skip 形式〕） [TASK-44] [TASK-75] [TASK-76] [TASK-105] |
 | `frontend/tests/unit/web/filter-bar.test.ts` | 単体 | topbar 中央絞り込みバー [TASK-44]（時期 dialog の tab は週/月/年/Custom の自然昇順 [TASK-89]）と検索チップ [TASK-41] |
 | `frontend/tests/unit/web/period-store.test.ts` | 単体 | period store の週モード [TASK-53]（月曜始まりの7日 range・ラベル・labelShort・urlQuery week=・step ±7日） |
 | `frontend/tests/unit/web/trend-granularity.test.ts` | 単体 | 推移粒度ヘルパ [TASK-55/57]（trendGranularity の週モード=日・range の62/366日閾値・weekStart・shortTime。bucket 生成は /analysis/trend 側へ移行 [TASK-89]） |
@@ -123,8 +124,8 @@
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面（/axes 軸詳細を含む [TASK-89]）の png・metrics.json を幅別に出力 |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（asset へ配置） |
-| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウト実測（着地・補正・幅・軸・境界値・検索チップ） [TASK-19] [TASK-42] [TASK-44] [TASK-41] [TASK-77] |
-| `frontend/tests/browser/verify-shell.spec.ts` | 実ブラウザ検証 | shell 系実測（名前併記・popover 補正・sheet 切替・drawer〔初期 closed・scrim 外タップ [TASK-89]〕・grant chip・表題中央寄せ） [TASK-60] [TASK-20] [TASK-69] |
+| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウト実測（着地・補正・幅・軸・境界値・検索チップ） [TASK-19] [TASK-42] [TASK-44] [TASK-41] [TASK-77]・zone 見出し可視・セグメント/swatch 同色・2列/1列・zone--list 38rem・768px trend 収まり [TASK-105] |
+| `frontend/tests/browser/verify-shell.spec.ts` | 実ブラウザ検証 | shell 系実測（名前併記・popover 補正・sheet 切替・drawer〔初期 closed・scrim 外タップ [TASK-89]〕・grant chip・表題中央寄せ） [TASK-60] [TASK-20] [TASK-69]・series token の dark 切替 [TASK-105] |
 | `frontend/tests/browser/verify-labels.spec.ts` | 実ブラウザ検証 | ラベル系実測（行幅・popover 収まり・チップ・コントラスト・picker の色 tap で閉じ） [TASK-60] [TASK-51] |
 | `frontend/tests/browser/verify-usage.spec.ts` | 実ブラウザ検証 | /usage/connect のコピー button icon 切替と URL box 高さ不変（reduced-motion 対応） [TASK-48] |
 | `frontend/tests/browser/measure.ts` | 補助 | WCAG コントラスト比計算・viewport 内判定 [TASK-60] |

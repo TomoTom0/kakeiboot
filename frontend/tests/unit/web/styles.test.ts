@@ -69,6 +69,10 @@ function topLevel(text = css): string {
 }
 
 describe('layout: grid children shrink', () => {
+  // TASK-105 post-implementation revision target (web-layout.grid-children-
+  // shrinkable revised): .dash-grid is abolished (ReceiptsPage was its last
+  // user) and the selector under test becomes .dash-cols — the skipped block
+  // "dashboard visual (TASK-105)" below carries the post-implementation form.
   it('[covers:web-layout.grid-children-shrinkable] .dash-grid 全メディアクエリで minmax(0、.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
     const grids = rulesFor('.dash-grid').filter((r) => decl(r.body, 'grid-template-columns') !== undefined)
     expect(grids.length).toBeGreaterThanOrEqual(2)
@@ -288,6 +292,8 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
   it('720px 以下は gap 0.75rem・カード padding 12px・zone の詰まった余白・推移 .bars 96px（ドーナツは廃止）', () => {
     const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
     expect(n720, 'max-width: 720px block').toBeDefined()
+    // TASK-105 post-implementation revision target: .dash-grid -> .dash-cols
+    // （gap 0.75rem は .dash-cols 側へ移る前提。設計 §5-2）
     expect(rulesFor('.dash-grid', n720!).some((r) => decl(r.body, 'gap') === '0.75rem')).toBe(true)
     expect(rulesFor('.card', n720!).some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
     expect(rulesFor('.bars', n720!).some((r) => decl(r.body, 'height') === '96px')).toBe(true)
@@ -316,6 +322,13 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
 })
 
 describe('ranked row single line (TASK-75 §6-4)', () => {
+  // TASK-105 post-implementation revision targets for the test below
+  // (web-layout.ranked-row-single-line revised, design §4-2): the grid gains
+  // the leading swatch track (12px minmax(0,1fr) auto auto 12px), the
+  // gradient's first stop becomes var(--rank-color, var(--bb-accent))（未設定
+  // 行は accent へフォールバック）and the .ranked-swatch rule appears — the
+  // skipped "dashboard visual (TASK-105)" block at the bottom of this file
+  // carries the post-implementation form of these static checks.
   it('[covers:web-layout.ranked-row-single-line] .ranked-row は minmax(0,1fr) auto auto 12px の1行44px（dot・diff 列なし）・下端2pxの accent 単色 linear-gradient・.meter 規則は無い', () => {
     const rows = rulesFor('.ranked-row')
     expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
@@ -652,5 +665,82 @@ describe('sidebar settings nav (TASK-56)', () => {
     expect(sec.some((r) => decl(r.body, 'border-top') !== undefined && decl(r.body, 'padding-top') !== undefined)).toBe(
       true,
     )
+  })
+})
+
+// --- TASK-105 dashboard visual (design: tmp/tasks/tm-105/
+// design_dashboard-visual.md §3 / §5): the series palette tokens, the
+// .dash-cols two-column zone layout, the .zone--list width tier and the
+// ranked-row swatch. Written test-first against the not-yet-implemented
+// stylesheet, so these blocks stay SKIPPED until the implementation lands
+// (this keeps the pre-implementation suite green; the only allowed red is
+// series-color.test.ts's import failure). When implementing: drop the .skip,
+// apply the revision targets marked on the old-form tests above (.dash-grid
+// / .ranked-row blocks), and keep the light+dark dual definitions honest. ---
+
+describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)', () => {
+  it.skip('[covers:web-common.zone-layout] .dash-cols は1fr 1列（外）+ 48rem media 内 minmax(0,1.2fr) minmax(0,24rem) の2列・子は min-width 0・.dash-grid 規則は廃止', () => {
+    const top = topLevel()
+    expect(rulesFor('.dash-cols', top).some((r) => decl(r.body, 'display') === 'grid' && decl(r.body, 'grid-template-columns') === 'minmax(0, 1fr)')).toBe(true)
+    expect(rulesFor('.dash-cols > *', top).some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
+    const w48 = blockAfter(/@media\s*\(min-width:\s*48rem\)/)
+    expect(w48, 'min-width: 48rem block').toBeDefined()
+    expect(
+      rulesFor('.dash-cols', w48!).some(
+        (r) => decl(r.body, 'grid-template-columns') === 'minmax(0, 1.2fr) minmax(0, 24rem)' && decl(r.body, 'align-items') === 'start',
+      ),
+    ).toBe(true)
+    // the old .dash-grid is gone entirely (base rules and the 720px fold)
+    expect(rulesFor('.dash-grid').length).toBe(0)
+    expect(css).not.toMatch(/\.dash-grid/)
+  })
+
+  it.skip('[covers:web-common.zone-layout] list系zone は .zone--list の max-width 38rem・chart系zone（trend 等）は全幅のまま', () => {
+    expect(rulesFor('.zone--list').some((r) => decl(r.body, 'max-width') === '38rem')).toBe(true)
+  })
+
+  it.skip('[covers:web-common.series-color-assignment] 系列token --series-1..7・--series-rest は light/dark 両定義・旧 --c1..5・--c-rest は全参照置換後に廃止', () => {
+    const light = rulesFor(':root', topLevel())
+      .map((r) => r.body)
+      .join('\n')
+    const darkMedia = blockAfter(/@media\s*\(prefers-color-scheme:\s*dark\)/)
+    expect(darkMedia, 'prefers-color-scheme: dark block').toBeDefined()
+    const dark = rules(darkMedia!)
+      .filter((r) => r.selectors.some((s) => s.startsWith(':root')))
+      .map((r) => r.body)
+      .join('\n')
+    for (let i = 1; i <= 7; i++) {
+      expect(light, `light --series-${i}`).toMatch(new RegExp(`--series-${i}\\s*:`))
+      expect(dark, `dark --series-${i}`).toMatch(new RegExp(`--series-${i}\\s*:`))
+    }
+    for (const mode of [light, dark]) {
+      expect(mode, '--series-rest').toMatch(/--series-rest\s*:/)
+    }
+    // the old PALETTE tokens are gone with every reference (trendWindow's
+    // PALETTE array included)
+    expect(css).not.toMatch(/--c[1-5]\b/)
+    expect(css).not.toMatch(/--c-rest\b/)
+  })
+
+  it.skip('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)・行barのgradientは --rank-color フォールバック付き', () => {
+    const rows = rulesFor('.ranked-row')
+    expect(
+      rows.some(
+        (r) =>
+          decl(r.body, 'grid-template-columns') === '12px minmax(0, 1fr) auto auto 12px' &&
+          decl(r.body, 'gap') === '8px' &&
+          decl(r.body, 'min-height') === '44px',
+      ),
+    ).toBe(true)
+    const sw = rulesFor('.ranked-swatch')
+    expect(sw.length, '.ranked-swatch rules').toBeGreaterThan(0)
+    expect(sw.some((r) => decl(r.body, 'border-radius') === '50%' && /var\(--rank-color\)/.test(decl(r.body, 'background') ?? ''))).toBe(true)
+    // the share-bar gradient keeps the accent fallback so rows without
+    // --rank-color (WeekRows) never lose their bar
+    expect(
+      rows.some((r) =>
+        /var\(--rank-color,\s*var\(--bb-accent\)\)/.test(decl(r.body, 'background-image') ?? ''),
+      ),
+    ).toBe(true)
   })
 })

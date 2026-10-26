@@ -344,6 +344,15 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
 })
 
 describe('ReceiptsPage (dashboard)', () => {
+  // TASK-105 post-implementation revision targets for this test
+  // (web-receipts.dashboard revised, design §4-4 / §5): the page zone化 —
+  // the daily / payments / receipts sections become .zone with visible
+  // h2.zone-title headings（支払方法・レシート・日別の支出等の動的文言.
+  // web-common.zone-headings-visible）, `.dash-grid` is replaced by
+  // `.view-stack` + `.dash-cols`（左 col-main=daily・右 col-side=payments・
+  // summary(kpi) とレシート一覧 zone は .dash-cols の外の全幅.
+  // web-common.zone-layout）, and the payments rows gain the swatch + series
+  // color（支払方法は名称 string の共通写像. web-common.series-color-assignment）.
   it('[covers:web-receipts.dashboard] 期間の合計・件数・平均・日別・支払方法と日付ごとの一覧、品名で絞り込み', async () => {
     const { wrapper, router } = await mountApp('/receipts')
     const summary = wrapper.find('[data-test="summary"]').text()
@@ -415,6 +424,12 @@ describe('ReceiptsPage (dashboard)', () => {
     expect([...new Set(sameDay.map((i) => i.receipt_id))]).toEqual([101, 102])
   })
 
+  // TASK-105 post-implementation revision targets for this test
+  // (web-receipts.payment-filter revised, design §4-4): the「支払方法」zone's
+  // RankedList rows carry the swatch + `--rank-color` = seriesColor（支払方法
+  // は名称 string の FNV-1a 共通写像・null 行〔その他/支払方法不明〕は
+  // var(--series-rest)・web-common.series-color-assignment）。押下トグル・
+  // chevron なし等の既存期待は不変。
   it('[covers:web-receipts.payment-filter] 支払方法の絞り込み（ランキング行トグル・フォーム select・チップ・URL・一覧と集計の両方）', async () => {
     await api.updateReceipt(1, 102, { revision: 1, set: { payment_method: 'credit_card' } })
     const list = vi.spyOn(api, 'listReceipts')
@@ -459,6 +474,10 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(direct.wrapper.find('[data-test="chip-payment"]').text()).toBe('支払: 現金')
   })
 
+  // TASK-105: the daily section's h2 becomes a visible h2.zone-title inside
+  // .zone-head（文言・選択ロジックは不変 — the `h2` selector below keeps
+  // working post-implementation; sr-only でなくなることを期待に足すのは
+  // web-common.zone-headings-visible 側）。
   it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）', async () => {
     const title = (w: W) => w.find('[data-test="daily"] h2').text()
     const cols = (w: W) => w.findAll('[data-test="daily"] .daily-col')
@@ -511,6 +530,12 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
   })
 
+  // TASK-105 post-implementation revision target (web-shell.loading-skeleton
+  // revised, design §5-4): ReceiptsPage — the last .dash-grid user — joins
+  // the others on `.view-stack` + `.dash-cols`, so the refetch dimming is the
+  // shared `.view-stack.loading`（opacity 0.6）and no `.dash-grid.loading`
+  // rule remains; DashSkeleton's silhouette becomes the zone-block form. The
+  // assertions here（初回 skeleton・完了後の実データ・aria）are unchanged by it.
   it('[covers:web-shell.loading-skeleton] レシート一覧も初回 loading は skeleton で統一', async () => {
     const orig = api.listReceipts.bind(api)
     let release!: () => void
@@ -755,6 +780,14 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     return mount(RankedList, { props, global: { plugins: [router] } })
   }
 
+  // TASK-105 post-implementation revision targets for this test
+  // (web-layout.ranked-row-single-line revised, design §4-2): the row grid
+  // gains the leading 12px swatch track — the cells become .ranked-swatch ->
+  // .ranked-label -> .ranked-share -> .amount (-> chevron) in both the a and
+  // span branches, the swatch renders on EVERY row（残余行・支払方法の非リンク
+  // 行を含む）, and RankedList sets `--rank-color` = seriesColor(row.keys[0] ??
+  // null, axis)（optional axis prop・未指定なら共通写像）. The meter/diff
+  // absence and the shared a/span structure stay as asserted.
   it('[covers:web-browse.ranked-row-link][covers:web-layout.ranked-row-single-line] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・行は1行構成（label/share/amount の細胞を a/span で共有・meter・diff列無し）', async () => {
     const rows: StatsRow[] = [
       { keys: [11], labels: ['食費'], value: 550, share: 0.58 },
