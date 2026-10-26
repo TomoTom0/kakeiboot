@@ -2978,18 +2978,27 @@ expect_return_shape = "23 tool 名の集合が期待どおり（#19〜#21 を含
 
 [[condition]]
 id = "mcp-tools.widget-resource"
-target_function = "BudgetBookMcp::list_resources / read_resource"
-source = "docs/spec_mcp-tools.md §11-1（1 テンプレート SPA を ui://budget-book/widget-<hash>.html として配信）・§11-4（CSP）"
-source_lines = "backend/tests/mcp_tools_account.rs:143"
-description = "resources/list が widget テンプレート 1 件（ui://...widget-*.html・text/html;profile=mcp-app）を返し、resources/read がその HTML を返す。未知の URI はエラー"
+target_function = "WidgetResource::from_html / BudgetBookMcp::list_resources / read_resource"
+source = "docs/spec_mcp-tools.md §11-1（1 テンプレート SPA を安定 URI ui://budget-book/widget.html として配信。破壊的変更時は人間の判断で明示的に URI を変更）・§11-4（CSP）・設計: tmp/tasks/tm-106/design_widget-resource-uri.md §1-1〜1-3・§3-1・§4-1（単体: backend/src/mcp/widget_resource.rs mod tests〔stable_uri_is_content_independent〕・結合: backend/tests/mcp_tools_account.rs〔widget_resource_list_and_read〕）"
+source_lines = "backend/tests/mcp_tools_account.rs:143, backend/src/mcp/widget_resource.rs:128"
+description = "resources/list が widget テンプレート 1 件（uri は ui://budget-book/widget.html 固定・text/html;profile=mcp-app）を返し、resources/read がその HTML を返す（contents[].uri は要求 URI をエコー）。URI は HTML 内容に依存せず、tools の _meta.ui.resourceUri と descriptor も env.widget.uri 参照で自動追従する。未知の URI はエラー"
 given = "resources/list → 返却 URI で resources/read、および存在しない URI での read"
-expect_return_shape = "list は 1 件、read は HTML を含む contents。未知 URI は JSON-RPC error"
+expect_return_shape = "list は 1 件（uri=widget.html 固定）、read は HTML を含む contents（uri は要求 URI）。未知 URI は JSON-RPC error"
+
+[[condition]]
+id = "mcp-tools.widget-resource-alias"
+target_function = "widget_resource::is_legacy_hash_uri / BudgetBookMcp::read_resource"
+source = "docs/spec_mcp-tools.md §11-1（旧 hash URI エイリアス: ui://budget-book/widget-<12桁の小文字hex>.html の read は現行テンプレートを応答。形式外は未知 URI としてエラー）・設計: tmp/tasks/tm-106/design_widget-resource-uri.md §1-4・§2・§3-2・§4-2（単体: backend/src/mcp/widget_resource.rs mod tests〔legacy_hash_uri_recognition〕・結合: backend/tests/mcp_tools_account.rs〔widget_resource_legacy_hash_alias〕）"
+source_lines = "backend/tests/mcp_tools_account.rs:185, backend/src/mcp/widget_resource.rs:149"
+description = "旧 hash URI（TASK-106 以前の sha256 先頭6byte 形式。ui://budget-book/widget-<12桁の小文字hex>.html に完全一致する URI のみ）での resources/read は現行 HTML を応答し contents[].uri は要求 URI。応答の text と _meta は安定 URI での read 応答と同一（alias は meta() をそのまま使う）。桁数・文字種・形式が合致しない URI は未知 URI として JSON-RPC error。エイリアスを resources/list に並べず（list は安定 URI 1 件のみ）、認証は service mount 時の auth_layer（Bearer）既存経由のまま"
+given = "旧 hash 形式 URI での read、および桁数不足 URI・安定 URI 以外の未知 URI での read"
+expect_return_shape = "旧 hash 形式は HTML を含む contents（uri は要求 URI・text と _meta は安定 URI read 応答と同一）。形式外・未知 URI は error"
 
 [[condition]]
 id = "mcp-tools.whoami-envelope"
 target_function = "mcp::tools::account::whoami"
 source = "docs/spec_mcp-tools.md §7-16（Envelope<\"account\", {account_number, display_name, active_ledger | null}>、ledger は null 固定）・spec_auth.md §7-1"
-source_lines = "backend/tests/mcp_tools_account.rs:176"
+source_lines = "backend/tests/mcp_tools_account.rs:265"
 description = "whoami はアカウント番号・表示名・選択中家計簿（id/name/role または null）を返し、envelope の ledger は null、content text にアカウント番号を含む"
 given = "選択中家計簿のある AuthContext で tools/call whoami"
 expect_return_shape = "view=account・ledger=null・account_number は DB の BB-XXXX-XXXX と一致・active_ledger.id が選択中"
@@ -2998,7 +3007,7 @@ expect_return_shape = "view=account・ledger=null・account_number は DB の BB
 id = "mcp-tools.list-ledgers-handler"
 target_function = "mcp::tools::account::list_ledgers"
 source = "docs/spec_mcp-tools.md §7-17（Envelope<\"ledgers\", {ledgers: [{ledger_id, name, role, is_active}], active_ledger_id}>、ledger は null）"
-source_lines = "backend/tests/mcp_tools_account.rs:203"
+source_lines = "backend/tests/mcp_tools_account.rs:292"
 description = "所属 ledger 全件を role・選択中フラグ付きで列挙し、active は必ず 1 件（未選択なら 0 件）"
 given = "owner と viewer の 2 ledger に所属する user で tools/call list_ledgers"
 expect_return_shape = "view=ledgers・ledger=null・2 件で is_active=true は 1 件・role に owner と viewer が混在"
@@ -3007,7 +3016,7 @@ expect_return_shape = "view=ledgers・ledger=null・2 件で is_active=true は 
 id = "mcp-tools.switch-ledger-handler"
 target_function = "mcp::tools::account::switch_ledger → auth::ledger::switch_ledger"
 source = "docs/spec_mcp-tools.md §7-18（Envelope<\"ledger_switched\", {ledger: {id,name,role,source}, previous}>、所属なし・存在しない ID は区別しない同一 isError）"
-source_lines = "backend/tests/mcp_tools_account.rs:230"
+source_lines = "backend/tests/mcp_tools_account.rs:319"
 description = "切替で grant の active_ledger_id が更新され audit が 1 行増え、previous に切替前を返す。非所属・存在しない ID は同一文言の isError"
 given = "選択中 ledger から別の所属 ledger への切替と、ID 999（非所属）への切替"
 expect_return_shape = "成功は active_ledger_id 更新・audit 1 行・previous.id が旧値。失敗は「見つかりません」で始まる isError"
@@ -3016,7 +3025,7 @@ expect_return_shape = "成功は active_ledger_id 更新・audit 1 行・previou
 id = "mcp-tools.refresh-widget-images"
 target_function = "mcp::tools::widget::refresh"
 source = "docs/spec_mcp-tools.md §7-20（W1: _meta.images に \"<kind>:<id>\" キーで URL か null、draft は user_id 一致かつ pending、receipt は所属 ledger、refs 上限 20）・§3-1（例外 2 の横断読み取り）"
-source_lines = "backend/tests/mcp_tools_account.rs:297"
+source_lines = "backend/tests/mcp_tools_account.rs:386"
 description = "自ユーザーの pending draft・所属 ledger の receipt には短命 URL を発行し、他ユーザーの draft・存在しない receipt は null を値に置く。refs が上限超過は項目名を示す入力エラー"
 given = "画像付き pending draft（自分・他ユーザー）と画像付き receipt（所属・存在しない ID）の 4 ref、および 21 ref"
 expect_return_shape = "view=images・ledger=null・自分の draft と所属 receipt は url 文字列・他ユーザー draft と不明 receipt は null・21 ref は isError で「refs」を含む文言"
@@ -3025,7 +3034,7 @@ expect_return_shape = "view=images・ledger=null・自分の draft と所属 rec
 id = "mcp-tools.subject-hash-on-tool-failure"
 target_function = "BudgetBookMcp::call_tool / assertion::record_subject_hash"
 source = "docs/spec_auth.md §7-4（subject hash の記録は tool の結果に依存しない）"
-source_lines = "backend/tests/mcp_tools_account.rs:385"
+source_lines = "backend/tests/mcp_tools_account.rs:474"
 description = "tool が isError で失敗しても（get_receipt の存在しない ID）params._meta の openai/subject の hash が user_subject_hashes に記録される"
 given = "_meta.openai/subject 付きで必ず失敗する tools/call get_receipt"
 expect_return_shape = "isError=true の応答でありつつ、期待の SHA-256 v1 hash 行が user_id 付きで 1 行記録"
@@ -3247,9 +3256,9 @@ given = "integration: 未知 token で N+1 回 GET"
 expect_return_shape = "N 回まで 404、N+1 回目で 429 + Retry-After"
 
 [[excluded]]
-item = "resource の _meta.ui.csp（connectDomains・resourceDomains）・openai/widgetCSP・prefersBorder・availableDisplayModes・widgetDescription と ui:// URI の版付け"
+item = "resource の _meta.ui.csp（connectDomains・resourceDomains）・openai/widgetCSP・prefersBorder・availableDisplayModes・widgetDescription"
 source = "docs/spec_mcp-tools.md §11-1・§11-4"
-reason = "backend の widget_resource.rs（TASK-11 backend 担当）で付与する resource メタデータであり widget の実装範囲外"
+reason = "backend の widget_resource.rs（TASK-11 backend 担当）で付与する resource メタデータであり widget の実装範囲外。旧 item に含まれていた ui:// URI の版付け（content hash 入り URI）は TASK-106（2026-10-26）で安定 URI 固定に置き換わり、mcp-tools.widget-resource / mcp-tools.widget-resource-alias として条件化（除外解消）"
 decided_at = "2026-10-14"
 decided_by = "claude"
 
@@ -4775,7 +4784,7 @@ expect_return_shape = ".daily-col が 31 本あり全 .daily-col の width >= 4p
 id = "web-shell.topbar-logo-breakpoints"
 target_function = "web/App.vue（topbar のロゴ出し分け）・web/styles.css（520px メディアクエリ）"
 source = "docs/spec_mcp-tools.md §12 アプリ名・ロゴの段（520px 以下 compact / 521px 以上 full）"
-source_lines = "frontend/tests/browser/verify.spec.ts:323"
+source_lines = "frontend/tests/browser/verify.spec.ts:402"
 description = "topbar のロゴは 520px 以下で compact（kb）・521px 以上で full（wordmark「Kakei」）が実効表示（display）される"
 given = "520px と 521px の viewport で / を表示（chromium）"
 expect_return_shape = "520px: .topbar-logo-full の display=none・.topbar-logo-compact が可視（computed display が none 以外・box 幅 > 0）/ 521px: full が可視・compact の display=none"
@@ -4784,7 +4793,7 @@ expect_return_shape = "520px: .topbar-logo-full の display=none・.topbar-logo-
 id = "web-shell.topbar-compact-metrics"
 target_function = "web/styles.css（899px メディアクエリの --topbar-h・.topbar-title の font-size）"
 source = "docs/spec_mcp-tools.md §12 画面骨格の段（899px 以下 topbar 56px・表題 1rem）"
-source_lines = "frontend/tests/browser/verify.spec.ts:362"
+source_lines = "frontend/tests/browser/verify.spec.ts:441"
 description = "topbar の高さと表題の font-size は 899px 境界で実効切替する（899px 以下: --topbar-h 56px・表題 1rem / 900px 以上: 60px・1.15rem）"
 given = "899px と 900px の viewport で /receipts（表題あり）を表示（chromium）"
 expect_return_shape = "899px: :root の --topbar-h=56px・.topbar の高さ 56px・.topbar-title の font-size 16px / 900px: --topbar-h=60px・高さ 60px・font-size 18.4px（誤差 0.5px 以内）"
@@ -4853,7 +4862,7 @@ expect_return_shape = "/receipts の .page-toolbar が1行で filters-toggle（.
 id = "web-shell.topbar-title-breakpoints-real"
 target_function = "web/App.vue（topbar 表題）・web/styles.css（@media (max-width: 360px / 390px) の表題出し分け）"
 source = "docs/spec_mcp-tools.md §12 画面骨格の段（表題の扱い: 〜360px 表題なし・361〜390px icon のみ・391px〜 icon＋テキスト〔ellipsis〕。実装は既存の 520px・900px と同じ media query 運用。境界は -real 系条件として実測。TASK-101: チップ構成が時期・検索の2チップへ変わった旨の記述更新のみ・測定本体は無変更）"
-source_lines = "frontend/tests/browser/verify.spec.ts:401"
+source_lines = "frontend/tests/browser/verify.spec.ts:480"
 description = "topbar 表題の出し分けは 360px と 390px の境界で実効切替する（〜360px: 表題ごと非表示〔ホームと同じ〕/ 361〜390px: icon のみでテキストは非表示 / 391px〜: icon＋テキスト）。時期・検索の2チップ構成（TASK-101）でも表題とチップがともに欠けない"
 given = "360・361・390・391px の viewport で /receipts（表題ありの閲覧系）を表示（chromium）"
 expect_return_shape = "360px: .topbar-title の computed display=none / 361px・390px: .topbar-title が可視で .topbar-title-text の display=none・.topbar-title .icon が可視（box 幅 > 0）/ 391px: .topbar-title-text が可視（computed display が none 以外）"
@@ -4862,7 +4871,7 @@ expect_return_shape = "360px: .topbar-title の computed display=none / 361px・
 id = "web-browse.filter-period-label-widths-real"
 target_function = "web/components/TopbarFilterBar.vue（時期チップの labelShort / フルラベル両要素）・web/styles.css（〜899px の max-width 56px・900px の切替）・web/stores/period.ts（labelShort）"
 source = "docs/spec_mcp-tools.md §12 画面骨格の段（時期チップのラベルは 899px 以下は短縮〔月「10月」・年「26年」・範囲「10/3〜」〕・900px 以上はフル〔中間帯は設けず既存の 899/900px 境界に揃える〕）"
-source_lines = "frontend/tests/browser/verify.spec.ts:450, frontend/tests/browser/verify.spec.ts:503"
+source_lines = "frontend/tests/browser/verify.spec.ts:529, frontend/tests/browser/verify.spec.ts:582"
 description = "時期チップは 899px 以下で短縮ラベル（labelShort）・900px 以上でフルラベル（「2026年10月」等）が実効表示される。899px 以下では時期チップの幅は max-width 56px（ellipsis）に収まり、900px 以上のフルラベルの実測幅が見積（90〜100px 程度）から外れないことを確認する"
 given = "899px と 900px の viewport で /receipts（2026年10月・month モード）を表示（chromium）"
 expect_return_shape = "899px: 短縮ラベル要素（「10月」）が可視でフルラベル要素の display=none・filter-period の boundingBox 幅が 56px 以下（許容 1px）/ 900px: フルラベル要素（「2026年10月」）が可視で短縮ラベル要素の display=none・フルラベルの実測幅が約 90〜100px"
@@ -4950,12 +4959,12 @@ expect_return_shape = ".y-axis に3 span ['1千','500','0']（aria-hidden）/ .g
 
 [[condition]]
 id = "web-browse.trend-month-window"
-target_function = "web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・AxisDetailPage.vue（月モードの trendQuery(5) 窓指定）・web/components/TrendBars.vue（dense: .trend-wrap width:100%・track minmax(0,1fr)・gap 0.25rem・.bar-val 軸間引き位置のみ）・web/styles.css（.trend-wrap.dense・.trend-wrap.dense .bars/.axis-labels gap 0.25rem）"
+target_function = "web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・AxisDetailPage.vue（月モードの trendQuery(5) 窓指定）・web/components/TrendBars.vue（dense: .trend-wrap width:100%・track minmax(0,1fr)・gap 0.25rem・.bar-val 軸間引き位置のみ）・web/styles.css（.trend-wrap.dense・.bars/.axis-labels gap 0.25rem〔TASK-104 で dense 限定を廃し全帯共通化〕）"
 source = "ユーザー実機指摘 2026-10-25 TASK-100（横幅が狭いのに月が多すぎる）・docs/spec_mcp-tools.md §12 + 設計 tmp/tasks/tm-100/design_trend-chart-axes.md §1-3・§1-4（v3）"
 source_lines = "frontend/tests/browser/verify.spec.ts:226, frontend/tests/unit/web/view-pages.test.ts:173"
-description = "月モードの推移窓は全画面（Home・Categories・Stores・AxisDetail）とも選択月を含む6か月に統一される（trendQuery(5)・2026-10 選択で 2026-05-01..10-31。Home は既に6か月窓のため不変。trendQuery の署名・既定 back=11 は不変で呼び出し側で 5 を渡す）。年モードは選択年12か月のまま dense（.trend-wrap を width:100% に固定・track minmax(0,1fr) 等分〔0 minimum で intrinsic sizing を断つ〕・gap 0.25rem）で360pxに収める（track・ラベル・.bar-val の max-content 寄与で wrap が広がる経路が存在しない）。dense の .bar-val は軸間引き位置（axisTickIndices と同一 index 集合）のみの表示（12本→5件〔index 0,3,6,9,11〕）で、値は全棒とも title/aria-label で取得可。range は期間の月数のまま dense 同等の縮小+間引き。day/week 粒度は .hscroll が存続する"
+description = "月モードの推移窓は全画面（Home・Categories・Stores・AxisDetail）とも初期窓（focus変更直後・offset=0）は選択月を含む6か月に統一される（trendQuery(5) と一致・2026-10 選択で 2026-05-01..10-31。Home は既に6か月窓のため不変。trendQuery の署名・既定 back=11 は不変〔TASK-104 で窓の計算は useTrendWindow composable へ移るが offset=0 の範囲は従来と一致〕。前次操作で過去方向へスライド可〔web-home.trend-window〕）。年モードは初期窓が選択年12か月のまま dense（.trend-wrap を width:100% に固定・track minmax(0,1fr) 等分〔0 minimum で intrinsic sizing を断つ〕・gap 0.25rem）で360pxに収める（track・ラベル・.bar-val の max-content 寄与で wrap が広がる経路が存在しない）。dense の .bar-val は軸間引き位置（axisTickIndices と同一 index 集合）のみの表示（12本→5件〔index 0,3,6,9,11〕）で、値は全棒とも title/aria-label で取得可。range は期間の月数のまま dense 同等の縮小+間引き。day/week 粒度は .hscroll が存続する"
 given = "今日=2026-10-15 で /categories?month=2026-10 と /categories?year=2026 を開き、trend fetch の窓と棒本数・.bar-val 表示件数を確認"
-expect_return_shape = "categories の trend fetch が from=2026-05-01・to=2026-10-31（Home と同一の6か月窓）/ year 2026 は12本・横スクロールなし（.hscroll scrollWidth − clientWidth <= 2）/ .bar-val の表示が5件〔bar-2026-01・bar-2026-04・bar-2026-07・bar-2026-10・bar-2026-12〕で非表示棒の値も title「YYYY年M月 N円」で取得可 / day/week 粒度では .hscroll が従来どおり存続"
+expect_return_shape = "categories の trend fetch が from=2026-05-01・to=2026-10-31（Home と同一の初期窓・6か月）/ year 2026 は12本・横スクロールなし（.hscroll scrollWidth − clientWidth <= 2）/ .bar-val の表示が5件〔bar-2026-01・bar-2026-04・bar-2026-07・bar-2026-10・bar-2026-12〕で非表示棒の値も title「YYYY年M月 N円」で取得可 / day/week 粒度では .hscroll が従来どおり存続"
 
 [[condition]]
 id = "web-browse.trend-note-removed"
@@ -5115,7 +5124,7 @@ expect_return_shape = "入力停止 300ms 後と Enter の両方で URL の q �
 id = "web-search.layout-real"
 target_function = "web/pages/SearchPage.vue（.search-head・.search-input・.search-tabs の2行構成）・web/components/TopbarFilterBar.vue（.filter-chip-search）・web/styles.css（.search-*・.filter-chip-search・360px 以下の .chip-label-q 折り畳み）"
 source = "docs/spec_mcp-tools.md §12（/search 画面・topbar 検索チップの段〔TASK-41 で追記〕）・TASK-77（tm-77）: TASK-74 で /search に ledgerScoped: true が付き家計簿切替chip が topbar 右帯に加わり、検索語つき検索チップと合わせ 360px 帯が 13px 溢れた回帰の修正（360px 以下で検索チップの検索語を折り畳む。web-browse.topbar-filter-bar とセット）"
-source_lines = "frontend/tests/browser/verify.spec.ts:546, frontend/tests/unit/web/styles.test.ts:216"
+source_lines = "frontend/tests/browser/verify.spec.ts:625, frontend/tests/unit/web/styles.test.ts:216"
 description = "実測（TASK-19 体系の -real 系・chromium）: /search は 360px 幅で検索欄行（検索欄＋期間スコープチップ）とタブ行の2行に収まり横溢れがない（topbar は TASK-74 以降 家計簿chip を含む構成で、360px 以下では検索チップの検索語 .chip-label-q が display: none に折り畳まれ icon 入力のみになる）。検索欄入力 → 結果表示・topbar 検索 dialog の開閉 → 実行で /search へ遷移・結果行 → Feed → 戻るで文脈（q=）が保たれる一連の実挙動が流れる。360px 実機での最終確認はユーザーが行う"
 given = "360px viewport で /search を表示し（chromium・stub）、検索欄へ入力 → 結果表示 → 検索 dialog を開閉して実行 → 行押下で Feed → 戻る"
 expect_return_shape = ".search-head と .search-tabs が2行で document に横スクロール（横溢れ）なし・.chip-label-q の computed display が none（360px 帯で検索語は折り畳み） / 入力確定で結果行が表示される / 検索チップ（filter-chip-search）の dialog 実行で /search へ遷移する / Feed から戻ると一覧が同じ q で復元される"
@@ -5400,7 +5409,7 @@ expect_return_shape = "201 字はいずれの endpoint・param も 400 で body 
 id = "mcp-tools.query-length"
 target_function = "mcp::tools::receipts search（store・item_query）・mcp::tools::stats summarize（filters.store・filters.item_query）・mcp::tools::catalog get_catalog（store_query）・domain::search の検証 helper"
 source = "docs/spec_mcp-tools.md §3-5・§7-8・§7-12・§10（MCP 3 tool の同一 expose: search_receipts store・summarize_spending filters.store/item_query・get_catalog store_query。超過は isError + メッセージ〔既存 result::invalid〕〔TASK-73〕）"
-source_lines = "backend/tests/mcp_tools_account.rs:416, backend/tests/mcp_tools_catalog.rs:549, backend/src/domain/search.rs:461, backend/src/domain/search.rs:477, backend/src/domain/search.rs:490, backend/src/domain/search.rs:505"
+source_lines = "backend/tests/mcp_tools_account.rs:505, backend/tests/mcp_tools_catalog.rs:549, backend/src/domain/search.rs:461, backend/src/domain/search.rs:477, backend/src/domain/search.rs:490, backend/src/domain/search.rs:505"
 description = "search_receipts の store・item_query・summarize_spending の filters.store・filters.item_query・get_catalog の store_query が max_query_chars（200 字）を超えると isError になりメッセージに上限（200）を含む（MCP 経路の LLM に上限が伝わる。web と異なり理由 message は既存翻訳で伝わる）。domain::search の検証 helper の単体は 200 字 OK・201 字 NG・マルチバイトは chars 数え（ひらがな 201 字は NG・UTF-8 bytes 数えでない）・エラーメッセージに kind の param 名（store_query / store / item_query / q）が含まれる・空白のみ 201 字は trim 後空の判定が先でエラーにならない。単体テストは backend/src/domain/search.rs の #[cfg(test)] に [covers:mcp-tools.query-length] コメントタグを付け本条件へ紐付ける（domain 単体テストに MCP 側 area の条件を付与する先例 mcp-search.like-and-fts-escaping と同じ形式）"
 given = "201 字の store・item_query で search_receipts / 201 字の filters.store・filters.item_query で summarize_spending / 201 字の store_query で get_catalog / 単体: 200 字・201 字・ひらがな 201 字・空白のみ 201 字・kind 4 種"
 expect_return_shape = "3 tool とも isError で content text に上限値（200）を含む / 単体: 200 字は Ok・201 字とひらがな 201 字は Err（chars 数えで bytes 数えでない）・メッセージに kind の param 名が含まれる・空白のみ 201 字は Err にならない"
@@ -5566,7 +5575,7 @@ expect_return_shape = "全 .label-chip.titled（5色）について contrastRati
 id = "auth-ledger.rename-ledger"
 target_function = "auth::ledger::rename_ledger"
 source = "docs/spec_data-model.md §4・§11（家計簿名の変更: trim 後 1〜100 字・同一ユーザーの所属内重複は申告レベル・audit〔TASK-20〕）"
-source_lines = "backend/tests/mcp_tools_account.rs:483, backend/tests/mcp_tools_account.rs:500, backend/tests/mcp_tools_account.rs:559, backend/tests/web_data_api.rs:1642, backend/tests/web_data_api.rs:1657, backend/tests/web_data_api.rs:1731"
+source_lines = "backend/tests/mcp_tools_account.rs:572, backend/tests/mcp_tools_account.rs:589, backend/tests/mcp_tools_account.rs:648, backend/tests/web_data_api.rs:1642, backend/tests/web_data_api.rs:1657, backend/tests/web_data_api.rs:1731"
 description = "対象 ledger への名前変更は BEGIN IMMEDIATE の 1 tx で所属・role（editor 以上）を再検証して UPDATE し、audit（entity_type=ledger / action=rename_ledger / before・after に名前 / actor_kind=web|mcp）を書く。trim 後 1〜max_ledger_name_chars 字・同一ユーザーの所属内の同名（自分を除く）は Conflict。同一名は no-op 成功（audit・updated_at 無更新）。別ユーザーの同名 ledger は妨げない"
 given = "2 ledger 所属 user（うち1つを共有相手が同名で所有）で rename_ledger を呼ぶ"
 expect_return_shape = "変更成功で before/after 名を返す・audit row が1行（web と mcp で actor_kind が変わる）・trim空と上限超は Invalid・同一 user の別所属と同名は Conflict・他人の同名は成功・同一名再送は成功かつ audit が増えない・viewer は Forbidden・非所属は NotFound"
@@ -5584,7 +5593,7 @@ expect_return_shape = "editor は 200 {id, name} で trim 済みの名前・view
 id = "mcp-tools.ledger-rename"
 target_function = "mcp::tools::account::rename_ledger（#22）"
 source = "docs/spec_mcp-tools.md §2・§7-24・§8（rename_ledger #22〔TASK-20〕）"
-source_lines = "backend/tests/mcp_tools_account.rs:442"
+source_lines = "backend/tests/mcp_tools_account.rs:531"
 description = "rename_ledger は対象 ledger（任意 ledger_id・§6-3）の名前を変え、view=ledger_renamed の envelope（ledger {id, name, source, role}）と「家計簿名を「X」から「Y」に変更しました。」を返す。trim空・上限超は入力検証 isError・所属内重複は isError・viewer は閲覧のみ・未選択（ledger_id 無し）は選び直し isError・ledger_id 指定時は explicit"
 given = "ledger.write の grant で rename_ledger を name の各値で呼ぶ"
 expect_return_shape = "成功 envelope の ledger が新名・role・source を含み before_name を返す・text が旧名→新名を含む・空/上限超は invalid（上限数値を含む）・重複は同名を断る isError・viewer は viewer_only・未選択は選び直し文・同一名再送は成功"
@@ -5715,7 +5724,7 @@ id = "web-home.trend-granularity"
 target_function = "web/components/TrendBars.vue（granularity prop・全粒度 axisTickIndices 間引き軸）・web/composables/trend.ts（trendGranularity・bucketSpan・spanGranularity・currentTrendKey）・web/pages/HomePage.vue（粒度別の trend call 切替）"
 source = "TASK-55 起票（推移が絞り込んでいる粒度に追従・その中での内訳も）・docs/spec_mcp-tools.md §12（推移は TrendBars・粒度規則）+ ユーザー実機指摘 2026-10-25 TASK-100（間引き軸ラベル・全棒 .bar-val・注記全廃）・設計 tmp/tasks/tm-100/design_trend-chart-axes.md（v3）"
 source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:233, frontend/tests/unit/web/trend-granularity.test.ts:25"
-description = "推移グラフは期間の粒度に追従する。月/年モードは月棒（月モードは選択月を含む6か月窓〔web-browse.trend-month-window〕・年は12か月。track は月棒本数で minmax(2rem,1fr)〔6本以下〕と minmax(0,1fr)〔dense・7本以上〕）。週モードは選択週の7本の日棒（getAnalysisTrend granularity=day・零埋めはbackend・title/aria は「10月10日（土） N円」）。range モードは範囲長で決める（62日以下=日棒・63..366日=月曜アンカーの週棒〔週棒の押下でその週の週モードへ〕・366日超=月棒〔dense 同等の縮小+間引き〕）。週棒の title は bucket の実範囲「10/5〜10/11 N円」。軸ラベルは全粒度で axisTickIndices 間引き（day/week は shortDate・月は axisMonthLabels の items〔web-browse.trend-axis-minimal〕）。値ラベル（.bar-val）は全棒に付く（compactYen・0円は空。day/week は非denseのため全棒のまま）。日棒は button で押下するとその日のレシート一覧へ遷移する（web-home.trend-day-bar-receipts）。注記行（trend-note）は存在しない（web-browse.trend-note-removed）。日・週粒度の棒の track は minmax(0.25rem,1fr) の縮小トラック（月棒の 2rem 最小のままでは53本の週棒が収まらない）。Home は全モードで getAnalysisTrend を使用する（TASK-89 で summary 依存は解消済み。月モードは TASK-103 で選択月の週粒度 trend をも追加取得〔web-home.week-card〕）"
+description = "推移グラフは期間の粒度に追従する。月/年モードは月棒（月モードの初期窓〔focus変更直後〕は選択月を含む6か月窓・年は12か月〔web-browse.trend-month-window〕。前次操作で過去方向へスライド可〔web-home.trend-window〕。track は月棒本数で minmax(1.25rem,1fr)〔6本以下〕と minmax(0,1fr)〔dense・7本以上〕。TASK-104 の前次button対が zone 幅を96px占めたため6本以下の最小値は 2rem→1.25rem・.bars/.axis-labels の gap は 0.25rem に全帯共通化され、420px 以下の帯では軸tickは 0.65rem+端tickの端揃え〔dense と同文法〕で360pxに収まる）。週モードは選択週の7本の日棒（getAnalysisTrend granularity=day・零埋めはbackend・title/aria は「10月10日（土） N円」）。range モードは範囲長で決める（62日以下=日棒・63..366日=月曜アンカーの週棒〔週棒の押下でその週の週モードへ〕・366日超=月棒〔dense 同等の縮小+間引き〕）。週棒の title は bucket の実範囲「10/5〜10/11 N円」。軸ラベルは全粒度で axisTickIndices 間引き（day/week は shortDate・月は axisMonthLabels の items〔web-browse.trend-axis-minimal〕）。値ラベル（.bar-val）は全棒に付く（compactYen・0円は空。day/week は非denseのため全棒のまま）。日棒は button で押下するとその日のレシート一覧へ遷移する（web-home.trend-day-bar-receipts）。注記行（trend-note）は存在しない（web-browse.trend-note-removed）。日・週粒度の棒の track は minmax(0.25rem,1fr) の縮小トラック（月棒の 1.25rem 最小のままでは53本の週棒が収まらない）。Home は全モードで getAnalysisTrend を使用する（TASK-89 で summary 依存は解消済み。月モードは TASK-103 で選択月の週粒度 trend をも追加取得〔web-home.week-card〕）"
 given = "今日=2026-10-15。/ を月モード（6本・月軸）・週モード前週（7本日棒）・range 2026-10-03..10-15（13本日棒）・range 2026-08-01..10-15（週棒）で開く"
 expect_return_shape = "月モード: bar-col 6本・trend-axis=['5月','7月','9月','10月']・6本すべての bar-col に .bar-val（0円は空）/ 週モード前週: 7本・bar-2026-10-10 の title='10月10日（土） 400円'・bar-col は button（押下で /receipts?from=2026-10-10&to=2026-10-10〔web-home.trend-day-bar-receipts〕）・current なし（過去週）・7本すべての bar-col に .bar-val（0円は空）/ range13日: 13本・軸 ['10/3','10/6','10/9','10/12','10/15']（axisTickIndices 間引き）/ 長range: 週棒の data-test が bar-<月曜日> で button・押下で period.setWeek が呼ばれ mode='week'"
 
@@ -6088,7 +6097,7 @@ id = "web-home.period-header"
 target_function = "web/components/PeriodHeader.vue（CompareHeader の後継・対比部を欠く）・web/pages/HomePage.vue 最上部・AxisDetailPage 見出し直下"
 source = "TASK-93 起票（TASK-89 の対比ヘッダから比較・増減を全廃。UIは構造とメリハリで表現する設計原則）+ TASK-103（月モード4fetch・週card用trend追加）"
 source_lines = "frontend/tests/unit/web/dashboard-shell.test.ts:25"
-description = "期間ヘッダ（カードでなく余白+細罫線の区画・タイポ主役）は、期間label（例「2026年10月の支出」）と期間合計の特大数値（2.25rem/700/tabular-nums）のみを描く。対比差・比較対象選択器・as-of echo 等 UI を言葉や追加部品で説明する要素は持たない。合計は backend totals.amount をそのまま表示する。Home の load は月モード4 fetch（analysis〔axis=category・limit=50〕・推移〔月6か月窓〕・週card用 trend〔granularity=week・選択月 from/to・limit=1。TASK-103〕・最近のレシート）、週/年/rangeモードは従来3 fetch のまま"
+description = "期間ヘッダ（カードでなく余白+細罫線の区画・タイポ主役）は、期間label（例「2026年10月の支出」）と期間合計の特大数値（2.25rem/700/tabular-nums）のみを描く。対比差・比較対象選択器・as-of echo 等 UI を言葉や追加部品で説明する要素は持たない。合計は backend totals.amount をそのまま表示する。Home の月モードは4 fetch（analysis〔axis=category・limit=50〕・推移〔月6か月窓。TASK-104 で useTrendWindow composable からの発行へ移り load() からは除去〕・週card用 trend〔granularity=week・選択月 from/to・limit=1。TASK-103・load() に残留〕・最近のレシート）で呼び出し総数・内容は不変、週/年/rangeモードは従来3 fetch のまま"
 given = "10月合計 948円 の mock で / を開く"
 expect_return_shape = "period-label に期間label・period-total に合計数値（tabular-nums）があり、compare-* 系の部位・旧 KPI カード形式が存在しない / Home の analysis 取得は1 fetch（axis=category・limit=50） / 月モードの trend 呼び出しは2回（月窓 granularity=month from=2026-05-01 to=2026-10-31 limit=5 と週 granularity=week from=2026-10-01 to=2026-10-31 limit=1）"
 
@@ -6143,11 +6152,48 @@ description = "Home 月モードは選択月の各週（月曜アンカー・4�
 given = "今日=2026-10-15。mock 10月（10/5・10/8・10/10 の3レシート計948円）で / を月モードで開く / 週・年・range モードでも開く"
 expect_return_shape = "月モード: week-card zone に button 5行・data-test=row-<月曜>=['2026-09-28','2026-10-05','2026-10-12','2026-10-19','2026-10-26']・label=['10/1〜10/4','10/5〜10/11','10/12〜10/18','10/19〜10/25','10/26〜10/31']・金額=['0円','948円','0円','0円','0円']（Σ=月合計948）・row-2026-10-12 が current / 行押下で mode='week'・week=押下行の月曜 / 週fetchは axis=category・metric=amount・granularity=week・from=2026-10-01・to=2026-10-31・limit=1 で label_colors も流れる / 週・年・range モードは week-card zone なし・trend呼び出しは1回（日/月粒度のみ）"
 
+# TASK-104（ユーザー実機指摘 2026-10-26「focusしている期間を変えないまま、グラフで前の範囲を
+# 見る操作も必要だ」）: trendグラフの前次button対（TrendWindow.vue）と窓stateのcomposable集約
+# （trendWindow.ts）。設計: tmp/tasks/tm-104/design_trend-window.md（v2・REVIEW-21 指摘8件対応済み）。
+# テスト先行第1段の条件書先行追記で、追記時点は uncovered・source_lines 空（次段の trend-window.test.ts
+# 等の追加で covered 化・script が source_lines を自動sync）。
+# 併せた既存条件の改訂: web-home.trend-granularity・web-browse.trend-month-window の窓記述は
+# 窓位置のfocus連動（選択月を含む等）が初期窓（offset=0）のみになったため限定。web-home.period-header は
+# 月窓trend fetch が load() から useTrendWindow composable 経由へ移動（呼び出し総数は4→4で不変）。
+# 月6か月窓・年12か月等の窓サイズ・dense 判定はスライドで不変のため web-home.stacked-trend-fixed・
+# web-browse.trend-axis-minimal・trend-dense-fit・trend-y-axis・web-axis.unified-skeleton・
+# web-home.week-card は改訂不要（設計§9影響評価どおり）。
+
+[[condition]]
+id = "web-home.trend-window"
+target_function = "web/components/TrendWindow.vue（新設・前次button対のwrapper・nav prop でbutton描画判断）・web/composables/trendWindow.ts（新設・窓state〔offset/window/granularity/active/canPrev/canNext〕・trend fetch・stacked組立）・web/pages/HomePage.vue・CategoriesPage.vue・StoresPage.vue・AxisDetailPage.vue（ローカル trendPeriod/trendStackedBars/PALETTE 削除・TrendWindow 差し替え）・web/styles.css（.trend-window/.trend-nav/.zone.is-loading）"
+source = "ユーザー実機指摘 2026-10-26 TASK-104（focusしている期間を変えないまま、グラフで前の範囲を見る操作も必要だ）・設計 tmp/tasks/tm-104/design_trend-window.md（v2・REVIEW-21 指摘8件対応済み）§1〜§7"
+source_lines = "frontend/tests/browser/verify.spec.ts:325, frontend/tests/unit/web/trend-window.test.ts:48, frontend/tests/unit/web/trend-window.test.ts:94, frontend/tests/unit/web/trend-window.test.ts:137, frontend/tests/unit/web/trend-window.test.ts:170, frontend/tests/unit/web/trend-window.test.ts:181, frontend/tests/unit/web/trend-window.test.ts:267, frontend/tests/unit/web/trend-window.test.ts:307, frontend/tests/unit/web/trend-window.test.ts:352, frontend/tests/unit/web/trend-window.test.ts:383, frontend/tests/unit/web/trend-window.test.ts:431"
+description = "month/yearモードのトレンドzoneはグラフ左右に前次chevron button対（.trend-nav・aria-label/title「前の範囲」「次の範囲」・読み上げ専用で画面上にテキストなし・PeriodPicker の送りbuttonと同型）を持ち、押下でfocus（period）を変更せず表示窓を1か月ずつ過去方向へスライドして trend API のみを再fetchする（analysis・ranking・recent と Home月モードのweek fetch〔TASK-103・load() 残留〕は走らず他zoneの表示も不変）。窓stateは composable useTrendWindow に集約し、初期窓（offset=0・focus変更直後）は month が選択月を含む6か月窓〔trendQuery(5) と一致〕・year が選択年12か月〔anchor は右端の12月で period.range と一致〕で、前へ押下ごとに offset が+1され窓の両端が1か月ずつ過去へ移る（未来方向へのスライド経路なし・次へは canNext=offset>0 で初期窓ではdisable）。focus変更（mode/range/labelQuery 切替・家計簿切替）と棒押下（setMonth/setWeek によるfocus移動）で offset=0 へリセットされ初期窓を再fetchする。fetch引数は axis（AxisDetail は画面の軸・他画面は category/store）・metric=amount・granularity=month（active時つねに月粒度）・limit=5・labelQuery があれば label_colors も流れる。stacked bars の組立（上位5系列+残余「ほか」segment+PALETTE 割当）も composable へ集約され4画面（Home・Categories・Stores・AxisDetail）で同一実装・同組立になる。refresh は fetch引数が進行中または最終成功のfetchと同一なら再発行しない（AxisDetail の composable watch と route watch の二重発火でも実fetchは1回で、focus変更時のAPI呼び出し総数は現行と同一。例外は AxisDetail の家計簿切替時のみ: useLedger 2回目以降の router.replace で一覧へ戻る〔unmount〕経路では composable watch が trend fetch を1回発行しうる）。ledger未確定（selectedLedgerId=null）ではfetchしない。week/rangeモードとReceiptsPage inline・Home週zone（WeekRows）は対象外（button非表示・窓は選択期間そのもの・fetch内容も現行と同一）。URL query・sessionStorageには反映しない（ephemeral・画面遷移・再読み込みで初期窓に戻る）"
+given = "今日=2026-10-15・mock 2026-05〜10月に記録。/ を月モード（選択月 2026-10）で開く → trend-prev を1回押下 → trend-next を1回押下 → trend-prev を1回押下した状態（offset=1）で時期チップから 2026-09 へ切り替える → 再度時期チップから 2026-10 を選び直す → 年モード・週モード・期間モードでも開く"
+expect_return_shape = "初期窓は bar-2026-05〜bar-2026-10 の6本（getAnalysisTrend axis=category〔AxisDetail は画面の軸〕・metric=amount・granularity=month・from=2026-05-01・to=2026-10-31・limit=5・labelQuery があれば label_colors も流れる）/ trend-prev 押下で棒key群が bar-2026-04〜bar-2026-09 へ1か月スライドし period.mode='month'・選択月は 2026-10 のまま・analysis（内訳）・recent と week fetch は走らない（ranking・内訳・recent・週zoneの表示も不変）/ trend-next は offset>0 の間のみ有効で押下で bar-2026-05〜bar-2026-10 へ復帰 / 2026-09 切替で 9月の初期窓 bar-2026-04〜bar-2026-09 へ・2026-10 選び直しで bar-2026-05〜bar-2026-10 へリセット（offset=0）/ 年モードは初期窓が12本（period.range と一致）のまま trend-prev で1か月スライド・週・期間モードは trend-prev/trend-next が存在しない"
+
+[[condition]]
+id = "web-home.trend-window-floor"
+target_function = "web/composables/trendWindow.ts（canPrev: offset>=1 でfetchした窓の bucket_totals 総和0 判定）・web/components/TrendWindow.vue（trend-prev の disabled 受け渡し）"
+source = "ユーザー実機指摘 2026-10-26 TASK-104・設計 tmp/tasks/tm-104/design_trend-window.md（v2・REVIEW-21 指摘8件対応済み）§2・§7-3"
+source_lines = "frontend/tests/unit/web/trend-window.test.ts:219"
+description = "前へ押下でスライドした先の窓（offset>=1）の応答の bucket_totals 総和が0なら前へはdisableする（zero-fill 相手に trend API が無限に応答するための実用打ち切り）。初期窓（offset=0）が全0でもdisableしない（判定は offset>=1 でfetchした窓にのみ適用し、記録のない当月でも前の月を見せなければならない）。記録のない期間が連続する家計簿では休止期間の手前で打ち切られ、その先の古い記録は窓移動では見られない（focus〔period〕を過去へ動かすことで到達する・focus移動で窓はそこへ初期化される）"
+given = "今日=2026-10-15。mock 2026-06〜10月に記録（2026-05 以前はゼロ）で / を月モード（選択月 2026-10）で開き trend-prev を押下し続ける（offset=5 で窓は 2025-12〜2026-05 の全0）/ 記録がなく初期窓が全0になる選択月（2026-04）でも開く"
+expect_return_shape = "offset=1〜4 の窓（例: offset=4 は 2026-01〜06・2026-06 に記録があり総和>0）では trend-prev が有効なまま / offset=5 の窓（bar-2025-12〜bar-2026-05・bucket_totals 総和0）を表示した時点で trend-prev が disabled / trend-next 押下で offset=4 の窓へ復帰し trend-prev が再び有効 / 初期窓（offset=0）が全0（2026-04 選択で bar-2025-11〜bar-2026-04）でも trend-prev は disabled にならない"
+
+[[excluded]]
+item = "TASK-104 のうち条件化しない項目: 窓移動中の表示と操作（trend zone への .zone.is-loading による opacity 0.6 薄化・fetch応答まで棒は前の窓のまま〔skeleton にしない〕・loading中も前次buttonをdisableしない・連打でoffsetが加速する・composable内seqによる古い応答の破棄。設計§3・§7-8）/ .trend-window の grid 構成（auto minmax(0,1fr) auto・gap・.hscroll 保険）等のCSS配置規則（設計§5）/ current強調が窓外に出たときの挙動（currentTrendKey・TrendBars は変更なしで、current key が棒に存在しない→強調なしの既存合同がそのまま働き窓が初期に戻れば復帰。設計§6）"
+source = "ユーザー実機指摘 2026-10-26 TASK-104・設計 tmp/tasks/tm-104/design_trend-window.md（v2）§3・§5・§6・§7-8"
+reason = "§8「書く/書かない」の書かない該当: opacity 薄化・grid 構成は色・余白・配置のみの表示判断。連打許可・seq 最新勝ちは並行fetchの実装防護で、観測可能な期待値（1回押下=1か月スライド・全0判定は最新窓のみ）は web-home.trend-window・trend-window-floor の期待値内で担保される。current強調は変更箇所がなく既存の合同で成立するため新規の分岐がない"
+decided_at = "2026-10-26"
+decided_by = "claude"
+
 [[condition]]
 id = "mcp-tools.receipt-web-url-line"
 target_function = "mcp::widget_resource WidgetResource::receipt_web_url（origin + /receipts/{id}）・mcp::tools drafts 系応答テキスト末尾の案内行"
 source = "TASK-80 body（web deep link 案内）・backend/src/mcp/widget_resource.rs・backend/src/mcp/tools/drafts.rs（実装から再構成: conditions.toml 復元時に本文を失ったため）"
-source_lines = "backend/tests/mcp_tools_draft_labels.rs:385, backend/tests/mcp_tools_drafts_batch.rs:1940, backend/tests/mcp_tools_drafts_batch.rs:1970, backend/tests/mcp_tools_drafts_batch.rs:1989, backend/tests/mcp_tools_drafts_batch.rs:2027, backend/tests/mcp_tools_drafts_batch.rs:2127, backend/tests/mcp_tools_drafts_batch.rs:2156, backend/tests/mcp_tools_drafts_batch.rs:2172, backend/src/mcp/widget_resource.rs:94"
+source_lines = "backend/tests/mcp_tools_draft_labels.rs:385, backend/tests/mcp_tools_drafts_batch.rs:1940, backend/tests/mcp_tools_drafts_batch.rs:1970, backend/tests/mcp_tools_drafts_batch.rs:1989, backend/tests/mcp_tools_drafts_batch.rs:2027, backend/tests/mcp_tools_drafts_batch.rs:2127, backend/tests/mcp_tools_drafts_batch.rs:2156, backend/tests/mcp_tools_drafts_batch.rs:2172, backend/src/mcp/widget_resource.rs:117"
 description = "draft 系 tool の成功応答テキストは末尾に「webで見る: {origin}/receipts/{receipt_id}」の案内行を持つ（origin は origin の申告値・receipt_id は当該レシート）。error 応答（conflict・validation 系）にはこの行を出さない。widget HTML 内の receipt_web_url リンクも同一の結合規則に従う"
 given = "draft 作成・更新・確定・再送の成功呼び出しと失敗呼び出し・WidgetResource::receipt_web_url の単体"
 expect_return_shape = "成功テキストが「webで見る: http://localhost:40281/receipts/{id}」を含み・error テキストは「webで見る: 」を含まない / receipt_web_url は origin + /receipts/{id} を返す"

@@ -127,8 +127,11 @@ const tickIdx = computed(() => new Set(axisTickIndices(bars.value.length)))
  *  labels to the tick positions so neighbors cannot overlap. */
 const dense = computed(() => props.granularity === 'month' && bars.value.length > 6)
 
+// TASK-104: the window's chevron pair takes 96px of the zone width, so the
+// 6-bar month window's track minimum (with the bars gap) must keep the wrap
+// inside the middle column at the 360px floor; wider viewports stretch 1fr
 const track = computed(() =>
-  props.granularity === 'month' ? (bars.value.length <= 6 ? 'minmax(2rem, 1fr)' : 'minmax(0, 1fr)') : 'minmax(0.25rem, 1fr)',
+  props.granularity === 'month' ? (bars.value.length <= 6 ? 'minmax(1.25rem, 1fr)' : 'minmax(0, 1fr)') : 'minmax(0.25rem, 1fr)',
 )
 
 const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.length || 1}, ${track.value})` }))

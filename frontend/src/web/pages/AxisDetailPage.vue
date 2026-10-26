@@ -10,7 +10,6 @@ import {
   type AnalysisFilters,
   type AnalysisItemResult,
   type AnalysisResult,
-  type AnalysisTrendResult,
   type ReceiptSummary,
   type StatsRow,
   type StoreRow,
@@ -23,14 +22,15 @@ import type { FilterChip } from '../components/FilterChips.vue'
 import PageHead from '../components/PageHead.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
-import TrendBars from '../components/TrendBars.vue'
+import TrendWindow from '../components/TrendWindow.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { shortDate } from '../composables/period'
-import { currentTrendKey, trendGranularity } from '../composables/trend'
+import { currentTrendKey } from '../composables/trend'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
 import { usePageReady } from '../composables/usePageReady'
+import { useTrendWindow } from '../composables/trendWindow'
 import { useSessionStore } from '../stores/session'
 import { useCatalogStore } from '../stores/catalog'
 import { useLabelsStore } from '../stores/labels'
@@ -294,7 +294,6 @@ function extraFilters(): AnalysisFilters {
 // --- data -----------------------------------------------------------------------
 const cross = ref<AnalysisResult | null>(null)
 const own = ref<AnalysisResult | null>(null)
-const trendRes = ref<AnalysisTrendResult | null>(null)
 /** the item axis's stats zone (REVIEW-13 M-4): summary / price history /
  *  by-store of THIS 品名 group (GET /analysis/item with item_query=品名 —
  *  the same name grouping as the axis rows that led here) */
@@ -305,19 +304,14 @@ const storeNameFor = ref<number | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-/** the trend window: a 6-month window (TASK-100) through the selected month
- *  in month mode, the period itself otherwise */
-function trendPeriod(): [string, string] {
-  if (period.mode === 'month') {
-    const q = period.trendQuery(5)
-    return [q.from!, q.to!]
-  }
-  return period.range
-}
-
-const gran = computed(() => {
-  const [from, to] = trendPeriod()
-  return trendGranularity(period.mode, from, to)
+// the trend's movable window (TASK-104): the composable owns the trend
+// fetch with this screen's stack axis and the resolved subject as filters —
+// while view is unresolved the getter returns undefined and the fetch
+// defers, so init() refreshes once the subject is known
+const win = useTrendWindow({
+  axis: () => stackAxis.value,
+  filters: () => (view.value ? { ...view.value.subject, ...extraFilters() } : undefined),
+  onError: (m) => (error.value = m ?? ''),
 })
 
 let seq = 0
@@ -347,9 +341,8 @@ async function load(id?: number): Promise<void> {
       delete crossExtra.store_category
     }
     const subjectAll: AnalysisFilters = { ...v.subject, ...extraFilters() }
-    const ownNeedsTrendAxis = ownAxis.value
     const subjectItem = v.subject.item_query
-    const [crossRes, ownRes, tr, itemRes] = await Promise.all([
+    const [crossRes, ownRes, itemRes] = await Promise.all([
       api.getAnalysis(l, {
         axis: crossAxis.value,
         metric: 'amount',
@@ -361,15 +354,6 @@ async function load(id?: number): Promise<void> {
       ownAxis.value
         ? api.getAnalysis(l, { axis: ownAxis.value, metric: 'amount', ...period.query(), ...subjectAll, limit: 50 })
         : Promise.resolve(null),
-      api.getAnalysisTrend(l, {
-        axis: stackAxis.value,
-        metric: 'amount',
-        granularity: gran.value,
-        from: trendPeriod()[0],
-        to: trendPeriod()[1],
-        ...subjectAll,
-        limit: 5,
-      }),
       kind.value === 'item' && subjectItem
         ? api.getAnalysisItem(l, { item_query: subjectItem, ...period.query(), ...extraFilters() })
         : Promise.resolve(null),
@@ -395,10 +379,8 @@ async function load(id?: number): Promise<void> {
     if (n !== seq) return
     cross.value = crossRes
     own.value = ownRes
-    trendRes.value = tr
     itemStats.value = itemRes
     recent.value = recentRes.receipts
-    void ownNeedsTrendAxis
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -427,7 +409,13 @@ async function init(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null) return
   try {
-    if (await resolveRoute(l)) void load(l)
+    if (await resolveRoute(l)) {
+      // the trend window rides the resolved subject — the composable's own
+      // watch fired before view resolved and deferred; identical refetches
+      // (the composable watch also fires on range changes) stay guarded away
+      win.refresh()
+      void load(l)
+    }
   } catch (e) {
     // the catalog / stores fetch itself failed: the ids cannot resolve —
     // surface it (the load catch form) instead of an unhandled rejection
@@ -480,38 +468,18 @@ function rankedRows(res: AnalysisResult | null, top = 5): StatsRow[] {
 const crossRows = computed(() => rankedRows(cross.value))
 const ownRows = computed(() => rankedRows(own.value, 10))
 
-/** the trend's stacked columns: top 5 series + the grey rest segment */
-const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
-const trendStacked = computed(() => {
-  const res = trendRes.value
-  if (!res) return []
-  const top = res.series.slice(0, 5)
-  return res.buckets.map((b, i) => {
-    const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
-    return {
-      key: b,
-      title: b,
-      total: res.bucket_totals[i] ?? 0,
-      segments: [
-        ...top.map((s, si) => ({ label: s.label, value: s.values[i] ?? 0, color: PALETTE[si] ?? 'var(--c-rest)' })),
-        ...(rest > 0 ? [{ label: 'ほか', value: rest, color: 'var(--c-rest)' }] : []),
-      ],
-    }
-  })
-})
-const trendCurrent = computed(() => {
-  const [from, to] = trendPeriod()
-  return currentTrendKey(gran.value, period.mode, from, to, period.month)
-})
+const trendCurrent = computed(() =>
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+)
 
 /** A bar press: a day bar opens that day's receipts; a week/month bar moves
  *  the shared period (TASK-89 §1-(3)). */
 function onTrendSelect(key: string): void {
-  if (gran.value === 'day') {
+  if (win.granularity.value === 'day') {
     void router.push({ path: '/receipts', query: { from: key, to: key, ...labelsInQuery() } })
     return
   }
-  if (gran.value === 'week') period.setWeek(key)
+  if (win.granularity.value === 'week') period.setWeek(key)
   else period.setMonth(key)
 }
 
@@ -679,17 +647,23 @@ const menuItems = computed<PageMenuItem[]>(() => {
 
         <section
           class="zone"
+          :class="{ 'is-loading': win.loading.value }"
           data-test="trend-card"
         >
           <h2 class="sr-only">
             支出の推移
           </h2>
-          <TrendBars
-            v-if="trendRes"
-            :stacked="trendStacked"
-            :granularity="gran"
-            :span="trendPeriod()"
+          <TrendWindow
+            v-if="win.result.value"
+            :stacked="win.stacked.value"
+            :granularity="win.granularity.value"
+            :span="win.window.value"
             :current="trendCurrent"
+            :nav="win.active.value"
+            :can-prev="win.canPrev.value"
+            :can-next="win.canNext.value"
+            @prev="win.prev"
+            @next="win.next"
             @select="onTrendSelect"
           />
         </section>

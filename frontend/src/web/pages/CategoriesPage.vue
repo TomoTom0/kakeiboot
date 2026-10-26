@@ -3,18 +3,19 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import { useDataApi, type AnalysisResult, type AnalysisTrendResult, type StatsRow } from '../api/data'
+import { useDataApi, type AnalysisResult, type StatsRow } from '../api/data'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import PeriodHeader from '../components/PeriodHeader.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
-import TrendBars from '../components/TrendBars.vue'
+import TrendWindow from '../components/TrendWindow.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { firstString } from '../composables/receiptContext'
-import { currentTrendKey, trendGranularity } from '../composables/trend'
+import { currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
+import { useTrendWindow } from '../composables/trendWindow'
 import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
@@ -35,23 +36,12 @@ const { markReady } = usePageReady()
 period.fromQuery(route.query)
 
 const analysis = ref<AnalysisResult | null>(null)
-const trend = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-/** the trend window: a 6-month window (TASK-100) through the selected month
- *  in month mode, the period itself otherwise (the list rule) */
-function trendPeriod(): [string, string] {
-  if (period.mode === 'month') {
-    const q = period.trendQuery(5)
-    return [q.from!, q.to!]
-  }
-  return period.range
-}
-const gran = computed(() => {
-  const [from, to] = trendPeriod()
-  return trendGranularity(period.mode, from, to)
-})
+// the trend's movable window (TASK-104): the composable owns the trend
+// fetch and the stacked assembly
+const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
 async function load(id?: number): Promise<void> {
@@ -62,21 +52,9 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    const [a, t] = await Promise.all([
-      api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
-      api.getAnalysisTrend(l, {
-        axis: 'category',
-        metric: 'amount',
-        granularity: gran.value,
-        from: trendPeriod()[0],
-        to: trendPeriod()[1],
-        ...labels,
-        limit: 5,
-      }),
-    ])
+    const a = await api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 })
     if (n !== seq) return
     analysis.value = a
-    trend.value = t
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -134,37 +112,18 @@ const rows = computed<StatsRow[]>(() => {
   return out
 })
 
-const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
-const trendStackedBars = computed(() => {
-  const res = trend.value
-  if (!res) return []
-  const top = res.series.slice(0, 5)
-  return res.buckets.map((b, i) => {
-    const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
-    return {
-      key: b,
-      title: b,
-      total: res.bucket_totals[i] ?? 0,
-      segments: [
-        ...top.map((s, si) => ({ label: s.label, value: s.values[i] ?? 0, color: PALETTE[si] ?? 'var(--c-rest)' })),
-        ...(rest > 0 ? [{ label: 'ほか', value: rest, color: 'var(--c-rest)' }] : []),
-      ],
-    }
-  })
-})
-const trendCurrent = computed(() => {
-  const [from, to] = trendPeriod()
-  return currentTrendKey(gran.value, period.mode, from, to, period.month)
-})
+const trendCurrent = computed(() =>
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+)
 function onTrendSelect(key: string): void {
-  if (gran.value === 'day') {
+  if (win.granularity.value === 'day') {
     void router.push({
       path: '/receipts',
       query: { from: key, to: key, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) },
     })
     return
   }
-  if (gran.value === 'week') period.setWeek(key)
+  if (win.granularity.value === 'week') period.setWeek(key)
   else period.setMonth(key)
 }
 
@@ -224,17 +183,23 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
 
       <section
         class="zone"
+        :class="{ 'is-loading': win.loading.value }"
         data-test="trend-card"
       >
         <h2 class="sr-only">
           支出の推移
         </h2>
-        <TrendBars
-          v-if="trend"
-          :stacked="trendStackedBars"
-          :granularity="gran"
-          :span="trendPeriod()"
+        <TrendWindow
+          v-if="win.result.value"
+          :stacked="win.stacked.value"
+          :granularity="win.granularity.value"
+          :span="win.window.value"
           :current="trendCurrent"
+          :nav="win.active.value"
+          :can-prev="win.canPrev.value"
+          :can-next="win.canNext.value"
+          @prev="win.prev"
+          @next="win.next"
           @select="onTrendSelect"
         />
       </section>

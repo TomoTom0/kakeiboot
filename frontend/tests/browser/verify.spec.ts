@@ -311,6 +311,85 @@ test.describe('trend axis (360x780)', () => {
   })
 })
 
+// --- TASK-104 trend window: the prev/next chevron pair around the trend
+// chart slides the window one month into the past without moving the focus —
+// only the trend endpoint re-fetches (the breakdown / recent and the
+// TASK-103 week fetch stay put), and the focus changes (the period chip's
+// month step, a bar press) reset the window to the initial one. Measured on
+// the real chromium layout: the pair renders as PeriodPicker-style 44px
+// squares (design: tmp/tasks/tm-104/design_trend-window.md §5 / §8). ---
+
+test.describe('trend window (390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  test('[covers:web-home.trend-window] prevで棒key群が1か月スライド（focus不変・analysis/recent/weekは再fetchなし）・nextで復帰・時期チップと棒押下で初期窓へ', async ({ page }) => {
+    logPageIssues(page, 'trend-window')
+    await installApiStub(page)
+    // every ledger API call the slide must (analysis/trend, month) and must
+    // not (analysis, receipts, the week trend) make
+    const calls: { path: string; from: string | null; granularity: string | null }[] = []
+    page.on('request', (r) => {
+      const u = new URL(r.url())
+      const m = /^\/api\/ledgers\/\d+\/(.+)$/.exec(u.pathname)
+      if (!m) return
+      calls.push({ path: m[1]!, from: u.searchParams.get('from'), granularity: u.searchParams.get('granularity') })
+    })
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const barKeys = () =>
+      page.evaluate(() =>
+        Array.from(document.querySelectorAll('[data-test="trend"] [data-test^="bar-"]')).map((el) =>
+          el.getAttribute('data-test')!,
+        ),
+      )
+    const INIT = ['bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09', 'bar-2026-10']
+    const SLID = ['bar-2026-04', 'bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09']
+    expect(await barKeys()).toEqual(INIT)
+    // the pair renders as PeriodPicker-style 44px squares; next is disabled
+    // on the initial window (no future slide)
+    for (const name of ['trend-prev', 'trend-next']) {
+      const box = await page.locator(`[data-test="${name}"]`).boundingBox()
+      expect(box, name).toBeTruthy()
+      expect(box!.width, name).toBeCloseTo(44, 1)
+      expect(box!.height, name).toBeCloseTo(44, 1)
+    }
+    await expect(page.locator('[data-test="trend-next"]')).toBeDisabled()
+    // prev: the bar keys slide one month and only the trend endpoint re-runs
+    await page.locator('[data-test="trend-prev"]').click()
+    await expect.poll(barKeys, { timeout: 3_000 }).toEqual(SLID)
+    const analysisGets = () => calls.filter((c) => c.path === 'analysis')
+    const receiptGets = () => calls.filter((c) => c.path === 'receipts')
+    const trendMonth = () => calls.filter((c) => c.path === 'analysis/trend' && c.granularity === 'month')
+    const trendWeek = () => calls.filter((c) => c.path === 'analysis/trend' && c.granularity === 'week')
+    expect(analysisGets(), 'the breakdown never re-runs').toHaveLength(1)
+    expect(receiptGets(), 'recent neither').toHaveLength(1)
+    expect(trendWeek(), 'the TASK-103 week fetch stays in load()').toHaveLength(1)
+    expect(trendMonth().at(-1)!.from).toBe('2026-04-01')
+    // next returns to the initial window and disables again
+    await expect(page.locator('[data-test="trend-next"]')).toBeEnabled()
+    await page.locator('[data-test="trend-next"]').click()
+    await expect.poll(barKeys, { timeout: 3_000 }).toEqual(INIT)
+    await expect(page.locator('[data-test="trend-next"]')).toBeDisabled()
+    // the period chip's month step (2026-10 -> 2026-09) resets the window to
+    // September's initial one, and picking 2026-10 again restores it
+    await page.locator('[data-test="filter-period"]').click()
+    await expect(page.locator('[data-test="period-prev"]')).toBeVisible()
+    await page.locator('[data-test="period-prev"]').click()
+    await expect.poll(barKeys, { timeout: 3_000 }).toEqual(SLID)
+    await page.locator('[data-test="period-next"]').click()
+    await expect.poll(barKeys, { timeout: 3_000 }).toEqual(INIT)
+    await page.keyboard.press('Escape') // close the dialog for the bar press
+    // a bar press is a focus move: the window resets around the pressed month
+    await page.locator('[data-test="trend-prev"]').click()
+    await expect.poll(barKeys, { timeout: 3_000 }).toEqual(SLID)
+    await page.locator('[data-test="bar-2026-04"]').click()
+    await expect
+      .poll(barKeys, { timeout: 3_000 })
+      .toEqual(['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04'])
+  })
+})
+
 // --- topbar logo: the 520px media-query boundary ---
 
 for (const [width, below] of [

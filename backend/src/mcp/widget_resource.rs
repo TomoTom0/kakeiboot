@@ -1,11 +1,19 @@
 //! The widget template resource (spec_mcp-tools.md 11-1, 11-4): one
-//! single-file HTML served as `ui://budget-book/widget-<hash>.html`, where
-//! `<hash>` is the content hash of the built HTML. The same URI is used in
-//! the tool descriptors (`ui.resourceUri` / `openai/outputTemplate`).
+//! single-file HTML served at the stable URI `ui://budget-book/widget.html`,
+//! independent of the HTML content so ChatGPT conversations keep working
+//! across deploys. Legacy content-hash URIs (`widget-<hash>.html`, pre
+//! TASK-106) are accepted as `resources/read` aliases (`is_legacy_hash_uri`).
+//! The stable URI is used in the tool descriptors (`ui.resourceUri` /
+//! `openai/outputTemplate`).
 
 use std::path::Path;
 
 use serde_json::{Value, json};
+
+/// Stable resource URI of the widget template. Independent of the HTML
+/// content so ChatGPT conversations keep working across deploys
+/// (spec_mcp-tools.md 11-1, TASK-106).
+pub const WIDGET_URI: &str = "ui://budget-book/widget.html";
 
 /// MIME type of MCP Apps HTML templates.
 pub const WIDGET_MIME: &str = "text/html;profile=mcp-app";
@@ -35,9 +43,8 @@ impl WidgetResource {
     }
 
     pub fn from_html(html: String, origin: &str) -> Self {
-        let hash = crate::auth::tokens::to_hex(&crate::auth::tokens::sha256(html.as_bytes())[..6]);
         Self {
-            uri: format!("ui://budget-book/widget-{hash}.html"),
+            uri: WIDGET_URI.to_string(),
             html,
             origin: origin.to_string(),
         }
@@ -75,16 +82,32 @@ impl WidgetResource {
         })
     }
 
-    pub fn read_json(&self) -> Value {
+    /// `resources/read` body. `requested_uri` is echoed in `contents[0].uri`
+    /// (the alias path passes the legacy hash URI through unchanged).
+    pub fn read_json(&self, requested_uri: &str) -> Value {
         json!({
             "contents": [{
-                "uri": self.uri,
+                "uri": requested_uri,
                 "mimeType": WIDGET_MIME,
                 "text": self.html,
                 "_meta": self.meta(),
             }]
         })
     }
+}
+
+/// Legacy content-hash resource URIs (`ui://budget-book/widget-<hash>.html`,
+/// 12 lowercase hex chars = first 6 bytes of the sha256 of the HTML, pre
+/// TASK-106). Served as an alias of the current template (spec 11-1) so
+/// conversations holding an old URI keep rendering.
+pub fn is_legacy_hash_uri(uri: &str) -> bool {
+    let Some(rest) = uri.strip_prefix("ui://budget-book/widget-") else {
+        return false;
+    };
+    let Some(hex) = rest.strip_suffix(".html") else {
+        return false;
+    };
+    hex.len() == 12 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]
@@ -100,5 +123,57 @@ mod tests {
             w.receipt_web_url(12345),
             "http://localhost:40281/receipts/12345"
         );
+    }
+
+    // [covers:mcp-tools.widget-resource]
+    #[test]
+    fn stable_uri_is_content_independent() {
+        let a = WidgetResource::from_html(
+            "<!doctype html><body>build one</body>".into(),
+            "http://localhost:40281",
+        );
+        let b = WidgetResource::from_html(
+            "<!doctype html><body>a totally different build</body>".into(),
+            "http://localhost:40281",
+        );
+        assert_eq!(a.uri, "ui://budget-book/widget.html", "stable URI");
+        assert_eq!(a.uri, b.uri, "URI does not depend on the HTML content");
+        let read = a.read_json(WIDGET_URI);
+        assert_eq!(
+            read["contents"][0]["uri"],
+            json!("ui://budget-book/widget.html"),
+            "read echoes the stable URI"
+        );
+    }
+
+    // [covers:mcp-tools.widget-resource-alias]
+    #[test]
+    fn legacy_hash_uri_recognition() {
+        for uri in [
+            "ui://budget-book/widget-4e4f5a2a8f81.html",
+            "ui://budget-book/widget-ab3275e3800d.html",
+            "ui://budget-book/widget-000000000000.html",
+        ] {
+            assert!(is_legacy_hash_uri(uri), "legacy hash URI: {uri}");
+        }
+        for uri in [
+            // 11 hex chars
+            "ui://budget-book/widget-4e4f5a2a8f8.html",
+            // 13 hex chars
+            "ui://budget-book/widget-4e4f5a2a8f812.html",
+            // uppercase hex
+            "ui://budget-book/widget-4E4F5A2A8F81.html",
+            // no extension
+            "ui://budget-book/widget-4e4f5a2a8f81",
+            // wrong prefix
+            "ui://budget-book/other.html",
+            // the stable URI itself: rejected at the prefix strip
+            "ui://budget-book/widget.html",
+            // 4 multi-byte chars = 12 bytes: passes the length check, rejected
+            // by the hex byte predicate
+            "ui://budget-book/widget-ああああ.html",
+        ] {
+            assert!(!is_legacy_hash_uri(uri), "not a legacy hash URI: {uri}");
+        }
     }
 }

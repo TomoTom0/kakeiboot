@@ -44,6 +44,7 @@
 | `backend/src/mcp/tools/catalog.rs`（`mod tests`） | 単体 | manage_store の category 三値・get_catalog の include 値 |
 | `backend/src/mcp/tools/stats.rs`（`mod tests`） | 単体 | summarize_spending の要約 text・_meta ゲート・既定期間 |
 | `backend/src/mcp/tools/widget.rs`（`mod tests`） | 単体 | refresh_widget_images の ref キー |
+| `backend/src/mcp/widget_resource.rs`（`mod tests`） | 単体 | receipt_web_url の origin 結合・resource URI の内容非依存（安定 URI）と read の URI エコー [TASK-106] |
 | `backend/tests/config_load.rs` | 結合 | 実 `configs/` 読込・全環境 mcp.toml の一括 tool キーと `[limits]` 検証 [TASK-73] [TASK-20]・app.toml `[data_io]` 上限検証 [TASK-58]・auth.toml 招待/登録 TTL=168h 検証 [TASK-46]・port 固定割当・config dir 解決 |
 | `backend/tests/healthz.rs` | 結合 | `/healthz`・DB 停止時 503・SQLite 作成と migration 適用 |
 | `backend/tests/request_log.rs` | 結合 | 運用ログ（request INFO・429 WARN・login_mismatch・tool 呼び出し・TTL） [TASK-15] |
@@ -57,7 +58,7 @@
 | `backend/tests/oauth_refresh.rs` | 結合 | refresh rotation・60秒猶予・失効規則・scope 絞り込み |
 | `backend/tests/oauth_race.rs` | 結合 | token endpoint 並行競合（BEGIN IMMEDIATE） |
 | `backend/tests/mcp_auth.rs` | 結合 | MCP Bearer 検証・ledger service（list/switch/whoami）・接続中のアプリ API |
-| `backend/tests/mcp_tools_account.rs` | 結合 | アカウント系 tool（whoami/list/switch・rename_ledger [TASK-20]・resources 配信）・検索語上限 [TASK-73] |
+| `backend/tests/mcp_tools_account.rs` | 結合 | アカウント系 tool（whoami/list/switch・rename_ledger [TASK-20]）・resources 配信の安定 URI・旧 hash URI エイリアス（安定 URI 応答と同一 text/_meta・形式外は未知 URI） [TASK-106]・検索語上限 [TASK-73] |
 | `backend/tests/mcp_tools_catalog.rs` | 結合 | get_catalog・manage_category/manage_store・summarize_spending・filters 上限 [TASK-73] |
 | `backend/tests/mcp_tools_labels.rs` | 結合 | label_receipts と検索・集計の label_colors [TASK-17] |
 | `backend/tests/mcp_tools_drafts_batch.rs` | 結合 | 一括 tool（create/approve_receipt_drafts） [TASK-18]・障害注入 [TASK-25] |
@@ -99,6 +100,7 @@
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
 | `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100] |
+| `frontend/tests/unit/web/trend-window.test.ts` | 単体 | トレンド窓移動 [TASK-104]（useTrendWindow composable: 窓計算〔month=trendQuery(5)・year=period.range 無後退〕・offset 操作・refresh 冪等ガード・ledger 未確定 fetch なし・stacked 組立集約・全0窓の過去側打ち切り・TrendWindow 前次button・窓移動は trend API のみ再fetch） |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈・URL 同期・着地・優越判定 [TASK-77]・世代ガード [TASK-61]） |

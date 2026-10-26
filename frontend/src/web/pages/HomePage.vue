@@ -16,14 +16,15 @@ import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import PeriodHeader from '../components/PeriodHeader.vue'
 import RankedList from '../components/RankedList.vue'
-import TrendBars from '../components/TrendBars.vue'
+import TrendWindow from '../components/TrendWindow.vue'
 import WeekRows from '../components/WeekRows.vue'
 import type { WeekRow } from '../components/WeekRows.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
-import { bucketSpan, currentTrendKey, trendGranularity } from '../composables/trend'
+import { bucketSpan, currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
+import { useTrendWindow } from '../composables/trendWindow'
 import { usePeriodStore } from '../stores/period'
 
 // Home (TASK-89 redesign, the compare side removed): one column, four
@@ -39,28 +40,14 @@ const { markReady } = usePageReady()
 period.fromQuery(useRoute().query)
 
 const analysis = ref<AnalysisResult | null>(null)
-const trendRes = ref<AnalysisTrendResult | null>(null)
 const weekRes = ref<AnalysisTrendResult | null>(null)
 const recent = ref<ReceiptSummary[]>([])
 const error = ref('')
 const loading = ref(false)
 
-/** TASK-55: the trend granularity of the selected period (week -> the
- *  week's days, month/year -> months, a custom range -> by its length). */
-const gran = computed(() => {
-  const [from, to] = trendPeriod()
-  return trendGranularity(period.mode, from, to)
-})
-
-/** the trend window: a 6-month window through the selected month in month
- *  mode (the Home rule), the period itself otherwise */
-function trendPeriod(): [string, string] {
-  if (period.mode === 'month') {
-    const q = period.trendQuery(5)
-    return [q.from!, q.to!]
-  }
-  return period.range
-}
+// the trend's movable window (TASK-104): the composable owns the trend
+// fetch and the stacked assembly; the week rows below stay in load()
+const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
 async function load(id?: number): Promise<void> {
@@ -71,17 +58,8 @@ async function load(id?: number): Promise<void> {
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    const [a, tr, r, wk] = await Promise.all([
+    const [a, r, wk] = await Promise.all([
       api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
-      api.getAnalysisTrend(l, {
-        axis: 'category',
-        metric: 'amount',
-        granularity: gran.value,
-        from: trendPeriod()[0],
-        to: trendPeriod()[1],
-        ...labels,
-        limit: 5,
-      }),
       api.listReceipts(l, { from: period.range[0], to: period.range[1], limit: 5, ...labels }),
       // TASK-103: the month mode's week rows — the selected month only, week
       // buckets; limit 1 keeps the one series we never read (bucket_totals is
@@ -100,7 +78,6 @@ async function load(id?: number): Promise<void> {
     ])
     if (n !== seq) return
     analysis.value = a
-    trendRes.value = tr
     recent.value = r.receipts
     weekRes.value = wk ?? null
   } catch (e) {
@@ -143,40 +120,23 @@ function axisTo(axis: AnalysisAxis, key: string | number | null, label: string):
 }
 
 // --- the stacked trend (§1-(3)) ---------------------------------------------------
-const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
-const trendStackedBars = computed(() => {
-  const res = trendRes.value
-  if (!res) return []
-  const top = res.series.slice(0, 5)
-  return res.buckets.map((b, i) => {
-    const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
-    return {
-      key: b,
-      title: b,
-      total: res.bucket_totals[i] ?? 0,
-      segments: [
-        ...top.map((s, si) => ({ label: s.label, value: s.values[i] ?? 0, color: PALETTE[si] ?? 'var(--c-rest)' })),
-        ...(rest > 0 ? [{ label: 'ほか', value: rest, color: 'var(--c-rest)' }] : []),
-      ],
-    }
-  })
-})
-const trendCurrent = computed(() => {
-  const [from, to] = trendPeriod()
-  return currentTrendKey(gran.value, period.mode, from, to, period.month)
-})
+// §6: the current key keeps existing rules — out of the slid window it just
+// matches no bar and the highlight drops until the window returns
+const trendCurrent = computed(() =>
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+)
 
 /** A bar press: a day bar opens that day's receipts list, a week/month bar
  *  moves the shared period (TASK-89 §1-(3)). */
 function onTrendSelect(key: string): void {
-  if (gran.value === 'day') {
+  if (win.granularity.value === 'day') {
     void router.push({
       path: '/receipts',
       query: { from: key, to: key, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) },
     })
     return
   }
-  if (gran.value === 'week') period.setWeek(key)
+  if (win.granularity.value === 'week') period.setWeek(key)
   else period.setMonth(key)
 }
 
@@ -259,17 +219,23 @@ const recentQuery = computed(() => {
 
       <section
         class="zone"
+        :class="{ 'is-loading': win.loading.value }"
         data-test="trend-card"
       >
         <h2 class="sr-only">
           支出の推移
         </h2>
-        <TrendBars
-          v-if="trendRes"
-          :stacked="trendStackedBars"
-          :granularity="gran"
-          :span="trendPeriod()"
+        <TrendWindow
+          v-if="win.result.value"
+          :stacked="win.stacked.value"
+          :granularity="win.granularity.value"
+          :span="win.window.value"
           :current="trendCurrent"
+          :nav="win.active.value"
+          :can-prev="win.canPrev.value"
+          :can-next="win.canNext.value"
+          @prev="win.prev"
+          @next="win.next"
           @select="onTrendSelect"
         />
       </section>

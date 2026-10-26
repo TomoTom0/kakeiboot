@@ -914,7 +914,11 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .bars {
   display: grid;
   align-items: end;
-  gap: 0.5rem;
+  /* TASK-104: the trend window's chevron pair takes 96px of the zone width,
+     so the bars' inter-column gap drops to the dense value everywhere — with
+     the 6-bar track minimum (1.25rem) this keeps the month window's wrap
+     inside the middle grid column at the 360px floor (276 -> 184px) */
+  gap: 0.25rem;
   min-width: 0;
   height: 150px;
   /* the gridlines are absolutely positioned siblings' overlays: keep the
@@ -1005,12 +1009,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .axis-labels {
   grid-column: 2;
   display: grid;
-  gap: 0.5rem;
+  gap: 0.25rem; /* TASK-104: follows .bars' gap so each label keeps its bar's cell */
   margin-top: 0.4rem;
 }
 .axis-labels span { text-align: center; white-space: nowrap; }
-.trend-wrap.dense .bars,
-.trend-wrap.dense .axis-labels { gap: 0.25rem; }
 /* the dense window-end ticks flush to their cell ends: a nowrap line
    wider than its ~17px cell overflows the span box, and no text-align
    moves that overflow (chromium clamps the line's start edge to the
@@ -1022,9 +1024,34 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    from the port edges and keep centering */
 .trend-wrap.dense .axis-labels span:first-child { width: max-content; }
 .trend-wrap.dense .axis-labels span:last-child { width: max-content; justify-self: end; }
+/* TASK-104: the chevron pair narrowed the 6-bar window's cells to ~22px,
+   where the end tick "10月" (~31px) overflows the same way and feeds the
+   scroll port a phantom scroll. The narrow band shrinks the tick type to
+   0.65rem (the tick fits inside its cell, the end tick flushes to the cell
+   end like dense); at >=421px the cells hold the 0.8rem text centered, so
+   the two rules part ways there */
+@media (max-width: 420px) {
+  .trend-wrap .axis-labels { font-size: 0.65rem; }
+  .axis-labels span:last-child { width: max-content; justify-self: end; }
+}
 /* the window-ends axis (TASK-42) of ReceiptsPage's inline daily card —
    the trend card moved to .axis-labels (TASK-100) but this stays */
 .axis-ends { display: flex; justify-content: space-between; margin-top: 0.4rem; }
+
+/* the trend window's prev/next pair (TASK-104): fixed side columns around
+   the scroll port; the buttons center on the plot's vertical middle. The
+   pair rides PeriodPicker's .icon-btn vocabulary, resized to the shared
+   44px tap-target floor */
+.trend-window {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.25rem;
+}
+.trend-window > .hscroll { min-width: 0; } /* keep the middle column shrinkable */
+.trend-nav { width: 44px; height: 44px; }
+/* the window-move loading: the same fade as .view-stack.loading, zone-scoped */
+.zone.is-loading { opacity: 0.6; }
 
 /* ------------------------------------------------ reading screens (TASK-89)
    Home / the lists / the axis detail drop the two-column card grid for a
