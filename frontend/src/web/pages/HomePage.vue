@@ -217,129 +217,140 @@ const recentQuery = computed(() => {
         :total="totals.amount"
       />
 
-      <section
-        class="zone"
-        :class="{ 'is-loading': win.loading.value }"
-        data-test="trend-card"
-      >
-        <h2 class="sr-only">
-          支出の推移
-        </h2>
-        <TrendWindow
-          v-if="win.result.value"
-          :stacked="win.stacked.value"
-          :granularity="win.granularity.value"
-          :span="win.window.value"
-          :current="trendCurrent"
-          :nav="win.active.value"
-          :can-prev="win.canPrev.value"
-          :can-next="win.canNext.value"
-          :window-key="win.windowKey.value"
-          :transition-name="win.transitionName.value"
-          @prev="win.prev"
-          @next="win.next"
-          @select="onTrendSelect"
-        />
-      </section>
-
-      <section
-        v-if="period.mode === 'month' && weeks.length > 0"
-        class="zone"
-        data-test="week-card"
-      >
-        <h2 class="sr-only">
-          週ごとの支出
-        </h2>
-        <WeekRows
-          :weeks="weeks"
-          :current="weekCurrent"
-          @select="onWeekSelect"
-        />
-      </section>
-
-      <section
-        class="zone"
-        data-test="breakdown"
-      >
-        <div class="zone-more">
-          <h2 class="sr-only">
-            支出の内訳
-          </h2>
-          <RouterLink
-            :to="{ path: '/categories', query: { ...period.urlQuery } }"
-            class="ibtn"
-            aria-label="カテゴリ別に見る"
-            title="カテゴリ別に見る"
-            data-test="breakdown-more"
+      <div class="dash-cols">
+        <div class="col-main">
+          <section
+            class="zone"
+            :class="{ 'is-loading': win.loading.value }"
+            data-test="trend-card"
           >
-            <AppIcon name="chevron-right" />
-          </RouterLink>
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の推移
+              </h2>
+            </div>
+            <TrendWindow
+              v-if="win.result.value"
+              :stacked="win.stacked.value"
+              :granularity="win.granularity.value"
+              :span="win.window.value"
+              :current="trendCurrent"
+              :nav="win.active.value"
+              :can-prev="win.canPrev.value"
+              :can-next="win.canNext.value"
+              :window-key="win.windowKey.value"
+              :transition-name="win.transitionName.value"
+              @prev="win.prev"
+              @next="win.next"
+              @select="onTrendSelect"
+            />
+          </section>
         </div>
-        <p
-          v-if="breakdownRows.length === 0"
-          class="muted empty"
-        >
-          この期間の記録はありません。
-        </p>
-        <RankedList
-          v-else
-          :rows="breakdownRows"
-          :to="categoryTo"
-        />
-      </section>
 
-      <section
-        class="zone"
-        data-test="recent"
-      >
-        <div class="zone-more">
-          <h2 class="sr-only">
-            最近のレシート
-          </h2>
-          <RouterLink
-            :to="{ path: '/receipts', query: { ...recentQuery } }"
-            class="ibtn"
-            aria-label="すべて見る"
-            title="すべて見る"
-            data-test="recent-more"
+        <div class="col-side">
+          <section
+            v-if="period.mode === 'month' && weeks.length > 0"
+            class="zone zone--list"
+            data-test="week-card"
           >
-            <AppIcon name="chevron-right" />
-          </RouterLink>
-        </div>
-        <div
-          v-if="recent.length === 0"
-          class="empty-state"
-        >
-          <AppIcon
-            name="chat"
-            :size="28"
-          />
-          <p>ChatGPT でレシートの写真を送ると、ここに記録されます。</p>
-        </div>
-        <ul
-          v-else
-          class="recent-list"
-        >
-          <li
-            v-for="r in recent"
-            :key="r.receipt_id"
+            <div class="zone-head">
+              <h2 class="zone-title">
+                週ごとの支出
+              </h2>
+            </div>
+            <WeekRows
+              :weeks="weeks"
+              :current="weekCurrent"
+              @select="onWeekSelect"
+            />
+          </section>
+
+          <section
+            class="zone zone--list"
+            data-test="breakdown"
           >
-            <RouterLink
-              :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
-              class="recent-row"
-              :data-test="`recent-${r.receipt_id}`"
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の内訳
+              </h2>
+              <RouterLink
+                :to="{ path: '/categories', query: { ...period.urlQuery } }"
+                class="ibtn"
+                aria-label="カテゴリ別に見る"
+                title="カテゴリ別に見る"
+                data-test="breakdown-more"
+              >
+                <AppIcon name="chevron-right" />
+              </RouterLink>
+            </div>
+            <p
+              v-if="breakdownRows.length === 0"
+              class="muted empty"
             >
-              <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-              <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-              <span class="row-labels"><LabelDots
-                :labels="r.labels ?? []"
-                compact
-              /></span>
-              <span class="amount">{{ formatYen(r.amount) }}</span>
-            </RouterLink>
-          </li>
-        </ul>
-      </section>
+              この期間の記録はありません。
+            </p>
+            <RankedList
+              v-else
+              :rows="breakdownRows"
+              :to="categoryTo"
+              axis="category"
+            />
+          </section>
+
+          <section
+            class="zone zone--list"
+            data-test="recent"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                最近のレシート
+              </h2>
+              <RouterLink
+                :to="{ path: '/receipts', query: { ...recentQuery } }"
+                class="ibtn"
+                aria-label="すべて見る"
+                title="すべて見る"
+                data-test="recent-more"
+              >
+                <AppIcon name="chevron-right" />
+              </RouterLink>
+            </div>
+            <div
+              v-if="recent.length === 0"
+              class="empty-state"
+            >
+              <AppIcon
+                name="chat"
+                :size="28"
+              />
+              <p>ChatGPT でレシートの写真を送ると、ここに記録されます。</p>
+            </div>
+            <ul
+              v-else
+              class="recent-list"
+            >
+              <li
+                v-for="r in recent"
+                :key="r.receipt_id"
+              >
+                <RouterLink
+                  :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
+                  class="recent-row"
+                  :data-test="`recent-${r.receipt_id}`"
+                >
+                  <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
+                  <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
+                  <span class="row-labels"><LabelDots
+                    :labels="r.labels ?? []"
+                    compact
+                  /></span>
+                  <span class="amount">{{ formatYen(r.amount) }}</span>
+                </RouterLink>
+              </li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </div>
     <DashSkeleton v-else-if="loading" />
   </div>

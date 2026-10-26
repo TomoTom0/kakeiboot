@@ -444,7 +444,7 @@ const groups = computed(() => {
     <DashSkeleton v-if="loading && !loaded" />
     <div
       v-else
-      class="dash-grid"
+      class="view-stack"
       :class="{ loading }"
     >
       <section
@@ -460,67 +460,79 @@ const groups = computed(() => {
         </p>
       </section>
 
-      <section
-        class="card"
-        data-test="payments"
-      >
-        <h2 class="sr-only">
-          支払方法
-        </h2>
-        <!-- TASK-65: a row press toggles the payment filter in place (the
-             null-key aggregates stay inert rows) -->
-        <RankedList
-          v-if="paymentRows.length > 0"
-          :rows="paymentRows"
-          :select="onPaymentRow"
-        />
-        <p
-          v-else
-          class="muted empty"
-        >
-          この期間の記録はありません。
-        </p>
-      </section>
-
-      <section
-        class="card wide"
-        data-test="daily"
-      >
-        <h2 class="sr-only">
-          {{ trendTitle }}
-        </h2>
-        <div
-          class="daily-bars"
-          :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
-        >
-          <span
-            v-for="c in trendCols"
-            :key="c.key"
-            class="daily-col"
-            :title="c.title"
+      <div class="dash-cols">
+        <div class="col-main">
+          <section
+            class="zone"
+            data-test="daily"
           >
-            <span
-              class="daily-bar"
-              :style="{ height: `${c.height}%` }"
+            <div class="zone-head">
+              <h2 class="zone-title">
+                {{ trendTitle }}
+              </h2>
+            </div>
+            <div
+              class="daily-bars"
+              :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
+            >
+              <span
+                v-for="c in trendCols"
+                :key="c.key"
+                class="daily-col"
+                :title="c.title"
+              >
+                <span
+                  class="daily-bar"
+                  :style="{ height: `${c.height}%` }"
+                />
+              </span>
+            </div>
+            <div
+              v-if="trendAxis"
+              class="axis-ends muted small"
+            >
+              <span>{{ trendAxis.first }}</span>
+              <span v-if="trendAxis.last">{{ trendAxis.last }}</span>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-side">
+          <section
+            class="zone zone--list"
+            data-test="payments"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支払方法
+              </h2>
+            </div>
+            <!-- TASK-65: a row press toggles the payment filter in place (the
+                 null-key aggregates stay inert rows) -->
+            <RankedList
+              v-if="paymentRows.length > 0"
+              :rows="paymentRows"
+              :select="onPaymentRow"
             />
-          </span>
+            <p
+              v-else
+              class="muted empty"
+            >
+              この期間の記録はありません。
+            </p>
+          </section>
         </div>
-        <div
-          v-if="trendAxis"
-          class="axis-ends muted small"
-        >
-          <span>{{ trendAxis.first }}</span>
-          <span v-if="trendAxis.last">{{ trendAxis.last }}</span>
-        </div>
-      </section>
+      </div>
 
       <section
-        class="card wide"
+        class="zone"
         data-test="receipts"
       >
-        <h2 class="sr-only">
-          レシート
-        </h2>
+        <div class="zone-head">
+          <h2 class="zone-title">
+            レシート
+          </h2>
+        </div>
         <p
           v-if="!loading && receipts.length === 0"
           class="empty-state"

@@ -33,12 +33,19 @@
   --sidebar-w: 240px;
   --topbar-h: 60px;
   --feed-nav-h: 3.5rem;
-  --c1: #2e9a5e;
-  --c2: #5b8fd6;
-  --c3: #e39a52;
-  --c4: #9b7fd1;
-  --c5: #d9b743;
-  --c-rest: #a9b2ac;
+  /* TASK-105 series palette (Okabe-Ito / Paul Tol muted, numerically
+     validated by tmp/tasks/tm-105/calc_palette.py — WCAG contrast, CVD
+     separation, accent separation): the 7 id-cyclic slots plus the
+     unattributed rest. The green accent stays outside the series (it is the
+     total / whole / non-decomposed color; design §3) */
+  --series-1: #0072B2;
+  --series-2: #C98208;
+  --series-3: #332288;
+  --series-4: #CC79A7;
+  --series-5: #882255;
+  --series-6: #3E9BD0;
+  --series-7: #C24100;
+  --series-rest: #8f9a94;
   /* ledger display palette (ledger_members.color, TASK-16): distinct from
      the label palette of TASK-17 in names and hues */
   --ledger-teal: #138a80;
@@ -88,12 +95,14 @@
     --bb-error-bg: #35201d;
     --bb-shadow: 0 1px 2px rgb(0 0 0 / 30%);
     --bb-shadow-pop: 0 12px 32px rgb(0 0 0 / 55%);
-    --c1: #45b97a;
-    --c2: #6fa3ea;
-    --c3: #eda866;
-    --c4: #b195e6;
-    --c5: #e3c65a;
-    --c-rest: #5f6b65;
+    --series-1: #56A8E8;
+    --series-2: #EDCA75;
+    --series-3: #7A6BE5;
+    --series-4: #D998C2;
+    --series-5: #C7689B;
+    --series-6: #82C8F0;
+    --series-7: #F07048;
+    --series-rest: #5f6b65;
     --ledger-teal: #3cbfb3;
     --ledger-orange: #ec9a52;
     --ledger-pink: #e57aaa;
@@ -870,16 +879,16 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 
 /* -------------------------------------------------------------- dashboard */
 
-.dash-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  transition: opacity 0.15s;
+/* TASK-105 §5-2: the dashboards' two-column band — the chart zones left
+   (.col-main: trend, the item stats), the list zones stacked right
+   (.col-side: week / breakdown / ranking / recent). Below 48rem it is one
+   full column (the wrapper changes nothing on phones) */
+.dash-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.dash-cols > * { min-width: 0; }
+.col-main, .col-side { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+@media (min-width: 48rem) {
+  .dash-cols { grid-template-columns: minmax(0, 1.2fr) minmax(0, 24rem); align-items: start; }
 }
-.dash-grid.loading { opacity: 0.6; }
-.dash-grid .card { margin-bottom: 0; }
-.dash-grid .breakdown, .dash-grid .recent, .dash-grid .wide { grid-column: 1 / -1; }
-.dash-grid > * { min-width: 0; }
 
 /* The two-row KPI card (TASK-75 §6-4): the head row (0.8rem label, 1.5rem
    amount, the diff chip pinned right) over one 0.8rem summary line joined
@@ -1084,9 +1093,22 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   padding: 1rem 1.25rem;
   min-width: 0;
 }
-/* TASK-95: the reading zones carry no visible headings (sr-only only) — an
-   icon-only "see the whole axis" link rides the zone's top-right corner */
-.zone-more { display: flex; justify-content: flex-end; margin: -0.25rem -0.75rem 0.25rem 0; }
+/* TASK-105: the zone heading is a visible data-name title (zone-title). The
+   "see the whole axis" icon link rides the heading row's right end — no
+   standalone zone-more row, no description copy (UI 原則: データ名のみ) */
+.zone-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: -0.25rem 0 0.5rem;
+}
+.zone-title { margin: 0; font-size: 0.95rem; font-weight: 700; color: var(--bb-fg); }
+h3.zone-title { font-size: 0.85rem; }
+/* the width tier (§5-1): list-side zones cap at 38rem left-aligned — the
+   one-column band's counter to the all-full-width monotony. Inside the
+   two-column band the side column's 24rem is the effective width */
+.zone--list { max-width: 38rem; }
 
 /* the period header: whitespace + hairline, typography leads — the total
    at 2.25rem/700/tabular-nums is the whole statement */
@@ -1117,7 +1139,15 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   border-radius: 4px 4px 2px 2px;
   overflow: hidden;
 }
-.bar-seg { width: 100%; transition: background-color 0.15s; }
+/* TASK-105: value-0 segments are omitted upstream, so every rendered segment
+   is >0 — min-height keeps the tiny ones visible and the 1px surface border
+   between adjacent segments separates same-color collisions structurally
+   (the DOM's first child is the visual bottom under column-reverse). No
+   background-color transition: the deterministic seriesColor keeps a key's
+   color constant, and an un-transitioned swap keeps the computed style in
+   step with the theme switch (the row swatches have none either) */
+.bar-seg { width: 100%; min-height: 2px; }
+.bar-seg + .bar-seg { border-top: 1px solid var(--bb-surface); }
 .bar-seg:first-child { border-radius: 4px 4px 0 0; }
 .bar-col.stacked { position: relative; }
 
@@ -1325,24 +1355,25 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 }
 .link-btn:hover { text-decoration: underline; }
 
-/* The ranked row as one 44px line (TASK-75 §6-4, TASK-89): label / share % /
-   diff / amount / chevron on a five-track grid — the donut-era color dot is
-   gone, the proportional bar is the single accent. The bar rides the row's
-   bottom edge as a 2px gradient (--rank-fill) — no standalone meter element,
-   no gap between rows for it. The row is its own size container: through
-   340px the diff cell folds away so the label keeps at least ~96px */
+/* The ranked row as one 44px line (TASK-75 §6-4, TASK-89): swatch / label /
+   share % / amount / chevron on a five-track grid (TASK-105 adds the leading
+   12px series swatch). The proportional bar rides the row's bottom edge as a
+   2px gradient (--rank-fill) in the row's series color — RankedList sets
+   --rank-color via seriesColor, and rows without one (WeekRows) keep the
+   accent fallback so the bar never disappears. No standalone meter element,
+   no gap between rows for it */
 .ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ranked-row,
 .week-row {
   --rank-fill: 0%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto 12px;
+  grid-template-columns: 12px minmax(0, 1fr) auto auto 12px;
   align-items: center;
   gap: 8px;
   min-height: 44px;
   padding: 0 0.5rem;
   border-radius: 10px;
-  background-image: linear-gradient(to right, var(--bb-accent) var(--rank-fill), transparent var(--rank-fill));
+  background-image: linear-gradient(to right, var(--rank-color, var(--bb-accent)) var(--rank-fill), transparent var(--rank-fill));
   /* the bar spans the row's full width including the 0.5rem side paddings
      (review L1): the default origin is padding-box, whose 100% excludes the
      padding and leaves the bar inset from the rounded row ends */
@@ -1375,6 +1406,15 @@ button.week-row { border: 0; background-color: transparent; }
 .ranked-label { min-width: 0; }
 .ranked-share { color: var(--bb-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .ranked-chevron { color: var(--bb-muted); flex: none; }
+/* TASK-105: the leading series swatch — a 12px round dot in the row's
+   seriesColor (the legend the graph never grows; rest rows paint grey).
+   Every row renders it so the label column never shifts */
+.ranked-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rank-color);
+}
 
 /* TASK-103: the Home month mode's week rows — one 44px full-width button
    per week of the selected month (label + amount on a 2-cell grid; the
@@ -1948,7 +1988,7 @@ a.sub-row:hover { background: var(--bb-hover); }
 }
 .msg { animation: bb-fade-in 0.16s ease; }
 
-/* loading skeleton: the dash-grid silhouette in flat surface blocks, no
+/* loading skeleton: the zone-stack silhouette in flat surface blocks, no
    shimmer — the shape holds the layout, one soft fade on insert only */
 .skeleton .sk {
   display: block;
@@ -1972,8 +2012,8 @@ a.sub-row:hover { background: var(--bb-hover); }
 
 @media (max-width: 720px) {
   /* the narrow-band density pass (TASK-75 §6-4, TASK-89: the donut is gone):
-     tighter card rhythm and the shorter trend bars */
-  .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+     tighter card rhythm and the shorter trend bars (.dash-cols is one
+     column by default, TASK-105 — nothing to fold here) */
   .card { padding: 12px; }
   .receipt-body { grid-template-columns: 1fr; }
   .bars { height: 96px; }

@@ -62,45 +62,42 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.kpi-value').exists()).toBe(false)
   })
 
-  // TASK-105 test-first intermediate state: web-home.zone-headings-sr-only
-  // (TASK-95) was abolished for web-common.zone-headings-visible, but the
-  // implementation has not landed yet, so the expectations below still pin the
-  // CURRENT sr-only form to keep the suite green. Post-implementation
-  // revision targets (design tmp/tasks/tm-105/design_dashboard-visual.md §1):
-  //   - `.zone h2`（AxisDetail の cross/own/item-stats 内 h3 も）は sr-only を
-  //     持たず可視 class `zone-title` を持つ（1つ目の findAll は
-  //     `.zone .zone-head h2.zone-title` へ・最後の not(sr-only) 期待は反転）
-  //   - 見出しは `.zone-head` 行の左要素で、zone-more icon link
-  //     （breakdown-more / recent-more）は `.zone-head` の最後の子（単独行
-  //     `.zone-more` は廃止）
-  //   - 見出し文言はこの4つのまま流用（新規考案なし）
-  it('[covers:web-common.zone-headings-visible] zone見出し（TASK-105で可視zone-title化。実装前は従来のsr-only形を維持）・誘導はicon link（aria-label+chevron）', async () => {
+  // TASK-105 (design tmp/tasks/tm-105/design_dashboard-visual.md §1): the
+  // zone headings left the sr-only form for visible h2.zone-title text riding
+  // the .zone-head row — the wording stays the TASK-95 copy verbatim (data
+  // names only, no new invention), and the guide icon links sit at the
+  // heading row's right end (the standalone .zone-more row is gone).
+  it('[covers:web-common.zone-headings-visible] zone見出しは可視h2.zone-title（.zone-head行・sr-onlyなし・文言はTASK-95流用）・誘導icon linkは見出し行の右端', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
-    // the zone headings live in the DOM for the document outline / screen
-    // readers but carry the sr-only class — the page shows no heading text
-    // （実装後は可視 h2.zone-title が .zone-head 内に並ぶ形へ改訂）
-    const headings = wrapper.findAll('.zone h2.sr-only')
+    // every zone heading is a visible .zone-title inside the .zone-head row,
+    // keeping the TASK-95 wording as-is (no invented copy)
+    const headings = wrapper.findAll('.zone .zone-head h2.zone-title')
     expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '支出の内訳', '最近のレシート'])
-    // the section links are icon-only (chevron), not word links
+    // no zone heading stays sr-only and none sits outside a .zone-head
+    expect(wrapper.find('.zone h2.sr-only').exists()).toBe(false)
+    expect(wrapper.findAll('.zone h2.zone-title').length).toBe(wrapper.findAll('.zone .zone-head h2.zone-title').length)
+    // the section links are icon-only (chevron), not word links — and they
+    // ride the heading row as its last child (the .zone-more row is gone)
     const cat = wrapper.find('[data-test="breakdown-more"]')
     expect(cat.attributes('aria-label')).toBe('カテゴリ別に見る')
     expect(new URL(cat.attributes('href')!, 'http://localhost').pathname).toBe('/categories')
+    expect(cat.element.closest('.zone-head')!.lastElementChild).toBe(cat.element)
     const all = wrapper.find('[data-test="recent-more"]')
     expect(all.attributes('aria-label')).toBe('すべて見る')
     expect(new URL(all.attributes('href')!, 'http://localhost').pathname).toBe('/receipts')
-    expect(wrapper.find('.zone h2:not(.sr-only)').exists()).toBe(false)
+    expect(all.element.closest('.zone-head')!.lastElementChild).toBe(all.element)
+    expect(wrapper.find('.zone-more').exists()).toBe(false)
   })
 
 
-  // TASK-105 post-implementation revision targets for this test
-  // (web-home.breakdown-rest-row revised + web-common.series-color-assignment,
-  // design §4-2): every row — top rows AND the「ほか」rest row — gains the
-  // leading 12px round swatch `.ranked-swatch`（background: var(--rank-color)）,
-  // RankedList sets `--rank-color: seriesColor(row.keys[0] ?? null, axis)` on
-  // each row, the top rows' swatch + in-row bar carry the series color and the
-  //「ほか n件・計xx円」row resolves to var(--series-rest).
-  it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（上位行と同じ形式・非リンク）', async () => {
+  // TASK-105 (web-home.breakdown-rest-row revised + web-common.series-color-
+  // assignment, design §4-2): every row — top rows AND the「ほか」rest row —
+  // carries the leading 12px round swatch `.ranked-swatch`; RankedList sets
+  // `--rank-color` = seriesColor(row.keys[0] ?? null, axis) on each row, the
+  // top rows' swatch + in-row bar carry the series color and the「ほか n件・
+  // 計xx円」row resolves to var(--series-rest).
+  it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（全行swatch・上位行は系列色・残余行はrest色）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     // seven top categories this month (five extra items on receipt 102)
     await api.updateReceipt(1, 102, {
@@ -127,20 +124,27 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(rest.find('.ranked-label').text()).toBe('ほか 1件・計120円')
     expect(rest.find('.amount').text()).toBe('120円')
     expect(rest.element.tagName).not.toBe('A')
-    // the top rows keep their drill links into /axes/category/<id>
+    // every row renders the leading swatch (the legend the graph never
+    // grows), rest rows included — the swatch paints var(--rank-color) and
+    // the rest row's color resolves to the unattributed rest token
+    expect(rows.map((r) => r.find('.ranked-swatch').exists())).toEqual([true, true, true, true, true, true])
+    expect((rest.attributes('style') ?? '')).toContain('--rank-color: var(--series-rest)')
+    // the top rows keep their drill links into /axes/category/<id> and carry
+    // a series slot color (日用品 is catalog id 4 -> var(--series-4), the
+    // same token the trend segment paints)
     expect(new URL(rows[0]!.attributes('href')!, 'http://localhost').pathname).toBe('/axes/category/4')
+    expect((rows[0]!.attributes('style') ?? '')).toContain('--rank-color: var(--series-4)')
   })
 
-  // TASK-105 post-implementation revision targets for this test
-  // (web-home.stacked-trend-fixed revised, design §4-1): the segment colors
-  // become seriesColor(s.key, axis) CSS variable refs — the mock's current
-  // month holds 食費 (id 1) -> var(--series-1) and 日用品 (id 4) ->
-  // var(--series-4) — the residual「ほか」segment is var(--series-rest), the
-  // hover titles gain the share form「名称 〜円（n%）」（total>0 ガード）,
-  // value-0 series segments are omitted from the assembly, and .bar-seg gains
-  // min-height: 2px + the 1px var(--bb-surface) border between adjacent
-  // segments（背景色・title 以外の既存期待は不変）.
-  it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額表記）', async () => {
+  // TASK-105 (web-home.stacked-trend-fixed revised, design §4-1): the
+  // segment colors are seriesColor(s.key, axis) CSS variable refs — the
+  // mock's current month holds 食費 (id 1) -> var(--series-1) and 日用品
+  // (id 4) -> var(--series-4) — the residual「ほか」segment is
+  // var(--series-rest), the hover titles carry the share form「名称 〜円
+  // （n%）」, value-0 series segments are omitted from the assembly, and
+  // .bar-seg gains min-height: 2px + the 1px var(--bb-surface) border
+  // between adjacent segments.
+  it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額+構成比title・色はseriesColor写像）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
     const card = wrapper.find('[data-test="trend-card"]')
@@ -152,12 +156,16 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(card.find('[data-test="trend-metric-count"]').exists()).toBe(false)
     expect(card.find('[data-test="trend-metric-unit"]').exists()).toBe(false)
     // every column is the stacked money view: the current month holds both
-    // series segments, each titled with the money format
+    // series segments (value-0 series are omitted), each titled with the
+    // money + share form and painted the seriesColor of its key
     const col = card.find('[data-test="bar-2026-10"]')
     expect(col.classes()).toContain('stacked')
     const segs = col.findAll('.bar-seg')
     expect(segs.length).toBe(2)
-    expect(segs.some((s) => (s.attributes('title') ?? '').endsWith('円'))).toBe(true)
+    expect(segs.every((s) => /円（\d+%）$/.test(s.attributes('title') ?? ''))).toBe(true)
+    const byLabel = (l: string) => segs.find((s) => (s.attributes('title') ?? '').startsWith(l))!
+    expect(byLabel('食費').attributes('style')).toContain('background: var(--series-1)')
+    expect(byLabel('日用品').attributes('style')).toContain('background: var(--series-4)')
     // TASK-100: every bar carries its value label (the TASK-75 current-only
     // rule is withdrawn; compactYen — 万/千 compression, no "k" suffix — and
     // the zero months render the empty string)

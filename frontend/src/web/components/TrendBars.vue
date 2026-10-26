@@ -56,7 +56,7 @@ interface BarView {
   value: number
   height: number
   current: boolean
-  segments: { label: string; value: number; color: string; height: number }[]
+  segments: { label: string; value: number; color: string; height: number; pct: number | null }[]
 }
 
 /** the bar heights' denominator: a nice axis bound (1, 2, 5 x 10^n), so the
@@ -86,6 +86,9 @@ const bars = computed<BarView[]>(() => {
       value: s.value,
       color: s.color,
       height: total > 0 ? Math.max((s.value / total) * 100, s.value > 0 ? 1 : 0) : 0,
+      // the hover title's share「名称 〜円（n%）」(TASK-105): null on a
+      // zero-total bar (no 0/0)
+      pct: total > 0 ? Math.round((s.value / total) * 100) : null,
     }))
     return {
       key: b.key,
@@ -192,7 +195,7 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
                 :key="i2"
                 class="bar-seg"
                 :style="{ height: `${s.height}%`, background: s.color }"
-                :title="`${s.label} ${formatYen(s.value)}`"
+                :title="`${s.label} ${formatYen(s.value)}${s.pct !== null ? `（${s.pct}%）` : ''}`"
               />
             </span>
             <span

@@ -69,12 +69,11 @@ function topLevel(text = css): string {
 }
 
 describe('layout: grid children shrink', () => {
-  // TASK-105 post-implementation revision target (web-layout.grid-children-
-  // shrinkable revised): .dash-grid is abolished (ReceiptsPage was its last
-  // user) and the selector under test becomes .dash-cols — the skipped block
-  // "dashboard visual (TASK-105)" below carries the post-implementation form.
-  it('[covers:web-layout.grid-children-shrinkable] .dash-grid 全メディアクエリで minmax(0、.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
-    const grids = rulesFor('.dash-grid').filter((r) => decl(r.body, 'grid-template-columns') !== undefined)
+  // TASK-105 (web-layout.grid-children-shrinkable revised): .dash-grid is
+  // abolished (ReceiptsPage was its last user) and the selector under test
+  // becomes .dash-cols (the one-column base + the 48rem two-column band).
+  it('[covers:web-layout.grid-children-shrinkable] .dash-cols 全メディアクエリで minmax(0、.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
+    const grids = rulesFor('.dash-cols').filter((r) => decl(r.body, 'grid-template-columns') !== undefined)
     expect(grids.length).toBeGreaterThanOrEqual(2)
     for (const r of grids) {
       const v = decl(r.body, 'grid-template-columns')!
@@ -82,7 +81,7 @@ describe('layout: grid children shrink', () => {
       // no bare 1fr outside minmax(...)
       expect(v.replace(/minmax\([^()]*\)/g, '')).not.toMatch(/\b1fr\b/)
     }
-    expect(rulesFor('.dash-grid > *').some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
+    expect(rulesFor('.dash-cols > *').some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
     expect(rulesFor('.sub-row').map((r) => decl(r.body, 'grid-template-columns'))).toContain(
       'minmax(0, 1fr) auto auto',
     )
@@ -292,9 +291,9 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
   it('720px 以下は gap 0.75rem・カード padding 12px・zone の詰まった余白・推移 .bars 96px（ドーナツは廃止）', () => {
     const n720 = blockAfter(/@media\s*\(max-width:\s*720px\)/)
     expect(n720, 'max-width: 720px block').toBeDefined()
-    // TASK-105 post-implementation revision target: .dash-grid -> .dash-cols
-    // （gap 0.75rem は .dash-cols 側へ移る前提。設計 §5-2）
-    expect(rulesFor('.dash-grid', n720!).some((r) => decl(r.body, 'gap') === '0.75rem')).toBe(true)
+    // TASK-105: the dashboards' gap moved onto .dash-cols itself (one column
+    // below 48rem by default — the 720px fold no longer redefines a grid)
+    expect(rulesFor('.dash-cols').some((r) => decl(r.body, 'gap') === '0.75rem')).toBe(true)
     expect(rulesFor('.card', n720!).some((r) => decl(r.body, 'padding') === '12px')).toBe(true)
     expect(rulesFor('.bars', n720!).some((r) => decl(r.body, 'height') === '96px')).toBe(true)
     // TASK-89: the reading screens' zone tightens; the donut rules are gone
@@ -322,20 +321,19 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
 })
 
 describe('ranked row single line (TASK-75 §6-4)', () => {
-  // TASK-105 post-implementation revision targets for the test below
-  // (web-layout.ranked-row-single-line revised, design §4-2): the grid gains
-  // the leading swatch track (12px minmax(0,1fr) auto auto 12px), the
-  // gradient's first stop becomes var(--rank-color, var(--bb-accent))（未設定
-  // 行は accent へフォールバック）and the .ranked-swatch rule appears — the
-  // skipped "dashboard visual (TASK-105)" block at the bottom of this file
-  // carries the post-implementation form of these static checks.
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は minmax(0,1fr) auto auto 12px の1行44px（dot・diff 列なし）・下端2pxの accent 単色 linear-gradient・.meter 規則は無い', () => {
+  // TASK-105 (web-layout.ranked-row-single-line revised, design §4-2): the
+  // grid gains the leading swatch track (12px minmax(0,1fr) auto auto 12px),
+  // the gradient's first stop becomes var(--rank-color, var(--bb-accent))
+  // （未設定行は accent へフォールバック）and the .ranked-swatch rule
+  // appears — the "dashboard visual (TASK-105)" block at the bottom of this
+  // file carries the swatch rule and the fallback as their own checks.
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列1行44px（dot・diff 列なし）・下端2pxの系列色 linear-gradient（accentフォールバック付き）・.meter 規則は無い', () => {
     const rows = rulesFor('.ranked-row')
     expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
     expect(
       rows.some(
         (r) =>
-          decl(r.body, 'grid-template-columns') === 'minmax(0, 1fr) auto auto 12px' &&
+          decl(r.body, 'grid-template-columns') === '12px minmax(0, 1fr) auto auto 12px' &&
           decl(r.body, 'gap') === '8px' &&
           decl(r.body, 'min-height') === '44px',
       ),
@@ -672,14 +670,10 @@ describe('sidebar settings nav (TASK-56)', () => {
 // design_dashboard-visual.md §3 / §5): the series palette tokens, the
 // .dash-cols two-column zone layout, the .zone--list width tier and the
 // ranked-row swatch. Written test-first against the not-yet-implemented
-// stylesheet, so these blocks stay SKIPPED until the implementation lands
-// (this keeps the pre-implementation suite green; the only allowed red is
-// series-color.test.ts's import failure). When implementing: drop the .skip,
-// apply the revision targets marked on the old-form tests above (.dash-grid
-// / .ranked-row blocks), and keep the light+dark dual definitions honest. ---
+// stylesheet (kept skipped until the implementation landed; live now). ---
 
 describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)', () => {
-  it.skip('[covers:web-common.zone-layout] .dash-cols は1fr 1列（外）+ 48rem media 内 minmax(0,1.2fr) minmax(0,24rem) の2列・子は min-width 0・.dash-grid 規則は廃止', () => {
+  it('[covers:web-common.zone-layout] .dash-cols は1fr 1列（外）+ 48rem media 内 minmax(0,1.2fr) minmax(0,24rem) の2列・子は min-width 0・.dash-grid 規則は廃止', () => {
     const top = topLevel()
     expect(rulesFor('.dash-cols', top).some((r) => decl(r.body, 'display') === 'grid' && decl(r.body, 'grid-template-columns') === 'minmax(0, 1fr)')).toBe(true)
     expect(rulesFor('.dash-cols > *', top).some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
@@ -695,11 +689,11 @@ describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)
     expect(css).not.toMatch(/\.dash-grid/)
   })
 
-  it.skip('[covers:web-common.zone-layout] list系zone は .zone--list の max-width 38rem・chart系zone（trend 等）は全幅のまま', () => {
+  it('[covers:web-common.zone-layout] list系zone は .zone--list の max-width 38rem・chart系zone（trend 等）は全幅のまま', () => {
     expect(rulesFor('.zone--list').some((r) => decl(r.body, 'max-width') === '38rem')).toBe(true)
   })
 
-  it.skip('[covers:web-common.series-color-assignment] 系列token --series-1..7・--series-rest は light/dark 両定義・旧 --c1..5・--c-rest は全参照置換後に廃止', () => {
+  it('[covers:web-common.series-color-assignment] 系列token --series-1..7・--series-rest は light/dark 両定義・旧 --c1..5・--c-rest は全参照置換後に廃止', () => {
     const light = rulesFor(':root', topLevel())
       .map((r) => r.body)
       .join('\n')
@@ -722,7 +716,7 @@ describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)
     expect(css).not.toMatch(/--c-rest\b/)
   })
 
-  it.skip('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)・行barのgradientは --rank-color フォールバック付き', () => {
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)・行barのgradientは --rank-color フォールバック付き', () => {
     const rows = rulesFor('.ranked-row')
     expect(
       rows.some(

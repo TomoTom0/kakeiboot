@@ -16,6 +16,7 @@ import type { StackedBar } from '../components/TrendBars.vue'
 import { errorMessage } from './format'
 import { monthEnd, shiftMonth } from './period'
 import { trendGranularity, type TrendGranularity } from './trend'
+import { SERIES_REST, seriesColor } from '../lib/seriesColor'
 import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
@@ -59,10 +60,6 @@ export interface TrendWindowState {
   next(): void
   refresh(): void
 }
-
-/** the segment palette of the top-5 series (the one place a stable
- *  series-color mapping would land) */
-const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)']
 
 export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
   const api = useDataApi()
@@ -121,6 +118,7 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
   const stacked = computed<StackedBar[]>(() => {
     const res = result.value
     if (!res) return []
+    const axis = opts.axis()
     const top = res.series.slice(0, 5)
     return res.buckets.map((b, i) => {
       const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
@@ -129,8 +127,15 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
         title: b,
         total: res.bucket_totals[i] ?? 0,
         segments: [
-          ...top.map((s, si) => ({ label: s.label, value: s.values[i] ?? 0, color: PALETTE[si] ?? 'var(--c-rest)' })),
-          ...(rest > 0 ? [{ label: 'ほか', value: rest, color: 'var(--c-rest)' }] : []),
+          // TASK-105: the segment color is the deterministic seriesColor of
+          // the series key (the same color the ranked rows paint), the
+          // residual「ほか」the fixed rest tone. Value-0 series segments are
+          // omitted from the assembly — with the 1px segment borders a 0
+          // height element would stack a stray line
+          ...top
+            .filter((s) => (s.values[i] ?? 0) > 0)
+            .map((s) => ({ label: s.label, value: s.values[i] ?? 0, color: seriesColor(s.key, axis) })),
+          ...(rest > 0 ? [{ label: 'ほか', value: rest, color: SERIES_REST }] : []),
         ],
       }
     })

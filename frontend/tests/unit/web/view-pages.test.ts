@@ -344,14 +344,13 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
 })
 
 describe('ReceiptsPage (dashboard)', () => {
-  // TASK-105 post-implementation revision targets for this test
-  // (web-receipts.dashboard revised, design §4-4 / §5): the page zone化 —
-  // the daily / payments / receipts sections become .zone with visible
+  // TASK-105 (web-receipts.dashboard revised, design §4-4 / §5): the page is
+  // zone化 — the daily / payments / receipts sections are .zone with visible
   // h2.zone-title headings（支払方法・レシート・日別の支出等の動的文言.
   // web-common.zone-headings-visible）, `.dash-grid` is replaced by
   // `.view-stack` + `.dash-cols`（左 col-main=daily・右 col-side=payments・
   // summary(kpi) とレシート一覧 zone は .dash-cols の外の全幅.
-  // web-common.zone-layout）, and the payments rows gain the swatch + series
+  // web-common.zone-layout）, and the payments rows carry the swatch + series
   // color（支払方法は名称 string の共通写像. web-common.series-color-assignment）.
   it('[covers:web-receipts.dashboard] 期間の合計・件数・平均・日別・支払方法と日付ごとの一覧、品名で絞り込み', async () => {
     const { wrapper, router } = await mountApp('/receipts')
@@ -362,6 +361,29 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(wrapper.findAll('[data-test="daily"] .daily-col')).toHaveLength(31)
     expect(wrapper.find('[data-test="payments"]').text()).toContain('現金')
     expect(wrapper.find('[data-test="receipts"]').text()).toContain('10月10日（土）')
+    // TASK-105: the three sections are zones with visible headings, riding
+    // the two-column band — daily (chart, col-main) / payments (list,
+    // col-side) — while the kpi summary and the receipts list stay full
+    // width outside .dash-cols
+    for (const t of ['daily', 'payments', 'receipts']) {
+      const zone = wrapper.find(`[data-test="${t}"]`)
+      expect(zone.classes(), t).toContain('zone')
+      expect(zone.find('.zone-head h2.zone-title').exists(), t).toBe(true)
+    }
+    expect(wrapper.find('[data-test="daily"]').find('.zone-title').text()).toBe('日別の支出')
+    expect(wrapper.find('[data-test="payments"]').find('.zone-title').text()).toBe('支払方法')
+    expect(wrapper.find('[data-test="receipts"]').find('.zone-title').text()).toBe('レシート')
+    expect(wrapper.find('[data-test="summary"]').classes()).not.toContain('zone')
+    expect(wrapper.find('[data-test="daily"]').element.closest('.dash-cols')).not.toBeNull()
+    expect(wrapper.find('[data-test="daily"]').element.closest('.col-main')).not.toBeNull()
+    expect(wrapper.find('[data-test="payments"]').element.closest('.col-side')).not.toBeNull()
+    expect(wrapper.find('[data-test="summary"]').element.closest('.dash-cols')).toBeNull()
+    expect(wrapper.find('[data-test="receipts"]').element.closest('.dash-cols')).toBeNull()
+    // the payment rows carry the series swatch (the method string's common
+    // mapping — 現金=cash -> var(--series-4))
+    const cashRow = wrapper.find('[data-test="payments"] [data-test="row-現金"]')
+    expect(cashRow.find('.ranked-swatch').exists()).toBe(true)
+    expect(cashRow.attributes('style')).toContain('--rank-color: var(--series-4)')
     // TASK-75 §6-4: the receipt rows are one line (date / store / labels /
     // amount) — no icon column, no sub line
     const row = wrapper.find('[data-test="receipt-101"] a.recent-row')
@@ -424,12 +446,11 @@ describe('ReceiptsPage (dashboard)', () => {
     expect([...new Set(sameDay.map((i) => i.receipt_id))]).toEqual([101, 102])
   })
 
-  // TASK-105 post-implementation revision targets for this test
-  // (web-receipts.payment-filter revised, design §4-4): the「支払方法」zone's
-  // RankedList rows carry the swatch + `--rank-color` = seriesColor（支払方法
-  // は名称 string の FNV-1a 共通写像・null 行〔その他/支払方法不明〕は
-  // var(--series-rest)・web-common.series-color-assignment）。押下トグル・
-  // chevron なし等の既存期待は不変。
+  // TASK-105 (web-receipts.payment-filter revised, design §4-4): the
+  // 「支払方法」zone's RankedList rows carry the swatch + `--rank-color` =
+  // seriesColor（支払方法は名称 string の FNV-1a 共通写像・null 行
+  // 〔その他/支払方法不明〕は var(--series-rest)・web-common.series-color-
+  // assignment）。押下トグル・chevron なし等の既存期待は不変。
   it('[covers:web-receipts.payment-filter] 支払方法の絞り込み（ランキング行トグル・フォーム select・チップ・URL・一覧と集計の両方）', async () => {
     await api.updateReceipt(1, 102, { revision: 1, set: { payment_method: 'credit_card' } })
     const list = vi.spyOn(api, 'listReceipts')
@@ -441,6 +462,11 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(cashRow.element.tagName).toBe('BUTTON')
     expect(cashRow.classes()).toContain('is-link')
     expect(cashRow.find('svg').exists()).toBe(false)
+    // TASK-105: every payment row leads with the series swatch in the
+    // method string's common mapping (現金=cash -> var(--series-4)) — a
+    // null-key aggregate row, when present, paints the rest grey
+    expect(cashRow.find('.ranked-swatch').exists()).toBe(true)
+    expect(cashRow.attributes('style')).toContain('--rank-color: var(--series-4)')
     await cashRow.trigger('click')
     await settle()
     expect(router.currentRoute.value.query.payment_method).toBe('cash')
@@ -474,9 +500,9 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(direct.wrapper.find('[data-test="chip-payment"]').text()).toBe('支払: 現金')
   })
 
-  // TASK-105: the daily section's h2 becomes a visible h2.zone-title inside
-  // .zone-head（文言・選択ロジックは不変 — the `h2` selector below keeps
-  // working post-implementation; sr-only でなくなることを期待に足すのは
+  // TASK-105 (landed): the daily section's h2 is a visible h2.zone-title
+  // inside .zone-head（文言・選択ロジックは不変 — the `h2` selector below
+  // keeps working; the visible form's expectations live on
   // web-common.zone-headings-visible 側）。
   it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）', async () => {
     const title = (w: W) => w.find('[data-test="daily"] h2').text()
@@ -530,12 +556,12 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
   })
 
-  // TASK-105 post-implementation revision target (web-shell.loading-skeleton
-  // revised, design §5-4): ReceiptsPage — the last .dash-grid user — joins
-  // the others on `.view-stack` + `.dash-cols`, so the refetch dimming is the
-  // shared `.view-stack.loading`（opacity 0.6）and no `.dash-grid.loading`
-  // rule remains; DashSkeleton's silhouette becomes the zone-block form. The
-  // assertions here（初回 skeleton・完了後の実データ・aria）are unchanged by it.
+  // TASK-105 (landed, web-shell.loading-skeleton revised, design §5-4):
+  // ReceiptsPage — the last .dash-grid user — joins the others on
+  // `.view-stack` + `.dash-cols`, so the refetch dimming is the shared
+  // `.view-stack.loading`（opacity 0.6）and no `.dash-grid.loading` rule
+  // remains. The assertions here（初回 skeleton・完了後の実データ・aria）are
+  // unchanged by it.
   it('[covers:web-shell.loading-skeleton] レシート一覧も初回 loading は skeleton で統一', async () => {
     const orig = api.listReceipts.bind(api)
     let release!: () => void
@@ -780,15 +806,15 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     return mount(RankedList, { props, global: { plugins: [router] } })
   }
 
-  // TASK-105 post-implementation revision targets for this test
-  // (web-layout.ranked-row-single-line revised, design §4-2): the row grid
-  // gains the leading 12px swatch track — the cells become .ranked-swatch ->
-  // .ranked-label -> .ranked-share -> .amount (-> chevron) in both the a and
-  // span branches, the swatch renders on EVERY row（残余行・支払方法の非リンク
-  // 行を含む）, and RankedList sets `--rank-color` = seriesColor(row.keys[0] ??
-  // null, axis)（optional axis prop・未指定なら共通写像）. The meter/diff
-  // absence and the shared a/span structure stay as asserted.
-  it('[covers:web-browse.ranked-row-link][covers:web-layout.ranked-row-single-line] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・行は1行構成（label/share/amount の細胞を a/span で共有・meter・diff列無し）', async () => {
+  // TASK-105 (web-layout.ranked-row-single-line revised, design §4-2): the
+  // row grid gains the leading 12px swatch track — the cells become
+  // .ranked-swatch -> .ranked-label -> .ranked-share -> .amount (-> chevron)
+  // in both the a and span branches, the swatch renders on EVERY row（残余
+  // 行・支払方法の非リンク行を含む）, and RankedList sets `--rank-color` =
+  // seriesColor(row.keys[0] ?? null, axis)（optional axis prop・未指定なら
+  // 共通写像）. The meter/diff absence and the shared a/span structure stay
+  // as asserted.
+  it('[covers:web-browse.ranked-row-link][covers:web-layout.ranked-row-single-line] to が非 null の行は RouterLink+行末 chevron・null と未渡しは span の非リンク行・行頭swatch全行・行は1行構成（label/share/amount の細胞を a/span で共有・meter・diff列無し）', async () => {
     const rows: StatsRow[] = [
       { keys: [11], labels: ['食費'], value: 550, share: 0.58 },
       { keys: [null], labels: ['その他'], value: 100, share: 0.1 },
@@ -803,6 +829,12 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     expect(link.attributes('href')).toBe('/x/11')
     expect(link.find('svg[aria-hidden="true"]').exists()).toBe(true)
 
+    // TASK-105: the leading swatch paints the key's series color — key 11
+    // -> ((11-1) mod 7)=slot 4; the row style carries the same --rank-color
+    // the bottom bar reads
+    expect(link.find('.ranked-swatch').exists()).toBe(true)
+    expect(link.attributes('style')).toContain('--rank-color: var(--series-4)')
+
     // TASK-75 §6-4 single-line cells: label / share / amount — no meter
     // element, no dot column, no diff column
     expect(link.find('.ranked-label').text()).toBe('食費')
@@ -813,10 +845,13 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
 
     // a row whose `to` returns null (その他 / 店不明): a plain span, no
     // chevron — but the very same cell structure (the share column stays)
+    // and the very same leading swatch, in the null key's rest grey
     const other = w.find('[data-test="row-その他"]')
     expect(other.element.tagName).toBe('SPAN')
     expect(other.attributes('href')).toBeUndefined()
     expect(other.find('svg').exists()).toBe(false)
+    expect(other.find('.ranked-swatch').exists()).toBe(true)
+    expect(other.attributes('style')).toContain('--rank-color: var(--series-rest)')
     expect(other.find('.ranked-label').text()).toBe('その他')
     expect(other.find('.ranked-share').text()).toBe('10%')
     expect(other.find('.amount').text()).toBe('100円')

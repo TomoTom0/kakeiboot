@@ -645,190 +645,210 @@ const menuItems = computed<PageMenuItem[]>(() => {
           data-test="axis-period"
         />
 
-        <section
-          class="zone"
-          :class="{ 'is-loading': win.loading.value }"
-          data-test="trend-card"
-        >
-          <h2 class="sr-only">
-            支出の推移
-          </h2>
-          <TrendWindow
-            v-if="win.result.value"
-            :stacked="win.stacked.value"
-            :granularity="win.granularity.value"
-            :span="win.window.value"
-            :current="trendCurrent"
-            :nav="win.active.value"
-            :can-prev="win.canPrev.value"
-            :can-next="win.canNext.value"
-            :window-key="win.windowKey.value"
-            :transition-name="win.transitionName.value"
-            @prev="win.prev"
-            @next="win.next"
-            @select="onTrendSelect"
-          />
-        </section>
-
-        <section
-          class="zone"
-          data-test="cross"
-        >
-          <h2 class="sr-only">
-            {{ crossTitle }}
-          </h2>
-          <p
-            v-if="crossRows.length === 0"
-            class="muted empty"
-          >
-            この期間の記録はありません。
-          </p>
-          <RankedList
-            v-else
-            :rows="crossRows"
-            :to="crossTo"
-          />
-        </section>
-
-        <section
-          v-if="ownAxis"
-          class="zone"
-          data-test="own"
-        >
-          <h2 class="sr-only">
-            {{ ownTitle }}
-          </h2>
-          <p
-            v-if="ownRows.length === 0"
-            class="muted empty"
-          >
-            この期間の記録はありません。
-          </p>
-          <RankedList
-            v-else
-            :rows="ownRows"
-            :to="ownTo"
-          />
-        </section>
-
-        <!-- the item axis's own extra zone (REVIEW-13 M-4): the price
-             movement / purchase stores / frequency of this 品名 group -->
-        <section
-          v-if="kind === 'item'"
-          class="zone"
-          data-test="item-stats"
-        >
-          <h2 class="sr-only">
-            品目の記録
-          </h2>
-          <template v-if="itemStats && itemStats.summary.count > 0">
-            <p
-              class="muted small"
-              data-test="item-summary"
+        <div class="dash-cols">
+          <div class="col-main">
+            <section
+              class="zone"
+              :class="{ 'is-loading': win.loading.value }"
+              data-test="trend-card"
             >
-              {{ itemStats.summary.count }}件・{{ formatYen(itemStats.summary.amount) }}・平均単価
-              {{ formatYen(itemStats.summary.avg_unit_price ?? 0) }}・最安
-              {{ formatYen(itemStats.summary.min_unit_price ?? 0) }}〜最高
-              {{ formatYen(itemStats.summary.max_unit_price ?? 0) }}・最終購入
-              {{ itemStats.summary.last_purchased_on ? shortDate(itemStats.summary.last_purchased_on) : '-' }}・{{
-                itemStats.summary.stores.length
-              }}店
-            </p>
-            <h3 class="sr-only">
-              価格履歴
-            </h3>
-            <ul
-              class="recent-list"
-              data-test="item-prices"
+              <div class="zone-head">
+                <h2 class="zone-title">
+                  支出の推移
+                </h2>
+              </div>
+              <TrendWindow
+                v-if="win.result.value"
+                :stacked="win.stacked.value"
+                :granularity="win.granularity.value"
+                :span="win.window.value"
+                :current="trendCurrent"
+                :nav="win.active.value"
+                :can-prev="win.canPrev.value"
+                :can-next="win.canNext.value"
+                :window-key="win.windowKey.value"
+                :transition-name="win.transitionName.value"
+                @prev="win.prev"
+                @next="win.next"
+                @select="onTrendSelect"
+              />
+            </section>
+
+            <!-- the item axis's own extra zone (REVIEW-13 M-4): the price
+               movement / purchase stores / frequency of this 品名 group -->
+            <section
+              v-if="kind === 'item'"
+              class="zone"
+              data-test="item-stats"
             >
-              <li
-                v-for="(p, i) in itemStats.prices"
-                :key="`${p.date}-${i}`"
-                data-test="item-price-row"
+              <div class="zone-head">
+                <h2 class="zone-title">
+                  品目の記録
+                </h2>
+              </div>
+              <template v-if="itemStats && itemStats.summary.count > 0">
+                <p
+                  class="muted small"
+                  data-test="item-summary"
+                >
+                  {{ itemStats.summary.count }}件・{{ formatYen(itemStats.summary.amount) }}・平均単価
+                  {{ formatYen(itemStats.summary.avg_unit_price ?? 0) }}・最安
+                  {{ formatYen(itemStats.summary.min_unit_price ?? 0) }}〜最高
+                  {{ formatYen(itemStats.summary.max_unit_price ?? 0) }}・最終購入
+                  {{ itemStats.summary.last_purchased_on ? shortDate(itemStats.summary.last_purchased_on) : '-' }}・{{
+                    itemStats.summary.stores.length
+                  }}店
+                </p>
+                <div class="zone-head">
+                  <h3 class="zone-title">
+                    価格履歴
+                  </h3>
+                </div>
+                <ul
+                  class="recent-list"
+                  data-test="item-prices"
+                >
+                  <li
+                    v-for="(p, i) in itemStats.prices"
+                    :key="`${p.date}-${i}`"
+                    data-test="item-price-row"
+                  >
+                    <span class="recent-row">
+                      <span class="recent-date">{{ shortDate(p.date) }}</span>
+                      <span class="recent-store truncate">{{ p.store_name ?? '店名なし' }}</span>
+                      <span class="amount">{{ formatYen(p.unit_price) }}</span>
+                    </span>
+                  </li>
+                </ul>
+                <div class="zone-head">
+                  <h3 class="zone-title">
+                    店別
+                  </h3>
+                </div>
+                <ul
+                  class="recent-list"
+                  data-test="item-stores"
+                >
+                  <li
+                    v-for="s in itemStats.by_store"
+                    :key="s.store_id ?? 'none'"
+                    data-test="item-store-row"
+                  >
+                    <span class="recent-row">
+                      <span class="recent-store truncate">{{ s.store_name }}</span>
+                      <span class="muted small">{{ s.count }}件・平均{{ formatYen(s.avg_unit_price ?? 0) }}</span>
+                      <span class="amount">{{ formatYen(s.amount) }}</span>
+                    </span>
+                  </li>
+                </ul>
+              </template>
+              <p
+                v-else
+                class="muted empty"
               >
-                <span class="recent-row">
-                  <span class="recent-date">{{ shortDate(p.date) }}</span>
-                  <span class="recent-store truncate">{{ p.store_name ?? '店名なし' }}</span>
-                  <span class="amount">{{ formatYen(p.unit_price) }}</span>
-                </span>
-              </li>
-            </ul>
-            <h3 class="sr-only">
-              店別
-            </h3>
-            <ul
-              class="recent-list"
-              data-test="item-stores"
-            >
-              <li
-                v-for="s in itemStats.by_store"
-                :key="s.store_id ?? 'none'"
-                data-test="item-store-row"
-              >
-                <span class="recent-row">
-                  <span class="recent-store truncate">{{ s.store_name }}</span>
-                  <span class="muted small">{{ s.count }}件・平均{{ formatYen(s.avg_unit_price ?? 0) }}</span>
-                  <span class="amount">{{ formatYen(s.amount) }}</span>
-                </span>
-              </li>
-            </ul>
-          </template>
-          <p
-            v-else
-            class="muted empty"
-          >
-            この期間の記録はありません。
-          </p>
-        </section>
-
-        <section
-          class="zone"
-          data-test="recent"
-        >
-          <div class="zone-more">
-            <h2 class="sr-only">
-              最近のレシート
-            </h2>
-            <RouterLink
-              :to="allReceiptsTo"
-              class="ibtn"
-              aria-label="すべて見る"
-              title="すべて見る"
-              data-test="all-receipts"
-            >
-              <AppIcon name="chevron-right" />
-            </RouterLink>
+                この期間の記録はありません。
+              </p>
+            </section>
           </div>
-          <p
-            v-if="recent.length === 0"
-            class="muted empty"
-          >
-            この期間の記録はありません。
-          </p>
-          <ul
-            v-else
-            class="recent-list"
-          >
-            <li
-              v-for="r in recent"
-              :key="r.receipt_id"
+
+          <div class="col-side">
+            <section
+              class="zone zone--list"
+              data-test="cross"
             >
-              <RouterLink
-                :to="{ path: `/receipts/${r.receipt_id}`, query: feedQuery }"
-                class="recent-row"
-                :data-test="`recent-${r.receipt_id}`"
+              <div class="zone-head">
+                <h2 class="zone-title">
+                  {{ crossTitle }}
+                </h2>
+              </div>
+              <p
+                v-if="crossRows.length === 0"
+                class="muted empty"
               >
-                <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-                <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-                <span class="row-labels"><LabelDots
-                  :labels="r.labels ?? []"
-                  compact
-                /></span>
-                <span class="amount">{{ formatYen(r.amount) }}</span>
-              </RouterLink>
-            </li>
-          </ul>
-        </section>
+                この期間の記録はありません。
+              </p>
+              <RankedList
+                v-else
+                :rows="crossRows"
+                :to="crossTo"
+                :axis="crossAxis"
+              />
+            </section>
+
+            <section
+              v-if="ownAxis"
+              class="zone zone--list"
+              data-test="own"
+            >
+              <div class="zone-head">
+                <h2 class="zone-title">
+                  {{ ownTitle }}
+                </h2>
+              </div>
+              <p
+                v-if="ownRows.length === 0"
+                class="muted empty"
+              >
+                この期間の記録はありません。
+              </p>
+              <RankedList
+                v-else
+                :rows="ownRows"
+                :to="ownTo"
+                :axis="ownAxis ?? undefined"
+              />
+            </section>
+
+            <section
+              class="zone zone--list"
+              data-test="recent"
+            >
+              <div class="zone-head">
+                <h2 class="zone-title">
+                  最近のレシート
+                </h2>
+                <RouterLink
+                  :to="allReceiptsTo"
+                  class="ibtn"
+                  aria-label="すべて見る"
+                  title="すべて見る"
+                  data-test="all-receipts"
+                >
+                  <AppIcon name="chevron-right" />
+                </RouterLink>
+              </div>
+              <p
+                v-if="recent.length === 0"
+                class="muted empty"
+              >
+                この期間の記録はありません。
+              </p>
+              <ul
+                v-else
+                class="recent-list"
+              >
+                <li
+                  v-for="r in recent"
+                  :key="r.receipt_id"
+                >
+                  <RouterLink
+                    :to="{ path: `/receipts/${r.receipt_id}`, query: feedQuery }"
+                    class="recent-row"
+                    :data-test="`recent-${r.receipt_id}`"
+                  >
+                    <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
+                    <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
+                    <span class="row-labels"><LabelDots
+                      :labels="r.labels ?? []"
+                      compact
+                    /></span>
+                    <span class="amount">{{ formatYen(r.amount) }}</span>
+                  </RouterLink>
+                </li>
+              </ul>
+            </section>
+          </div>
+        </div>
       </div>
       <DashSkeleton v-else-if="loading" />
     </template>

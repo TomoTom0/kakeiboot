@@ -297,20 +297,19 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
   })
 
-  // TASK-105 post-implementation revision targets for this test
-  // (web-home.trend-window description revised — the window / offset / fetch
-  // expectations above and below stay untouched, design §4-1): the stacked
-  // assembly reads `seriesColor(s.key, axis)` instead of the PALETTE array —
-  // for this fixture's series keys 0..4 the colors become
-  // ['var(--series-7)', 'var(--series-1)', 'var(--series-2)', 'var(--series-3)',
-  //  'var(--series-4)'] (key 0: (0-1 mod 7 + 7) % 7 = 6) and the residual
-  // 「ほか」segment var(--series-rest); value-0 series segments are omitted
-  // from the assembly (the zero bucket below then holds only the >0 series);
-  // the PALETTE constant itself is deleted from trendWindow.ts.
-  it('[covers:web-home.trend-window] stacked組立はcomposable集約: series上位5+残余「ほか」segment+PALETTE割当（--c1〜c5・残余は--c-rest・ゼロ窓は残余なし）', async () => {
-    // seven series in the endpoint's total order: the top five keep the
-    // palette, the tail (20 + 10) folds into the grey rest segment
-    // （実装後は上記 TASK-105 注記の seriesColor 写像値へ期待値を改訂）
+  // TASK-105 (web-home.trend-window description revised — the window /
+  // offset / fetch expectations above and below stay untouched, design
+  // §4-1): the stacked assembly reads `seriesColor(s.key, axis)` instead of
+  // the old PALETTE array — for this fixture's series keys 0..4 the colors
+  // become ['var(--series-7)', 'var(--series-1)', 'var(--series-2)',
+  // 'var(--series-3)', 'var(--series-4)'] (key 0: (0-1 mod 7 + 7) % 7 = 6)
+  // and the residual「ほか」segment var(--series-rest); value-0 series
+  // segments are omitted from the assembly (the zero bucket below then
+  // holds only the >0 series); the PALETTE constant itself is gone from
+  // trendWindow.ts.
+  it('[covers:web-home.trend-window] stacked組立はcomposable集約: series上位5+残余「ほか」segment+色はseriesColor(s.key, axis)写像（残余は--series-rest・値0セグメント省略・ゼロ窓は残余なし）', async () => {
+    // seven series in the endpoint's total order: the top five keep their
+    // seriesColor slot, the tail (20 + 10) folds into the grey rest segment
     const res: AnalysisTrendResult = {
       axis: 'category',
       metric: 'amount',
@@ -334,16 +333,17 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     const segs = win.stacked.value[0]!.segments
     expect(segs.map((s: Seg) => s.label)).toEqual(['s0', 's1', 's2', 's3', 's4', 'ほか'])
     expect(segs.map((s: Seg) => s.color)).toEqual([
-      'var(--c1)',
-      'var(--c2)',
-      'var(--c3)',
-      'var(--c4)',
-      'var(--c5)',
-      'var(--c-rest)',
+      'var(--series-7)', // key 0: ((0-1) mod 7 + 7) % 7 = 6
+      'var(--series-1)',
+      'var(--series-2)',
+      'var(--series-3)',
+      'var(--series-4)',
+      'var(--series-rest)',
     ])
     expect(segs.at(-1)!.value).toBe(30)
-    // a zero bucket keeps the five series cells but grows no rest segment
-    expect(win.stacked.value[1]!.segments.map((s: Seg) => s.label)).toEqual(['s0', 's1', 's2', 's3', 's4'])
+    // a zero bucket renders no segment at all: every top series holds 0 and
+    // the omitted value-0 assembly leaves the column empty (no rest either)
+    expect(win.stacked.value[1]!.segments.map((s: Seg) => s.label)).toEqual([])
   })
 
   it('[covers:web-home.trend-window-floor] 全0打ち切り: ページ送り先のoffset=6窓は記録があれば有効のまま・offset=12の全0窓でprev disable・nextでoffset=6へ復帰・初期窓（offset=0）の全0ではdisableしない', async () => {

@@ -217,71 +217,82 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
         :total="totals.amount"
       />
 
-      <section
-        class="zone"
-        :class="{ 'is-loading': win.loading.value }"
-        data-test="trend-card"
-      >
-        <h2 class="sr-only">
-          支出の推移
-        </h2>
-        <TrendWindow
-          v-if="win.result.value"
-          :stacked="win.stacked.value"
-          :granularity="win.granularity.value"
-          :span="win.window.value"
-          :current="trendCurrent"
-          :nav="win.active.value"
-          :can-prev="win.canPrev.value"
-          :can-next="win.canNext.value"
-          :window-key="win.windowKey.value"
-          :transition-name="win.transitionName.value"
-          @prev="win.prev"
-          @next="win.next"
-          @select="onTrendSelect"
-        />
-      </section>
-
-      <section
-        class="zone"
-        data-test="ranking"
-      >
-        <h2 class="sr-only">
-          店別
-        </h2>
-        <!-- the store-category chip row (single select, D28 §4-2): narrows
-             the ranking through the store_category wiring -->
-        <div
-          v-if="storeCategories.length"
-          class="store-cats"
-          data-test="store-categories"
-          role="group"
-          aria-label="店カテゴリ"
-        >
-          <button
-            v-for="p in storeCategories"
-            :key="p"
-            type="button"
-            class="filter-chip-btn store-cat"
-            :aria-pressed="storeCategory === p"
-            data-test="store-category"
-            @click="toggleStoreCategory(p)"
+      <div class="dash-cols">
+        <div class="col-main">
+          <section
+            class="zone"
+            :class="{ 'is-loading': win.loading.value }"
+            data-test="trend-card"
           >
-            {{ p }}
-          </button>
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の推移
+              </h2>
+            </div>
+            <TrendWindow
+              v-if="win.result.value"
+              :stacked="win.stacked.value"
+              :granularity="win.granularity.value"
+              :span="win.window.value"
+              :current="trendCurrent"
+              :nav="win.active.value"
+              :can-prev="win.canPrev.value"
+              :can-next="win.canNext.value"
+              :window-key="win.windowKey.value"
+              :transition-name="win.transitionName.value"
+              @prev="win.prev"
+              @next="win.next"
+              @select="onTrendSelect"
+            />
+          </section>
         </div>
-        <p
-          v-if="rows.length === 0"
-          class="muted empty"
-        >
-          この期間の記録はありません。
-        </p>
-        <RankedList
-          v-else
-          :rows="rows"
-          :to="rowTo"
-        />
-      </section>
+
+        <div class="col-side">
+          <section
+            class="zone zone--list"
+            data-test="ranking"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                店別
+              </h2>
+            </div>
+            <!-- the store-category chip row (single select, D28 §4-2): narrows
+                 the ranking through the store_category wiring -->
+            <div
+              v-if="storeCategories.length"
+              class="store-cats"
+              data-test="store-categories"
+              role="group"
+              aria-label="店カテゴリ"
+            >
+              <button
+                v-for="p in storeCategories"
+                :key="p"
+                type="button"
+                class="filter-chip-btn store-cat"
+                :aria-pressed="storeCategory === p"
+                data-test="store-category"
+                @click="toggleStoreCategory(p)"
+              >
+                {{ p }}
+              </button>
+            </div>
+            <p
+              v-if="rows.length === 0"
+              class="muted empty"
+            >
+              この期間の記録はありません。
+            </p>
+            <RankedList
+              v-else
+              :rows="rows"
+              :to="rowTo"
+              axis="store"
+            />
+          </section>
+        </div>
+      </div>
     </div>
     <DashSkeleton v-else-if="loading" />
   </div>

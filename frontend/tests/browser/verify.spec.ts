@@ -1038,7 +1038,10 @@ test.describe('trend fit at the 2-column boundary (768x780)', () => {
     logPageIssues(page, 'trend-768')
     await installApiStub(page)
     // the year window is the densest: 12 bars in the narrowest col-main the
-    // layout ever produces (~372px = 768 - 24rem col-side - 0.75rem gap)
+    // layout ever produces (~340px = 768 - 2x1rem .app-main padding [the
+    // max-width: 899px band's] - 24rem col-side - 0.75rem gap — the shell
+    // padding is a pre-TASK-105 constant the implementation keeps, so the
+    // width expectation is computed from the effective content width)
     await page.goto('/?year=2026')
     await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
     await page.waitForLoadState('networkidle')
@@ -1062,8 +1065,8 @@ test.describe('trend fit at the 2-column boundary (768x780)', () => {
     })
     const dump = JSON.stringify(m)
     expect(m.barCount, dump).toBe(12)
-    expect(m.mainW, dump).toBeGreaterThanOrEqual(360)
-    expect(m.mainW, dump).toBeLessThanOrEqual(380)
+    expect(m.mainW, dump).toBeGreaterThanOrEqual(328)
+    expect(m.mainW, dump).toBeLessThanOrEqual(352)
     // the zone never widens past its column
     expect(m.cardW, dump).toBeLessThanOrEqual(m.mainW + 2)
     expect(m.hscroll, dump).toBe(true)
