@@ -5,12 +5,13 @@
 //
 // The mapping is pure arithmetic on the key alone — the window, the period,
 // the screen and the visible top-N membership never enter — so an added key
-// can never recolor an existing one. A number key (a category / store /
-// label id) fills the slots in id-ascending cyclic order ((id - 1) mod 7),
-// a string key (an item name, a payment method) hashes through FNV-1a, and
-// null (未分類 / 店不明) falls to the unattributed rest color. The label axis
-// reads the managed label palette's fixed table instead (1..5 in the
-// LABEL_COLORS order; out-of-range ids fall back to the number mapping).
+// can never recolor an existing one. A number key (a category / store id)
+// fills the slots in id-ascending cyclic order ((id - 1) mod 7), a string
+// key (an item name, a payment method) hashes through FNV-1a, and null
+// (未分類 / 店不明) falls to the unattributed rest color. The label axis
+// reads the managed label palette's fixed table instead — keyed by the color
+// NAME string (the live analysis key), with the numeric 1..5 ids kept as a
+// compat path; every other key falls back to the common mappings.
 //
 // The return value is always a CSS custom property reference — the actual
 // colors live in styles.css (--series-1..7 / --series-rest, light and dark).
@@ -22,9 +23,20 @@ export const SERIES_SLOT_COUNT = 7
 /** the fixed rest / unattributed color */
 export const SERIES_REST = 'var(--series-rest)'
 
-/** the label axis's managed-color table: label ids 1..5 map onto the
- * LABEL_COLORS order (red / yellow / green / blue / purple — shared/labels) */
-const LABEL_COLORS_TABLE: Record<number, string> = {
+/** the label axis's managed-color table. The live analysis key is the color
+ * NAME string ('red' | 'yellow' | 'green' | 'blue' | 'purple' — the backend
+ * groups labels BY color, stats.rs GROUP BY rl.color, and the web mock
+ * mirrors it), so the name table is the primary path. The numeric 1..5 ids
+ * stay as a compat path (the design's original id table in the LABEL_COLORS
+ * order); every other key falls through to the common mappings */
+const LABEL_NAMES_TABLE: Record<string, string> = {
+  red: 'var(--label-red)',
+  yellow: 'var(--label-yellow)',
+  green: 'var(--label-green)',
+  blue: 'var(--label-blue)',
+  purple: 'var(--label-purple)',
+}
+const LABEL_IDS_TABLE: Record<number, string> = {
   1: 'var(--label-red)',
   2: 'var(--label-yellow)',
   3: 'var(--label-green)',
@@ -34,9 +46,16 @@ const LABEL_COLORS_TABLE: Record<number, string> = {
 
 export function seriesColor(key: string | number | null, axis?: AnalysisAxis): string {
   if (key === null) return SERIES_REST
-  if (axis === 'label' && typeof key === 'number') {
-    const managed = LABEL_COLORS_TABLE[key]
-    if (managed !== undefined) return managed
+  if (axis === 'label') {
+    if (typeof key === 'string') {
+      const managed = LABEL_NAMES_TABLE[key]
+      if (managed !== undefined) return managed
+      // an out-of-table name falls through to the FNV common mapping
+    } else {
+      const managed = LABEL_IDS_TABLE[key]
+      if (managed !== undefined) return managed
+      // an out-of-range id falls through to the number mapping
+    }
   }
   if (typeof key === 'number') {
     // the id-ascending cyclic fill as key-local arithmetic: negatives (never

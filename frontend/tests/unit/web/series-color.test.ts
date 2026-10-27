@@ -60,9 +60,22 @@ describe('seriesColor (lib, TASK-105)', () => {
     expect(seriesColor('credit_card')).toBe('var(--series-4)') // 964717379 % 7 = 3
   })
 
-  it('[covers:web-common.series-color-assignment] label軸は管理色の固定表（1..5→red/yellow/green/blue/purple正規順）で範囲外IDはnumber写像へfallback', () => {
-    // label_id は管理ラベルの色順序（LABEL_COLORS）と一致する固定表。範囲外の
-    // ID は共通 number 写像に落ちる
+  it('[covers:web-common.series-color-assignment] label軸は管理色の固定表（実API key=色名string red/yellow/green/blue/purple→var(--label-*)・number 1..5は互換）で範囲外keyは共通写像へfallback', () => {
+    // the live label-axis key is the color NAME string (backend stats.rs
+    // groups BY rl.color; the web mock mirrors it, mock.ts key: color name)
+    // — the name table is the primary path
+    expect(seriesColor('red', 'label')).toBe('var(--label-red)')
+    expect(seriesColor('yellow', 'label')).toBe('var(--label-yellow)')
+    expect(seriesColor('green', 'label')).toBe('var(--label-green)')
+    expect(seriesColor('blue', 'label')).toBe('var(--label-blue)')
+    expect(seriesColor('purple', 'label')).toBe('var(--label-purple)')
+    // an out-of-table name falls back to the FNV common mapping on the
+    // label axis too (a color the palette does not manage)
+    expect(seriesColor('orange', 'label')).toBe(seriesColor('orange'))
+    expect(seriesColor('orange', 'label')).toMatch(/^var\(--series-\d\)$/)
+    // the numeric 1..5 ids stay as the compat path (the design's original
+    // id table in the LABEL_COLORS order); out-of-range ids fall to the
+    // number mapping
     expect(seriesColor(1, 'label')).toBe('var(--label-red)')
     expect(seriesColor(2, 'label')).toBe('var(--label-yellow)')
     expect(seriesColor(3, 'label')).toBe('var(--label-green)')
@@ -71,7 +84,9 @@ describe('seriesColor (lib, TASK-105)', () => {
     // out-of-range ids fall back to the number mapping (9 -> slot 2)
     expect(seriesColor(9, 'label')).toBe(seriesColor(9))
     expect(seriesColor(9, 'label')).toBe('var(--series-2)')
-    // a non-label axis never reads the label table
+    // a non-label axis never reads the label table (not for names either:
+    // a color name outside the label axis is just another string key)
+    expect(seriesColor('red')).toBe(seriesColor('red'))
     expect(seriesColor(1, 'category')).toBe('var(--series-1)')
     expect(seriesColor(2, 'store')).toBe('var(--series-2)')
   })

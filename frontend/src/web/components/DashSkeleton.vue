@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Loading placeholder for the dash-grid screens (TASK-39 D, TASK-89: the
-// reading screens are a one-column zone stack now): the same silhouette as
+// Loading placeholder for the dashboard screens (TASK-39 D, TASK-89 /
+// TASK-105: the reading screens are a zone stack): the same silhouette as
 // the loaded page (headline block + trend bars + ruled rows), flat
 // single-color blocks — no shimmer, no per-item motion. Decorative blocks
 // are aria-hidden; the screen-reader text carries the loading state.
