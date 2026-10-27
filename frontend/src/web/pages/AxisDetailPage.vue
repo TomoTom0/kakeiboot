@@ -193,7 +193,10 @@ async function resolveRoute(l: number): Promise<boolean> {
   }
   // the name-keyed axes: no resolution, an empty dataset still draws
   if (kind.value === 'item') {
-    const name = decodeURIComponent(String(route.params.name ?? ''))
+    // the router already decodes params — a second decode breaks item names
+    // holding a literal percent (`100%果汁` → URIError). Encoding belongs to
+    // the link builders only (PR#1 P2)
+    const name = String(route.params.name ?? '')
     view.value = {
       title: name,
       subject: { item_query: name },

@@ -2162,6 +2162,125 @@ async fn analysis_stacked_trend_matrix() {
 }
 
 #[tokio::test]
+// [covers:web-data-api.analysis-trend-filter-predicates]
+async fn analysis_stacked_trend_filters_apply() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    insert_store(&pool, 2, 1, "B薬局", "bやっきょく").await;
+    // the selected store 100/300 against elsewhere 50/70 in the same buckets:
+    // filter predicates must filter ROWS — the old axis_bucket_totals SQL
+    // appended them after GROUP BY, so SQLite folded them into the grouping
+    // expression and summed unrelated spending into the totals (PR#1 P1)
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-05", 100).await;
+    insert_receipt_full(&pool, 102, 1, 2, "2026-10-05", 50).await;
+    insert_receipt_full(&pool, 103, 1, 1, "2026-10-13", 300).await;
+    insert_receipt_full(&pool, 104, 1, 2, "2026-10-13", 70).await;
+
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?axis=store&store_id=1&granularity=week&from=2026-10-05&to=2026-10-18",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        v["buckets"],
+        serde_json::json!(["2026-10-05", "2026-10-12"])
+    );
+    let series = v["series"].as_array().unwrap();
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0]["label"], "Aマート");
+    assert_eq!(series[0]["values"], serde_json::json!([100, 300]));
+    // bucket_totals cover the FILTERED axis only: [100, 300], not [150, 370]
+    assert_eq!(v["bucket_totals"], serde_json::json!([100, 300]));
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-trend-label-unlabeled-buckets]
+async fn analysis_stacked_trend_label_axis_unlabeled_buckets() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    // a labeled receipt per bucket and unlabeled spending beside it: the
+    // unlabeled tail query of axis_bucket_totals used to sit after GROUP BY
+    // (broken even with no user filter), dropping that spending from every
+    // bucket (PR#1 P1)
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-05", 100).await;
+    insert_receipt_label(&pool, 101, "red").await;
+    insert_receipt_full(&pool, 102, 1, 1, "2026-10-12", 400).await;
+
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?axis=label&granularity=week&from=2026-10-05&to=2026-10-18",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        v["bucket_totals"],
+        serde_json::json!([100, 400]),
+        "labeled + unlabeled per bucket"
+    );
+    let series = v["series"].as_array().unwrap();
+    assert_eq!(series.len(), 2, "ラベルなし 400 > 赤 100");
+    // the unlabeled NULL series carries its actual bucket cells
+    assert_eq!(series[0]["key"], serde_json::Value::Null);
+    assert_eq!(series[0]["label"], "ラベルなし");
+    assert_eq!(series[0]["values"], serde_json::json!([0, 400]));
+    assert_eq!(series[1]["key"], "red");
+    assert_eq!(series[1]["values"], serde_json::json!([100, 0]));
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-trend-null-key]
+async fn analysis_stacked_trend_null_key_series() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    // one categorized receipt per bucket plus 未分類 spending: the ranked
+    // top holds BOTH a solid key and the NULL key, so the matrix restriction
+    // must carry the IS NULL alternative (a plain IN cannot match NULL rows
+    // and the 未分類 series zero-fills — PR#1 P2). 食費 comes from the seed
+    let cat: i64 =
+        sqlx::query_scalar("SELECT id FROM item_categories WHERE ledger_id = 1 AND name = '食費'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    insert_receipt_full(&pool, 101, 1, 1, "2026-10-05", 100).await;
+    insert_receipt_full(&pool, 102, 1, 1, "2026-10-05", 500).await;
+    insert_receipt_full(&pool, 103, 1, 1, "2026-10-12", 300).await;
+    insert_receipt_full(&pool, 104, 1, 1, "2026-10-12", 50).await;
+    for id in [102, 104] {
+        sqlx::query("UPDATE receipt_items SET category_id = ? WHERE receipt_id = ?")
+            .bind(cat)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let v = body_json(
+        c.get(
+            &router,
+            "/api/ledgers/1/analysis/trend?granularity=week&from=2026-10-05&to=2026-10-18",
+        )
+        .await,
+    )
+    .await;
+    let series = v["series"].as_array().unwrap();
+    assert_eq!(series.len(), 2, "食費 550 > 未分類 400");
+    assert_eq!(series[0]["label"], "食費");
+    assert_eq!(series[0]["values"], serde_json::json!([500, 50]));
+    assert_eq!(series[1]["key"], serde_json::Value::Null);
+    assert_eq!(series[1]["label"], "未分類");
+    assert_eq!(series[1]["values"], serde_json::json!([100, 300]));
+    assert_eq!(v["bucket_totals"], serde_json::json!([600, 350]));
+}
+
+#[tokio::test]
 // [covers:web-data-api.analysis-item-stats]
 async fn analysis_item_stats_endpoint() {
     let (router, pool) = setup().await;

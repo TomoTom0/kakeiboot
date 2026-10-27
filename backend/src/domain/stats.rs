@@ -1238,11 +1238,27 @@ async fn axis_matrix(
         return Ok(out);
     }
     let key = axis.key_expr(filters);
+    // the IN restriction compares against the ranking's CAST(... AS TEXT)
+    // keys: key_expr can be an affinity-less expression (COALESCE for
+    // category_top_id), where a text bind never matches the raw integer —
+    // CAST both sides to TEXT. It also carries a NULL alternative: a ranked
+    // NULL key (未分類 / store-less rows) cannot match IN, and without its
+    // rows the series zero-fills every bucket while its whole-range total
+    // stays nonzero (PR#1 P2). An all-NULL top reduces to IS NULL alone —
+    // the bare `IN ()` SQLite tolerates is an always-false predicate with
+    // the same zero-fill corruption
+    let in_pred = if solid.is_empty() {
+        format!("{key} IS NULL")
+    } else if top.iter().any(|k| k.is_none()) {
+        format!("(CAST({key} AS TEXT) IN ({ph}) OR {key} IS NULL)")
+    } else {
+        format!("CAST({key} AS TEXT) IN ({ph})")
+    };
     let sql = format!(
         "SELECT {b_expr} AS \"b!: String\", CAST({key} AS TEXT) AS k,
                 SUM(f.amount_incl) AS \"a!: i64\", COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
          FROM v_item_facts f
-         WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{} AND {key} IN ({ph})
+         WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{} AND {in_pred}
          GROUP BY 1, 2",
         filt.0
     );
@@ -1269,19 +1285,25 @@ async fn axis_bucket_totals(
     b_expr: &str,
     filt: &(String, Vec<Bind>),
 ) -> sqlx::Result<Vec<(String, i64, i64)>> {
-    let base = |table: &str| {
+    // the WHERE tail (filters + the label axis's NOT EXISTS) is composed
+    // INSIDE the clause: appending predicates after `GROUP BY 1` makes SQLite
+    // parse them as part of the grouping expression instead of row filters
+    // (PR#1 P1 — a filtered trend silently summed unrelated buckets)
+    let base = |table: &str, tail: &str| {
         format!(
             "SELECT {b_expr} AS \"b!: String\", COALESCE(SUM(f.amount_incl), 0) AS \"a!: i64\",
                     COUNT(DISTINCT f.receipt_id) AS \"c!: i64\"
              FROM {table}
-             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?
+             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ?{tail}
              GROUP BY 1"
         )
     };
     if axis == Axis::Label {
-        let labeled = base("v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id");
-        let sql = format!("{labeled}{}", filt.0);
-        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
+        let labeled = base(
+            "v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id",
+            &filt.0,
+        );
+        let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(labeled))
             .bind(ledger_id)
             .bind(fmt_date(r.from))
             .bind(fmt_date(r.to));
@@ -1291,11 +1313,11 @@ async fn axis_bucket_totals(
             .into_iter()
             .map(|(b, a, c)| (b, (a, c)))
             .collect();
-        let unlabeled = format!(
-            "{} AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id){}",
-            base("v_item_facts f"),
+        let unlabeled_tail = format!(
+            " AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id){}",
             filt.0
         );
+        let unlabeled = base("v_item_facts f", &unlabeled_tail);
         let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(unlabeled))
             .bind(ledger_id)
             .bind(fmt_date(r.from))
@@ -1307,7 +1329,7 @@ async fn axis_bucket_totals(
         }
         return Ok(merged.into_iter().map(|(b, (a, c))| (b, a, c)).collect());
     }
-    let sql = format!("{}{}", base("v_item_facts f"), filt.0);
+    let sql = base("v_item_facts f", &filt.0);
     let q = sqlx::query_as::<_, (String, i64, i64)>(sqlx::AssertSqlSafe(sql))
         .bind(ledger_id)
         .bind(fmt_date(r.from))

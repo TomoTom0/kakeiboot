@@ -273,6 +273,17 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
     expect(emptyZone.find('[data-test="item-summary"]').exists()).toBe(false)
   })
 
+  // [covers:web-axis.item-param-raw]
+  it('品目名に%を含むURLでもparamはそのまま品名になる（router decode済みの二重decode禁止・PR#1 P2）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const spy = vi.spyOn(api, 'getAnalysisItem')
+    // the link builder encodes once and the router decodes once: a literal %
+    // in the name must survive both (the old second decode threw URIError)
+    const { wrapper } = await mountApp(`/axes/item/${encodeURIComponent('100%果汁')}?month=2026-10`)
+    expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ item_query: '100%果汁' }))
+    expect(wrapper.find('[data-test="page-chips"]').text()).toContain('品目: 100%果汁')
+  })
+
   it('店軸は ?category= チップを出さない（extraFilters と同じく効いていない絞り込みは見せない・REVIEW-13 L-2）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/axes/store/1?month=2026-10&category=食費')

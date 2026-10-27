@@ -179,7 +179,21 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
     const a = buildArgs()
     if (a === null) return
     const key = keyOf(a)
-    if (key === inFlight || key === lastDone) return
+    if (key === inFlight) return
+    if (key === lastDone) {
+      // returning to the cached window must still invalidate a pending
+      // fetch for other args (prev pressed, then next before the response
+      // lands): the plain early return leaves seq untouched, so the stale
+      // response passes the sequence check and replaces the cached chart.
+      // Bump seq past it and take over the cleanup its finally would have
+      // done — loading off, inFlight clear (PR#1 P2)
+      if (inFlight !== null) {
+        seq++
+        inFlight = null
+        loading.value = false
+      }
+      return
+    }
     inFlight = key
     loading.value = true
     const n = ++seq

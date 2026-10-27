@@ -387,6 +387,34 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.window.value).toEqual(['2024-05-01', '2024-10-31'])
     expect(win.canPrev.value).toBe(false) // the paged-to window is all zero
   })
+
+  // [covers:web-home.trend-window-cache-return]
+  it('prev発行中にnextで初期窓へ戻る: cache復帰のguardはpending fetchを無効化しstale responseでchartを置き換えない（PR#1 P2）', async () => {
+    const win = await mountWindow()
+    const initial = win.result.value
+    expect(initial).not.toBeNull()
+    // window B's fetch hangs until released
+    const stale: AnalysisTrendResult = { ...initial!, buckets: ['stale-window'] }
+    let release!: (v: AnalysisTrendResult) => void
+    vi.spyOn(api, 'getAnalysisTrend').mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    )
+    win.prev()
+    expect(win.loading.value).toBe(true)
+    // back to the cached initial window while B is still in flight
+    win.next()
+    expect(win.offset.value).toBe(0)
+    expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
+    // the cached return took over the pending fetch's cleanup: loading is
+    // off and inFlight cleared (a later prev re-issues a real fetch)
+    expect(win.loading.value).toBe(false)
+    release(stale)
+    await settle()
+    // the stale B response was invalidated by the seq bump: the chart keeps
+    // the cached initial window's result (reference identity, not a copy)
+    expect(win.result.value).toBe(initial)
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+  })
 })
 
 describe('TrendWindow (component, TASK-104)', () => {
