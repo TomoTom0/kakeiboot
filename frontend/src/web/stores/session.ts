@@ -16,13 +16,10 @@ export const useSessionStore = defineStore('web-session', () => {
     () => me.value?.ledgers.find((l) => l.id === selectedLedgerId.value) ?? null,
   )
   const selectedLedgerColor = computed(() => selectedLedger.value?.color ?? null)
-  // Whether the default ledger is the user's own (owner): the invite nav
-  // item and the invite form show on this condition (the same check the
-  // backend applies to invite issuing).
-  const isDefaultLedgerOwner = computed(
-    () =>
-      !!me.value?.ledgers.find((l) => l.id === me.value?.default_ledger_id && l.role === 'owner'),
-  )
+  // Ledgers the user may share (TASK-78): the owner memberships in me.ledgers
+  // order (id ascending) — the sharing card shows when this is non-empty and
+  // the issue dialog lists them as the target choices.
+  const ownedLedgers = computed(() => me.value?.ledgers.filter((l) => l.role === 'owner') ?? [])
 
   function setMe(value: Me): void {
     me.value = value
@@ -57,6 +54,15 @@ export const useSessionStore = defineStore('web-session', () => {
     me.value = { ...me.value, ledgers: me.value.ledgers.map((l) => (l.id === id ? { ...l, name } : l)) }
   }
 
+  /** Move the user-level default ledger (PUT /api/auth/me/default-ledger
+   * succeeded, TASK-13): the badge moves on the settings list and future
+   * sessions / grants start from the new ledger. The current selection and
+   * the per-grant active ledger stay where they are (spec_auth.md 6-1). */
+  function setDefaultLedger(id: number): void {
+    if (!me.value) return
+    me.value = { ...me.value, default_ledger_id: id }
+  }
+
   /** Open the step-up dialog; resolves after a successful re-auth. */
   function requestStepUp(): Promise<void> {
     stepUpOpen.value = true
@@ -80,12 +86,13 @@ export const useSessionStore = defineStore('web-session', () => {
     selectedLedgerId,
     selectedLedger,
     selectedLedgerColor,
-    isDefaultLedgerOwner,
+    ownedLedgers,
     stepUpOpen,
     setMe,
     loadMe,
     clear,
     renameLedger,
+    setDefaultLedger,
     requestStepUp,
     finishStepUp,
   }

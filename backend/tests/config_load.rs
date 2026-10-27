@@ -332,10 +332,12 @@ note_total_max_chars = 1000
 }
 
 // [covers:auth-invitation.register-ttl-config]
+// [covers:auth-invitation.invite-ttl-config]
 #[test]
 fn register_ttl_hours_config() {
-    // 1. every environment's auth.toml carries register_ttl_hours = 24
-    //    (deny_unknown_fields: the key is mandatory once the code knows it)
+    // 1. every environment's auth.toml carries the web-issued TTLs extended
+    //    by TASK-46 (register 24 -> 168, invite 72 -> 168)
+    //    (deny_unknown_fields: the keys are mandatory once the code knows them)
     let tomls = env_auth_tomls();
     assert_eq!(tomls.len(), 3, "dev / stg / prod");
     for (env, text) in &tomls {
@@ -351,7 +353,15 @@ fn register_ttl_hours_config() {
             .unwrap_or_else(|| {
                 panic!("configs/{env}/auth.toml register_ttl_hours is not an integer")
             });
-        assert_eq!(hours, 24, "{env}");
+        assert_eq!(hours, 168, "register ttl in {env}");
+        let invite = invitation
+            .get("invite_ttl_hours")
+            .unwrap_or_else(|| panic!("configs/{env}/auth.toml is missing invite_ttl_hours"))
+            .as_integer()
+            .unwrap_or_else(|| {
+                panic!("configs/{env}/auth.toml invite_ttl_hours is not an integer")
+            });
+        assert_eq!(invite, 168, "invite ttl in {env}");
     }
 
     // 2. the key is a known field and the default 24 resolves cleanly
@@ -367,5 +377,30 @@ fn register_ttl_hours_config() {
     assert!(
         zero.auth.resolve("/mcp").is_err(),
         "register_ttl_hours = 0 must be a config error"
+    );
+}
+
+// [covers:app-config.data-io]
+#[test]
+fn data_io_section_in_every_env() {
+    // 1. every environment's app.toml carries the TASK-58 [data_io] caps
+    //    (deny_unknown_fields: the section is mandatory once the code knows it)
+    for env in ["dev", "stg", "prod"] {
+        let dir = common::repo_config_dir().join(format!("../{env}"));
+        let cfg = Config::load(&dir).unwrap_or_else(|e| panic!("configs/{env}: {e}"));
+        assert_eq!(cfg.app.data_io.max_payload_bytes, 67_108_864, "{env}");
+        assert_eq!(cfg.app.data_io.max_receipts, 5000, "{env}");
+        assert_eq!(cfg.app.data_io.max_items_total, 50_000, "{env}");
+    }
+
+    // 2. startup validation: max_receipts = 0 is a config error
+    let base = std::fs::read_to_string(common::repo_config_dir().join("app.toml")).unwrap();
+    let bad = base.replace("max_receipts = 5000", "max_receipts = 0");
+    assert!(
+        matches!(
+            budget_book::config::parse_app(&bad),
+            Err(budget_book::config::ConfigError::Invalid(_))
+        ),
+        "max_receipts = 0 must be rejected"
     );
 }

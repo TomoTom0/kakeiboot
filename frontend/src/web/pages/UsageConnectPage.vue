@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import consentPng from '../assets/usage/consent.png'
 import loginPng from '../assets/usage/login.png'
+import AppIcon from '../components/AppIcon.vue'
 import ConnectFlow from '../components/usage/ConnectFlow.vue'
 import UsageFigure from '../components/usage/UsageFigure.vue'
 
@@ -13,10 +14,20 @@ import UsageFigure from '../components/usage/UsageFigure.vue'
 // verbatim copy of the backend scope_description so the explanation reads
 // against the consent screenshot (F5). The ChatGPT-side figures (F2/F6) are
 // placeholders until the real-device check supplies the screenshots.
+// TASK-48: the copy success is the button's own icon swap (copy → check with
+// a pop, .copy-btn.is-done) — no text row joins the URL box, so the box keeps
+// its height; the spoken confirmation is the sr-only status beside it.
+// TASK-81: after the URL box, step-1 carries the ChatGPT-side sub steps
+// (ol.usage-substeps) whose first item links to https://chatgpt.com/ — the
+// connector-add deeplink is undocumented, so the link plus the sub step
+// wording is the practical ceiling. The wording is provisional (specific
+// menu names) until the real-device check generalizes it (design §3.2).
 const url = `${location.origin}/mcp`
 const copied = ref(false)
 const copyFailed = ref(false)
 let restoreTimer: ReturnType<typeof setTimeout> | undefined
+
+const copyLabel = computed(() => (copied.value ? 'コピーしました' : 'URL をコピー'))
 
 async function copyUrl(): Promise<void> {
   copyFailed.value = false
@@ -56,7 +67,7 @@ onUnmounted(() => clearTimeout(restoreTimer))
         <li data-test="step-1">
           <h2>ChatGPT に接続URLを登録する</h2>
           <p>
-            ChatGPT の設定からコネクタ（MCP）の追加画面を開き、下の URL を入力します。スマホの ChatGPT アプリでも同じ手順で接続できます。
+            下の URL をコピーして、ChatGPT のコネクタ（MCP）追加画面に登録します。スマホの ChatGPT アプリでも同じ手順で接続できます。
           </p>
           <div
             class="usage-url"
@@ -68,20 +79,24 @@ onUnmounted(() => clearTimeout(restoreTimer))
             >{{ url }}</code>
             <button
               type="button"
-              class="btn btn-small"
+              class="ibtn copy-btn"
+              :class="{ 'is-done': copied }"
+              :aria-label="copyLabel"
+              :title="copyLabel"
               data-test="copy-url"
               @click="copyUrl"
             >
-              コピー
+              <AppIcon
+                :name="copied ? 'check' : 'copy'"
+                :size="18"
+              />
             </button>
-            <p
+            <span
               v-if="copied"
-              class="small usage-copy-done"
+              class="sr-only"
               role="status"
               data-test="copy-done"
-            >
-              コピーしました
-            </p>
+            >コピーしました</span>
             <p
               v-if="copyFailed"
               class="msg msg-error"
@@ -89,6 +104,31 @@ onUnmounted(() => clearTimeout(restoreTimer))
               コピーできませんでした。URL を選択してコピーしてください。
             </p>
           </div>
+          <ol
+            class="usage-substeps"
+            data-test="chatgpt-steps"
+          >
+            <li data-test="chatgpt-step-1">
+              <a
+                href="https://chatgpt.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-test="chatgpt-open-link"
+              >ChatGPT を開く</a> を押して、ChatGPT にログインします
+            </li>
+            <li data-test="chatgpt-step-2">
+              設定から「コネクター」（Apps &amp; Connectors）を開きます
+            </li>
+            <li data-test="chatgpt-step-3">
+              「高度な設定」で開発者モードをオンにします（初回のみ）
+            </li>
+            <li data-test="chatgpt-step-4">
+              「コネクタを追加」で名前（例: kakeiboot）と、コピーした URL を入力します
+            </li>
+            <li data-test="chatgpt-step-5">
+              認証画面が開くので、次のステップ 2 でログインと許可を行います
+            </li>
+          </ol>
           <UsageFigure
             id="fig-chatgpt-add"
             caption="ChatGPT のコネクタ（MCP）追加画面"

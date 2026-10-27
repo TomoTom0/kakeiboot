@@ -25,8 +25,8 @@ declare module 'vue-router' {
 // synchronously (TASK-39 B): the pages are small enough that the extra
 // chunks only bought a first-visit delay on every navigation.
 import AppsPage from './pages/AppsPage.vue'
+import AxisDetailPage from './pages/AxisDetailPage.vue'
 import CategoriesPage from './pages/CategoriesPage.vue'
-import CategoryDetailPage from './pages/CategoryDetailPage.vue'
 import ConsentPage from './pages/ConsentPage.vue'
 import HomePage from './pages/HomePage.vue'
 import LoginPage from './pages/LoginPage.vue'
@@ -38,7 +38,6 @@ import ReceiptsPage from './pages/ReceiptsPage.vue'
 import RegisterPage from './pages/RegisterPage.vue'
 import SearchPage from './pages/SearchPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
-import StoreDetailPage from './pages/StoreDetailPage.vue'
 import StoresPage from './pages/StoresPage.vue'
 import UsageConnectPage from './pages/UsageConnectPage.vue'
 import UsagePage from './pages/UsagePage.vue'
@@ -85,15 +84,24 @@ export const routes: RouteRecordRaw[] = [
   { path: '/usage', name: 'usage', component: UsagePage, meta: { section: 'usage' } },
   { path: '/usage/connect', name: 'usage-connect', component: UsageConnectPage, meta: { section: 'usage' } },
   { path: '/categories', name: 'categories', component: CategoriesPage, meta: { filters: true, section: 'categories', depth: 1, ledgerScoped: true } },
-  // The category hierarchy (TASK-74 §4-2): the static uncategorized segment
-  // comes first so it never matches :top. ids in the path (not path strings)
-  // keep the depth a static route property — the direction rules read it
-  // before any catalog data arrives (D28 review 指摘8).
-  { path: '/categories/uncategorized', name: 'category-uncategorized', component: CategoryDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
-  { path: '/categories/:top(\\d+)', name: 'category', component: CategoryDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
-  { path: '/categories/:top(\\d+)/:sub(\\d+)', name: 'subcategory', component: CategoryDetailPage, meta: { filters: true, section: 'categories', depth: 3, ledgerScoped: true } },
   { path: '/stores', name: 'stores', component: StoresPage, meta: { filters: true, section: 'stores', depth: 1, ledgerScoped: true } },
-  { path: '/stores/:id(\\d+)', name: 'store', component: StoreDetailPage, meta: { filters: true, section: 'stores', depth: 2, ledgerScoped: true } },
+  // The axis detail pages (TASK-89 §3): one component serves the five axes —
+  // the category hierarchy (static uncategorized first so it never matches
+  // :top), the store by id, and the name-keyed item / label / payment axes.
+  // ids in the path keep the depth a static route property; the sections
+  // reuse categories / stores so the sidebar / tabbar active stays aligned.
+  // The legacy /categories/:top and /stores/:id detail URLs are gone (the
+  // redirect compatibility was dropped by design) — an unknown path falls
+  // through to the catch-all redirect to /.
+  { path: '/axes/category/uncategorized', name: 'axis-category-uncategorized', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
+  { path: '/axes/category/:top(\\d+)', name: 'axis-category', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
+  { path: '/axes/category/:top(\\d+)/:sub(\\d+)', name: 'axis-subcategory', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 3, ledgerScoped: true } },
+  { path: '/axes/store/:id(\\d+)', name: 'axis-store', component: AxisDetailPage, meta: { filters: true, section: 'stores', depth: 2, ledgerScoped: true } },
+  // the name-keyed axes have no list screens of their own — they light the
+  // home section
+  { path: '/axes/item/:name', name: 'axis-item', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
+  { path: '/axes/label/:color', name: 'axis-label', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
+  { path: '/axes/payment/:method', name: 'axis-payment', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
   { path: '/receipts', name: 'receipts', component: ReceiptsPage, meta: { filters: true, section: 'receipts', depth: 1, ledgerScoped: true } },
   {
     path: '/receipts/:id(\\d+)',

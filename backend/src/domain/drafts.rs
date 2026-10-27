@@ -10,7 +10,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 use super::catalog::{self, CatKind};
 use super::dto::{
     CategoryResolution, CategorySource, DraftImageView, DraftItem, DraftPayload, DraftView,
-    ImageMetaView, LedgerRef, LineKind, PossibleDuplicate, ReportedMeta, Resolution,
+    ImageMetaView, Label, LedgerRef, LineKind, PossibleDuplicate, ReportedMeta, Resolution,
     StoreResolution,
 };
 use super::util;
@@ -156,6 +156,8 @@ const HEADER_KEYS: &[&str] = &[
     "tax_amount",
     "payment_method",
     "note",
+    // draft-stage labels (TASK-21): array to replace, null to clear
+    "label_colors",
 ];
 const ITEM_KEYS: &[&str] = &[
     "line_no",
@@ -355,6 +357,7 @@ impl DraftRow {
                 tax_amount: None,
                 payment_method: None,
                 note: None,
+                label_colors: None,
                 items: vec![],
             })
     }
@@ -409,6 +412,20 @@ pub async fn draft_view(
     let payload = row.payload();
     let mut conn = pool.acquire().await?;
     let resolution = resolve_payload(&mut conn, row.ledger_id, &payload, history_lines).await?;
+    // draft-stage labels with the ledger's titles, in palette order (TASK-21)
+    let label_defs = super::labels::list_labels(&mut conn, row.ledger_id).await?;
+    let labels: Vec<Label> = payload
+        .label_colors
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| {
+            label_defs.iter().find(|d| d.color == c).map(|d| Label {
+                color: d.color,
+                title: d.title.clone(),
+            })
+        })
+        .collect();
     let image_meta = match row.image_id {
         Some(img) => {
             #[allow(clippy::type_complexity)]
@@ -429,9 +446,10 @@ pub async fn draft_view(
         }
         None => None,
     };
-    drop(conn);
+    // find_duplicates borrows the same connection: callers must not hand the
+    // pool while holding it (max_connections(1) in-memory setups deadlock)
     let possible_duplicates = if row.status == "pending" {
-        find_duplicates(pool, row, &payload).await?
+        find_duplicates(&mut conn, row, &payload).await?
     } else {
         vec![]
     };
@@ -455,6 +473,7 @@ pub async fn draft_view(
         },
         image_meta,
         payload,
+        labels,
         resolution,
         approved_receipt_id: row.approved_receipt_id,
         possible_duplicates,
@@ -553,11 +572,10 @@ async fn ledger_name(conn: &mut SqliteConnection, id: i64) -> sqlx::Result<Strin
 
 /// Possible duplicates of one pending draft.
 pub async fn find_duplicates(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     d: &DraftRow,
     p: &DraftPayload,
 ) -> anyhow::Result<Vec<PossibleDuplicate>> {
-    let mut conn = pool.acquire().await?;
     let mut hits: Vec<(String, i64, i64, String)> = Vec::new(); // kind, id, ledger, match
     // 1. same file_id. Same-batch siblings (one photo shared by several
     // receipts of one create_receipt_drafts call, TASK-18) are excluded here
@@ -627,7 +645,7 @@ pub async fn find_duplicates(
         let my_raw = norm_opt(p.store_name_raw.as_deref());
         let my_name = norm_opt(p.store_name.as_deref());
         let my_store = match p.store_name.as_deref().or(p.store_name_raw.as_deref()) {
-            Some(n) => catalog::find_store(&mut conn, d.ledger_id, n).await?,
+            Some(n) => catalog::find_store(&mut *conn, d.ledger_id, n).await?,
             None => None,
         };
         #[allow(clippy::type_complexity)]
@@ -668,7 +686,7 @@ pub async fn find_duplicates(
             let o_raw = norm_opt(op.store_name_raw.as_deref());
             let same_store = if l == d.ledger_id {
                 let o_store = match op.store_name.as_deref().or(op.store_name_raw.as_deref()) {
-                    Some(n) => catalog::find_store(&mut conn, l, n).await?,
+                    Some(n) => catalog::find_store(&mut *conn, l, n).await?,
                     None => None,
                 };
                 match (my_store, o_store) {
@@ -691,7 +709,7 @@ pub async fn find_duplicates(
         if !seen.insert((kind.clone(), id, m.clone())) {
             continue;
         }
-        let name = ledger_name(&mut conn, l).await?;
+        let name = ledger_name(&mut *conn, l).await?;
         out.push(PossibleDuplicate {
             kind,
             id,
@@ -738,7 +756,7 @@ pub async fn list_drafts(
         let p = r.payload();
         let lname = ledger_name(&mut conn, r.ledger_id).await?;
         let dups = if r.status == "pending" {
-            find_duplicates(pool, &r, &p).await?
+            find_duplicates(&mut conn, &r, &p).await?
         } else {
             vec![]
         };

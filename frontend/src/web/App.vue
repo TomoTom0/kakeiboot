@@ -14,12 +14,14 @@ import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
 // sidebar — a fixed overlay at every width (TASK-33 real-device review:
-// the desktop grid-column fold is gone), open by default on desktop
-// (>= 900px) or a modal drawer opening under the topbar on mobile. The top
+// the desktop grid-column fold is gone), closed by default with an
+// always-on scrim (TASK-89; the old 900px+ default-open is gone), gaining
+// modal-drawer behavior (inert/focus/scroll lock) only under 900px. The top
 // bar carries the brand logo, the page title, the center filter bar
-// (TASK-44 §11: period / label chips on the browsing routes), the ledger
-// switcher and the top-right account menu (settings / connected apps /
-// usage / logout), and an icon tab bar sits at the bottom on mobile.
+// (TASK-44 §11: period / search chips on the browsing routes) and the
+// top-right account menu (settings / connected apps / usage / logout; on
+// the ledger-scoped routes the ledger switcher rides it as a radio section,
+// TASK-101), and an icon tab bar sits at the bottom on mobile.
 // Public screens (login / register / consent) render without the shell.
 const session = useSessionStore()
 const route = useRoute()
@@ -40,8 +42,9 @@ const SECTION_TITLES = {
 } as const
 type SectionName = keyof typeof SECTION_TITLES
 // Main navigation: to / name only — labels and icons come from SECTION_TITLES.
-// Account screens (settings / connected apps) live in the top-right account
-// menu, not here.
+// The four data sections feed the sidebar nav and the mobile tabbar; settings
+// joins the sidebar alone in a separated second group (TASK-56) and the
+// account screens stay in the top-right account menu as well.
 const NAV: { to: string; name: SectionName }[] = [
   { to: '/', name: 'home' },
   { to: '/receipts', name: 'receipts' },
@@ -67,7 +70,8 @@ const showFilters = computed(
 const pageTitle = computed(() => (section.value === '' ? '' : SECTION_TITLES[section.value].title))
 const pageIcon = computed(() => (section.value === '' ? undefined : SECTION_TITLES[section.value].icon))
 
-// The selected ledger paints the top bar band and the switcher chip.
+// The selected ledger paints the top bar band (its chip now rides the
+// account menu's radio rows, TASK-101).
 const ledgerColor = computed(() => session.selectedLedger?.color ?? 'teal')
 const shellStyle = computed(() =>
   ledgerScoped.value ? { '--ledger-current': `var(--ledger-${ledgerColor.value})` } : undefined,
@@ -77,15 +81,16 @@ const initial = computed(() => Array.from(session.me?.display_name ?? '?')[0] ??
 
 // --- nav toggle (top-left menu button, TASK-27 §3-3 + TASK-33 overlay) -----------
 // One button, visible at every width, toggling one sidebar state. The
-// sidebar is a fixed overlay at every width (TASK-33 real-device review):
-// at 900px+ it starts open and slides over the main column — no scrim, the
-// main column stays interactive and never moves or reflows. Below 900px it
-// is the modal drawer as before (scrim / inert / focus / scroll lock). The
-// open/closed choice itself survives viewport changes in both directions.
+// sidebar is a fixed overlay at every width, starting closed (TASK-86/89):
+// the old 900px+ default-open is gone. While open, the full-width scrim
+// covers everything below the topbar at every width, so the main column is
+// NOT clickable (an outside tap on the scrim closes the drawer) — only the
+// modal effects (inert / focus / scroll lock) stay narrow-width; the desktop
+// open overlay skips them. The open/closed choice survives viewport changes.
 const desktopQuery = window.matchMedia('(min-width: 900px)')
 const isDesktop = ref(desktopQuery.matches)
-const drawerOpen = ref(desktopQuery.matches)
-// Only the narrow-width open drawer is modal: the scrim, inert, scroll lock
+const drawerOpen = ref(false)
+// Only the narrow-width open drawer is modal: the inert, scroll lock
 // and focus handling key on this, not on the bare open state.
 const drawerModal = computed(() => drawerOpen.value && !isDesktop.value)
 // While the drawer is modal the background feed must not react to arrow
@@ -109,11 +114,13 @@ async function openDrawer(): Promise<void> {
 }
 
 function closeDrawer(): void {
-  // a no-op at 900px+: the desktop overlay closes only via the menu button
-  // (navigation and Escape leave it open)
-  if (!drawerModal.value) return
+  // TASK-89: the drawer closes at every width — an outside tap, Escape and
+  // navigation all close the desktop overlay too. The focus return stays a
+  // modal concern (the desktop overlay never moved the focus).
+  if (!drawerOpen.value) return
+  const wasModal = drawerModal.value
   drawerOpen.value = false
-  menuBtnEl.value?.focus()
+  if (wasModal) menuBtnEl.value?.focus()
 }
 
 function toggleMenu(): void {
@@ -221,7 +228,10 @@ async function logout(): Promise<void> {
           data-test="menu-button"
           @click="toggleMenu"
         >
-          <AppIcon :name="drawerOpen ? 'close' : 'menu'" />
+          <!-- TASK-52: the glyph points where the panel goes — the sidebar
+               sits at the left edge, so open shows a left chevron (a close X
+               read as a second hamburger); closed is the menu again -->
+          <AppIcon :name="drawerOpen ? 'chevron-left' : 'menu'" />
         </button>
         <RouterLink
           to="/"
@@ -252,7 +262,6 @@ async function logout(): Promise<void> {
              front of the actions; it owns the margin-left:auto push -->
         <TopbarFilterBar v-if="showFilters" />
         <div class="topbar-actions">
-          <LedgerSwitcher v-if="ledgerScoped" />
           <PopoverMenu
             v-model:open="accountOpen"
             class="account-menu"
@@ -279,6 +288,19 @@ async function logout(): Promise<void> {
               <div class="menu-head">
                 <strong>{{ session.me.display_name }}</strong>
               </div>
+              <!-- TASK-101: the ledger switcher rides the account menu as a
+                   radio section on the ledger-scoped routes, separated from
+                   the four plain items by a border-top rule (the menu head
+                   keeps its own border-bottom) -->
+              <LedgerSwitcher
+                v-if="ledgerScoped"
+                @select="close"
+              />
+              <hr
+                v-if="ledgerScoped"
+                class="menu-separator"
+                aria-hidden="true"
+              >
               <RouterLink
                 to="/settings"
                 class="menu-item"
@@ -344,6 +366,20 @@ async function logout(): Promise<void> {
               <AppIcon :name="SECTION_TITLES[n.name].icon" />
               <span>{{ SECTION_TITLES[n.name].title }}</span>
             </RouterLink>
+            <!-- TASK-56: settings rides in a separated second group under the
+                 data nav (the tabbar keeps the four data sections; the
+                 account-menu entry stays as the second way in) -->
+            <div class="side-nav-secondary">
+              <RouterLink
+                to="/settings"
+                class="side-link"
+                :class="{ active: section === 'settings' }"
+                data-test="nav-settings"
+              >
+                <AppIcon :name="SECTION_TITLES.settings.icon" />
+                <span>{{ SECTION_TITLES.settings.title }}</span>
+              </RouterLink>
+            </div>
           </nav>
           <div class="sidebar-foot">
             <div class="side-user">

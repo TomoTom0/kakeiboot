@@ -569,14 +569,10 @@ pub struct NewImage<'a> {
 
 /// Write the WebP under `<root>/YYYY/MM/<ulid>.webp` and insert the images
 /// row. Returns the image id. On a DB failure the file is removed again.
-pub async fn store_image(
-    pool: &SqlitePool,
-    root: &Path,
-    p: &Processed,
-    fetched_filename: Option<&str>,
-    meta: &NewImage<'_>,
-    now: i64,
-) -> anyhow::Result<i64> {
+/// A fresh (file_key, storage_path) pair for one stored image: a lowercase
+/// ULID (JST-timestamp prefix) under `YYYY/MM/` (JST). Shared by
+/// store_image and the TASK-58 import path.
+pub fn new_image_file(now: i64) -> (String, String) {
     let rnd = random_token();
     let mut lo = [0u8; 16];
     lo.copy_from_slice(&rnd[..16]);
@@ -585,6 +581,18 @@ pub async fn store_image(
         .to_ascii_lowercase();
     let d = super::util::jst_date(now);
     let rel = format!("{}/{}.webp", d.format("%Y/%m"), key);
+    (key, rel)
+}
+
+pub async fn store_image(
+    pool: &SqlitePool,
+    root: &Path,
+    p: &Processed,
+    fetched_filename: Option<&str>,
+    meta: &NewImage<'_>,
+    now: i64,
+) -> anyhow::Result<i64> {
+    let (key, rel) = new_image_file(now);
     let abs: PathBuf = root.join(&rel);
     if let Some(parent) = abs.parent() {
         tokio::fs::create_dir_all(parent).await?;

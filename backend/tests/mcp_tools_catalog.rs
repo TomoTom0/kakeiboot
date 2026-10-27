@@ -385,8 +385,6 @@ async fn summarize_reports_by_category_with_filters_and_validation() {
     assert_eq!(sc["report"], json!("by_category"));
     assert_eq!(sc["totals"]["value"], json!(200));
     assert_eq!(sc["totals"]["receipts"], json!(2));
-    // compare_period for an explicit range is the same number of days
-    assert!(sc["compare_period"]["from"].is_string());
     // both items are uncategorized -> one 未分類 row carrying the full total
     let rows = sc["sections"][0]["rows"].as_array().unwrap();
     assert_eq!(rows[0]["labels"][0], "未分類");

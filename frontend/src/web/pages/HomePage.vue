@@ -1,40 +1,53 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
 import LabelDots from '@/shared/components/LabelDots.vue'
-import { useDataApi, type ReceiptSummary, type StatsResult, type StatsRow } from '../api/data'
+import {
+  useDataApi,
+  type AnalysisAxis,
+  type AnalysisResult,
+  type AnalysisTrendResult,
+  type ReceiptSummary,
+  type StatsRow,
+} from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
-import DonutChart from '../components/DonutChart.vue'
+import PeriodHeader from '../components/PeriodHeader.vue'
 import RankedList from '../components/RankedList.vue'
-import TrendBars from '../components/TrendBars.vue'
+import TrendWindow from '../components/TrendWindow.vue'
+import WeekRows from '../components/WeekRows.vue'
+import type { WeekRow } from '../components/WeekRows.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { periodDays, shortDate } from '../composables/period'
+import { shortDate } from '../composables/period'
+import { bucketSpan, currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
+import { useTrendWindow } from '../composables/trendWindow'
 import { usePeriodStore } from '../stores/period'
 
-// Dashboard: the selected period's spending at a glance (GET
-// /api/ledgers/{l}/stats monthly_overview — the same aggregation as
-// summarize_spending — plus its own monthly_trend call for the bars) and the
-// period's latest receipts. The period lives in the shared period store and
-// follows all of its modes (TASK-66: month / year / range — the KPI, the
-// trend window and the recent list all read period.range); it moves through
-// the topbar period chip's dialog and the trend bars below, is shared with
-// the other screens, and this page re-queries through watch(period.range).
-// The label filter (TASK-17) is the same shared dimension
-// (watch(period.labelQuery)).
+// Home (TASK-89 redesign, the compare side removed): one column, four
+// compartments — the period header, the stacked trend, the category
+// breakdown, the recent receipts. The breakdown stays category-fixed and
+// the trend is the stacked money view (TASK-95: no mode / metric chrome).
+// The period / label filters live in the shared period store and every
+// card re-queries through the watches below.
 const api = useDataApi()
+const router = useRouter()
 const period = usePeriodStore()
 const { markReady } = usePageReady()
+period.fromQuery(useRoute().query)
 
-const summary = ref<StatsResult | null>(null)
-const trendResult = ref<StatsResult | null>(null)
+const analysis = ref<AnalysisResult | null>(null)
+const weekRes = ref<AnalysisTrendResult | null>(null)
 const recent = ref<ReceiptSummary[]>([])
-const loading = ref(false)
 const error = ref('')
+const loading = ref(false)
+
+// the trend's movable window (TASK-104): the composable owns the trend
+// fetch and the stacked assembly; the week rows below stay in load()
+const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
 async function load(id?: number): Promise<void> {
@@ -43,21 +56,30 @@ async function load(id?: number): Promise<void> {
   const n = ++seq
   loading.value = true
   error.value = ''
-  const [from, to] = period.range
+  const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    // the trend call rides first so the primary monthly_overview is the
-    // load's last stats call (the Categories ordering); its month window is
-    // Home's own 6-month one (trendQuery(5)) — the year / range modes use
-    // the selected period itself
-    const [tr, s, r] = await Promise.all([
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(5) }),
-      api.getStats(l, { report: 'monthly_overview', ...period.query() }),
-      api.listReceipts(l, { from, to, limit: 5, ...(period.labelQuery ? { label_colors: period.labelQuery } : {}) }),
+    const [a, r, wk] = await Promise.all([
+      api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
+      api.listReceipts(l, { from: period.range[0], to: period.range[1], limit: 5, ...labels }),
+      // TASK-103: the month mode's week rows — the selected month only, week
+      // buckets; limit 1 keeps the one series we never read (bucket_totals is
+      // the whole point)
+      ...(period.mode === 'month'
+        ? [api.getAnalysisTrend(l, {
+            axis: 'category',
+            metric: 'amount',
+            granularity: 'week',
+            from: period.range[0],
+            to: period.range[1],
+            ...labels,
+            limit: 1,
+          })]
+        : []),
     ])
     if (n !== seq) return
-    summary.value = s
-    trendResult.value = tr
+    analysis.value = a
     recent.value = r.receipts
+    weekRes.value = wk ?? null
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -69,91 +91,113 @@ async function load(id?: number): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-// the period / label filters move from the topbar center bar (TASK-44 §11):
-// the same watch(period.range) path the other dashboards use, plus the
-// shared label dimension — one array watch so a change that moves both (a
-// ledger switch resetting the labels) fetches once
-watch([() => period.range, () => period.labelQuery], () => void load())
+// one array watch so a change that moves both (a ledger switch resetting the
+// labels, or a tab switch moving range and mode together) fetches once;
+// mode is an explicit watch source on its own — the reload on a mode change
+// must not ride on range's reference comparison (the range computed always
+// returns a fresh array, which today happens to fire the watcher anyway —
+// that is an implementation detail, not a contract)
+watch([() => period.range, () => period.labelQuery, () => period.mode], () => void load())
 
-const totals = computed(() => summary.value?.totals ?? null)
-const section = (id: string) => summary.value?.sections.find((s) => s.id === id)?.rows ?? []
+const totals = computed(() => analysis.value?.totals ?? null)
 
-/** Spending change vs. the previous period: more spending is the warning side. */
-const diff = computed(() => {
-  const t = totals.value
-  if (!t || t.diff === null || t.compare_value === null) return null
-  return {
-    text: `${t.diff > 0 ? '+' : t.diff < 0 ? '−' : '±'}${formatYen(Math.abs(t.diff))}`,
-    pct: t.diff_pct === null ? '' : `（${t.diff_pct > 0 ? '+' : ''}${t.diff_pct}%）`,
-    tone: t.diff > 0 ? 'up' : t.diff < 0 ? 'down' : 'flat',
-  }
-})
-
-const perDay = computed(() => {
-  const t = totals.value
-  if (!t) return null
-  const [from, to] = period.range
-  return Math.round(t.value / periodDays(from, to))
-})
-
-// Category breakdown: the top 5 rows + "その他" feed both the donut ring and
-// the ranked list (same order, same colors — DonutChart and RankedList with
-// `colors` share the palette by index). TASK-74: each row keeps keys[0] (the
-// top category id) so the row links into /categories/:top — the 未分類 row
-// (keys[0]=null) takes the uncategorized carve-out and その他 stays a plain
-// span. TASK-75 §6-4: the legend became this RankedList (one-line rows; at
-// 720px- the wrap stacks the 120px donut over the list).
-const donutRows = computed<StatsRow[]>(() => {
-  const rows = section('categories')
-  const top = rows.slice(0, 5).map((r) => ({ ...r, labels: [r.labels[0] ?? '未分類'] }))
-  const rest = rows.slice(5).reduce((a, r) => a + r.value, 0)
-  if (rest > 0) {
-    // the folded row keeps its share (review M1): top5 + rest is the whole
-    // section, so rest / total matches the backend rows' own shares and the
-    // ranked list shows the % column on every row like the old legend did
-    const total = top.reduce((a, r) => a + r.value, 0) + rest
-    top.push({ keys: [null], labels: ['その他'], value: rest, share: total ? rest / total : 0 })
-  }
-  return top
-})
-
-/** Ranked row destination (TASK-74 §4-7): the top id from the stats row. */
-function categoryTo(row: StatsRow): RouteLocationRaw | null {
-  if (row.labels[0] === 'その他') return null
+/** an axis row's destination: /axes/<axis>/<key> with the period + labels
+ *  context */
+function axisTo(axis: AnalysisAxis, key: string | number | null, label: string): RouteLocationRaw | null {
   const query = {
     ...period.urlQuery,
     ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
   }
-  if (row.labels[0] === '未分類') return { path: '/categories/uncategorized', query }
-  if (typeof row.keys[0] !== 'number') return null
-  return { path: `/categories/${row.keys[0]}`, query }
+  if (axis === 'category') {
+    if (key === null) return label === '未分類' ? { path: '/axes/category/uncategorized', query } : null
+    return { path: `/axes/category/${key}`, query }
+  }
+  if (axis === 'store') return typeof key === 'number' ? { path: `/axes/store/${key}`, query } : null
+  if (axis === 'item') return { path: `/axes/item/${encodeURIComponent(label)}`, query }
+  if (axis === 'label') return key === null ? null : { path: `/axes/label/${key}`, query }
+  // payment_method: the key is the method string
+  return typeof key === 'string' ? { path: `/axes/payment/${key}`, query } : null
 }
 
-const storeRows = computed(() => section('stores'))
+// --- the stacked trend (§1-(3)) ---------------------------------------------------
+// §6: the current key keeps existing rules — out of the slid window it just
+// matches no bar and the highlight drops until the window returns
+const trendCurrent = computed(() =>
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+)
 
-/** Store row destination (TASK-74 §4-7): keys[0] is the store id — その他
- * and 店不明 (null) have no page of their own. */
-function storeTo(row: StatsRow): RouteLocationRaw | null {
-  if (typeof row.keys[0] !== 'number') return null
-  return {
-    path: `/stores/${row.keys[0]}`,
-    query: {
-      ...period.urlQuery,
-      ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
-    },
+/** A bar press: a day bar opens that day's receipts list, a week/month bar
+ *  moves the shared period (TASK-89 §1-(3)). */
+function onTrendSelect(key: string): void {
+  if (win.granularity.value === 'day') {
+    void router.push({
+      path: '/receipts',
+      query: { from: key, to: key, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) },
+    })
+    return
   }
+  if (win.granularity.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
+
+// --- the month mode's week rows (TASK-103) ----------------------------------------
+const weeks = computed<WeekRow[]>(() => {
+  const res = weekRes.value
+  if (!res || period.mode !== 'month') return []
+  const [from, to] = period.range
+  return res.buckets.map((b, i) => {
+    const [lo, hi] = bucketSpan(b, 'week', from, to)
+    return { key: b, label: `${shortDate(lo)}〜${shortDate(hi)}`, total: res.bucket_totals[i] ?? 0 }
+  })
+})
+const weekCurrent = computed(() =>
+  currentTrendKey('week', period.mode, period.range[0], period.range[1], period.month),
+)
+function onWeekSelect(key: string): void {
+  period.setWeek(key)
+}
+
+// --- the category breakdown (§4 案: RankedList + the rest row) --------------------
+const breakdownRows = computed<StatsRow[]>(() => {
+  const res = analysis.value
+  if (!res) return []
+  const sorted = [...res.rows].sort((a, b) => b.amount - a.amount)
+  const out: StatsRow[] = sorted.slice(0, 5).map((r) => ({
+    keys: [r.key],
+    labels: [r.label],
+    value: r.amount,
+    share: r.share ?? undefined,
+  }))
+  const tail = sorted.slice(5)
+  if (tail.length > 0 || res.truncated_rows > 0) {
+    const restAmount = tail.reduce((a, r) => a + r.amount, 0)
+    out.push({
+      keys: [null],
+      labels: [`ほか ${tail.length + res.truncated_rows}件・計${formatYen(restAmount)}`],
+      value: restAmount,
+      share: undefined,
+    })
+  }
+  return out
+})
+
+function categoryTo(row: StatsRow): RouteLocationRaw | null {
+  return axisTo('category', row.keys[0] ?? null, row.labels[0] ?? '')
 }
 
 /** Per-receipt feed links carry this screen's period + filter as context. */
 const recentQuery = computed(() => {
   const [from, to] = period.range
-  return { from, to, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) }
+  return {
+    from,
+    to,
+    ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
+  }
 })
-
 </script>
 
 <template>
-  <div class="dashboard">
+  <div class="view-page">
     <p
       v-if="error"
       class="msg msg-error"
@@ -164,156 +208,149 @@ const recentQuery = computed(() => {
     </p>
 
     <div
-      v-if="summary && totals"
-      class="dash-grid"
+      v-if="analysis && totals"
+      class="view-stack"
       :class="{ loading }"
     >
-      <section
-        class="card kpi"
-        data-test="kpi"
-      >
-        <p class="kpi-head">
-          <span class="label">{{ period.label }}の支出</span>
-          <strong
-            class="kpi-value"
-            data-test="total"
-          >{{ formatYen(totals.value) }}</strong>
-          <span
-            v-if="diff"
-            class="chip"
-            :class="`chip-${diff.tone}`"
-            data-test="diff"
-          >{{ period.compareLabel }}比 {{ diff.text }}{{ diff.pct }}</span>
-        </p>
-        <p class="kpi-sub">
-          レシート <span data-test="receipt-count">{{ totals.receipts }}件</span> ・ 1日あたり {{ formatYen(perDay) }} ・ {{ period.compareLabel }} {{ formatYen(totals.compare_value) }}
-        </p>
-      </section>
+      <PeriodHeader
+        :label="`${period.label}の支出`"
+        :total="totals.amount"
+      />
 
-      <section
-        class="card trend"
-        data-test="trend-card"
-      >
-        <h2>支出の推移</h2>
-        <!-- a bar press moves the shared store (the topbar period chip
-             follows at once, TASK-44 §11-5) -->
-        <TrendBars
-          v-if="trendResult"
-          :rows="trendResult.sections[0]?.rows ?? []"
-          :current="period.mode === 'month' ? period.month : null"
-          @select="period.setMonth"
-        />
-      </section>
+      <div class="dash-cols">
+        <div class="col-main">
+          <section
+            class="zone"
+            :class="{ 'is-loading': win.loading.value }"
+            data-test="trend-card"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の推移
+              </h2>
+            </div>
+            <TrendWindow
+              v-if="win.result.value"
+              :stacked="win.stacked.value"
+              :granularity="win.granularity.value"
+              :span="win.window.value"
+              :current="trendCurrent"
+              :nav="win.active.value"
+              :can-prev="win.canPrev.value"
+              :can-next="win.canNext.value"
+              :window-key="win.windowKey.value"
+              :transition-name="win.transitionName.value"
+              @prev="win.prev"
+              @next="win.next"
+              @select="onTrendSelect"
+            />
+          </section>
+        </div>
 
-      <section
-        class="card breakdown"
-        data-test="breakdown"
-      >
-        <div class="card-head">
-          <h2>支出の内訳</h2>
-          <RouterLink
-            :to="{ path: '/categories', query: { ...period.urlQuery } }"
-            class="more"
+        <div class="col-side">
+          <section
+            v-if="period.mode === 'month' && weeks.length > 0"
+            class="zone zone--list"
+            data-test="week-card"
           >
-            カテゴリ別に見る
-          </RouterLink>
-        </div>
-        <p
-          v-if="donutRows.length === 0"
-          class="muted empty"
-        >
-          この期間の記録はまだありません。
-        </p>
-        <div
-          v-else
-          class="donut-wrap"
-        >
-          <DonutChart
-            :rows="donutRows"
-            :total="totals.value"
-            caption="支出"
-          />
-          <RankedList
-            :rows="donutRows"
-            :to="categoryTo"
-            colors
-          />
-        </div>
-      </section>
+            <div class="zone-head">
+              <h2 class="zone-title">
+                週ごとの支出
+              </h2>
+            </div>
+            <WeekRows
+              :weeks="weeks"
+              :current="weekCurrent"
+              @select="onWeekSelect"
+            />
+          </section>
 
-      <section
-        class="card stores"
-        data-test="stores"
-      >
-        <div class="card-head">
-          <h2>よく使う店</h2>
-          <RouterLink
-            :to="{ path: '/stores', query: { ...period.urlQuery } }"
-            class="more"
+          <section
+            class="zone zone--list"
+            data-test="breakdown"
           >
-            店別に見る
-          </RouterLink>
-        </div>
-        <p
-          v-if="storeRows.length === 0"
-          class="muted empty"
-        >
-          この期間の記録はまだありません。
-        </p>
-        <RankedList
-          v-else
-          :rows="storeRows"
-          :to="storeTo"
-        />
-      </section>
-
-      <section
-        class="card recent"
-        data-test="recent"
-      >
-        <div class="card-head">
-          <h2>最近のレシート</h2>
-          <RouterLink
-            :to="{ path: '/receipts', query: { ...period.urlQuery } }"
-            class="more"
-          >
-            すべて見る
-          </RouterLink>
-        </div>
-        <div
-          v-if="recent.length === 0"
-          class="empty-state"
-        >
-          <AppIcon
-            name="chat"
-            :size="28"
-          />
-          <p>ChatGPT でレシートの写真を送ると、ここに記録されます。</p>
-        </div>
-        <ul
-          v-else
-          class="recent-list"
-        >
-          <li
-            v-for="r in recent"
-            :key="r.receipt_id"
-          >
-            <RouterLink
-              :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
-              class="recent-row"
-              :data-test="`recent-${r.receipt_id}`"
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の内訳
+              </h2>
+              <RouterLink
+                :to="{ path: '/categories', query: { ...period.urlQuery } }"
+                class="ibtn"
+                aria-label="カテゴリ別に見る"
+                title="カテゴリ別に見る"
+                data-test="breakdown-more"
+              >
+                <AppIcon name="chevron-right" />
+              </RouterLink>
+            </div>
+            <p
+              v-if="breakdownRows.length === 0"
+              class="muted empty"
             >
-              <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-              <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-              <span class="row-labels"><LabelDots
-                :labels="r.labels ?? []"
-                compact
-              /></span>
-              <span class="amount">{{ formatYen(r.amount) }}</span>
-            </RouterLink>
-          </li>
-        </ul>
-      </section>
+              この期間の記録はありません。
+            </p>
+            <RankedList
+              v-else
+              :rows="breakdownRows"
+              :to="categoryTo"
+              axis="category"
+            />
+          </section>
+
+          <section
+            class="zone zone--list"
+            data-test="recent"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                最近のレシート
+              </h2>
+              <RouterLink
+                :to="{ path: '/receipts', query: { ...recentQuery } }"
+                class="ibtn"
+                aria-label="すべて見る"
+                title="すべて見る"
+                data-test="recent-more"
+              >
+                <AppIcon name="chevron-right" />
+              </RouterLink>
+            </div>
+            <div
+              v-if="recent.length === 0"
+              class="empty-state"
+            >
+              <AppIcon
+                name="chat"
+                :size="28"
+              />
+              <p>ChatGPT でレシートの写真を送ると、ここに記録されます。</p>
+            </div>
+            <ul
+              v-else
+              class="recent-list"
+            >
+              <li
+                v-for="r in recent"
+                :key="r.receipt_id"
+              >
+                <RouterLink
+                  :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
+                  class="recent-row"
+                  :data-test="`recent-${r.receipt_id}`"
+                >
+                  <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
+                  <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
+                  <span class="row-labels"><LabelDots
+                    :labels="r.labels ?? []"
+                    compact
+                  /></span>
+                  <span class="amount">{{ formatYen(r.amount) }}</span>
+                </RouterLink>
+              </li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </div>
     <DashSkeleton v-else-if="loading" />
   </div>

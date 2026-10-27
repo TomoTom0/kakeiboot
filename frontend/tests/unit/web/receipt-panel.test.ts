@@ -109,7 +109,18 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     expect((changed!.at(-1)![0] as ReceiptView).total_amount).toBe(1234)
     // the panel never re-lists the sequence (Feed order / position are untouched)
     expect(list).not.toHaveBeenCalled()
-    owner.wrapper.unmount()
+  })
+
+  it('[covers:web-receipts.payment-tag-link] 支払方法タグは /receipts?payment_method=&<購入月> へのリンク', async () => {
+    const { wrapper } = await mountPanel(withRole('viewer'), 101)
+    const tag = wrapper.find('[data-test="payment-method"]')
+    expect(tag.exists()).toBe(true)
+    expect(tag.element.tagName).toBe('A')
+    expect(tag.classes()).toContain('tag-link')
+    const url = new URL(tag.attributes('href')!, 'http://localhost')
+    expect(url.pathname).toBe('/receipts')
+    expect(url.searchParams.get('payment_method')).toBe('cash')
+    expect(url.searchParams.get('month')).toBe('2026-10') // the purchase month
   })
 })
 
@@ -142,17 +153,17 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     expect(link.element.tagName).toBe('A')
     expect(link.classes()).toContain('cat-link')
     const u = new URL(link.attributes('href')!, 'http://localhost')
-    expect(u.pathname).toBe('/categories/1/2')
+    expect(u.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(u.searchParams)).toEqual({ month: '2026-10' })
-    expect(wrapper.find('[data-test="item-cat-1002"]').attributes('href')).toBe('/categories/1/2?month=2026-10')
+    expect(wrapper.find('[data-test="item-cat-1002"]').attributes('href')).toBe('/axes/category/1/2?month=2026-10')
     await link.trigger('click')
     await settle()
-    expect(router.currentRoute.value.path).toBe('/categories/1/2')
+    expect(router.currentRoute.value.path).toBe('/axes/category/1/2')
     wrapper.unmount()
 
     // 洗剤 (1003): 日用品 — a top-level category links one segment deep
     const daily = await mountReadonly(102)
-    expect(daily.wrapper.find('[data-test="item-cat-1003"]').attributes('href')).toBe('/categories/4?month=2026-10')
+    expect(daily.wrapper.find('[data-test="item-cat-1003"]').attributes('href')).toBe('/axes/category/4?month=2026-10')
     daily.wrapper.unmount()
 
     // 未分類 and a path the active catalog cannot resolve stay plain spans
@@ -185,7 +196,7 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     usePeriodStore(ranged.pinia).fromQuery({ from: '2026-09-01', to: '2026-09-30' })
     await settle()
     expect(ranged.wrapper.find('[data-test="item-cat-1001"]').attributes('href')).toBe(
-      '/categories/1/2?from=2026-09-01&to=2026-09-30',
+      '/axes/category/1/2?from=2026-09-01&to=2026-09-30',
     )
     ranged.wrapper.unmount()
   })
@@ -195,10 +206,10 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     const store = wrapper.find('[data-test="store-name"] a')
     expect(store.exists()).toBe(true)
     expect(store.classes()).toContain('store-link')
-    expect(store.attributes('href')).toBe('/stores/1?month=2026-10')
+    expect(store.attributes('href')).toBe('/axes/store/1?month=2026-10')
     await store.trigger('click')
     await settle()
-    expect(router.currentRoute.value.path).toBe('/stores/1')
+    expect(router.currentRoute.value.path).toBe('/axes/store/1')
 
     const cat = wrapper.find('[data-test="store-category"]')
     expect(cat.exists()).toBe(true)
@@ -211,7 +222,7 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
 
     // エーマート: a resolved store without a category — no tag at all
     const second = await mountReadonly(102)
-    expect(second.wrapper.find('[data-test="store-name"] a').attributes('href')).toBe('/stores/2?month=2026-10')
+    expect(second.wrapper.find('[data-test="store-name"] a').attributes('href')).toBe('/axes/store/2?month=2026-10')
     expect(second.wrapper.find('[data-test="store-category"]').exists()).toBe(false)
     second.wrapper.unmount()
 

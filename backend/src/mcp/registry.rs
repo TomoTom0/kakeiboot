@@ -112,6 +112,10 @@ fn label_colors_schema() -> Value {
 }
 
 fn header_props() -> Value {
+    let mut label_colors = label_colors_schema();
+    label_colors["description"] = json!(
+        "付与するラベル色（ユーザーがラベルを指定したときだけ入れる。タイトルで言われた場合は get_catalog の labels で色に解決する。確定時にレシートへ引き継がれる）"
+    );
     json!({
         "store_name": { "type": ["string", "null"], "description": "表示名（正式名に整えた店名）" },
         "store_name_raw": { "type": ["string", "null"], "description": "印字どおりの店名" },
@@ -123,6 +127,7 @@ fn header_props() -> Value {
         "tax_amount": nint(),
         "payment_method": payment_nullable(),
         "note": nstr(),
+        "label_colors": label_colors,
     })
 }
 

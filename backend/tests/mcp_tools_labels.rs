@@ -410,8 +410,8 @@ async fn summarize_spending_label_filter_and_echo() {
     }
     insert_label(&pool, owner, 101, "red").await;
     insert_label(&pool, owner, 103, "red").await;
-    // 103 is the previous-month red receipt (compare_value target); the
-    // shared setup inserts every receipt on 2026-10-10
+    // 103 is out of the October range; the shared setup inserts every
+    // receipt on 2026-10-10
     sqlx::query("UPDATE receipts SET purchased_on = '2026-09-30' WHERE id = 103")
         .execute(&pool)
         .await
@@ -432,7 +432,6 @@ async fn summarize_spending_label_filter_and_echo() {
     assert_eq!(r["isError"], json!(false));
     let sc = &r["structuredContent"];
     assert_eq!(sc["totals"]["value"], 300, "only the red receipt (101)");
-    assert_eq!(sc["totals"]["compare_value"], 180, "prev-month red only");
     // the applied filters are echoed
     assert_eq!(sc["filters"]["label_colors"], json!(["red"]));
 

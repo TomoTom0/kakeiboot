@@ -6,10 +6,10 @@
 import { flushPromises } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import type { ReportKind, StatsFilters } from '@/shared/types'
-import { receiptEnvelope, receiptListEnvelope, statsEnvelope } from '@/widget/fixtures'
+import { draftEnvelope, receiptEnvelope, receiptListEnvelope, statsEnvelope } from '@/widget/fixtures'
 import { fakeHost, mountWidget, result } from './helpers'
 
-const RED = { color: 'red', title: '旅行' }
+const RED = { color: 'red' as const, title: '旅行' }
 
 describe('widget labels', () => {
   it('[covers:widget.receipt-labels][covers:web-labels.no-color-names-on-screen] receipt はヘッダに LabelChip、receipt_list の行は色ドット、付け外しの操作は無い', async () => {
@@ -86,6 +86,28 @@ describe('widget labels', () => {
     // no chip when the envelope carries no label filter
     const plain = await mountWidget(fakeHost({ toolOutput: statsEnvelope('monthly_overview') }))
     expect(plain.wrapper.find('[data-test="label-filter-chip"]').exists()).toBe(false)
+  })
+
+  it('[covers:widget.draft-labels] draft 詳細のヘッダは labels を LabelChip で表示（色名テキストなし・操作なし）', async () => {
+    // TASK-21: DraftView.labels on the draft detail (header chips, same
+    // display rules as the receipt view; nothing when unlabeled)
+    const labeled = await mountWidget(
+      fakeHost({ toolOutput: draftEnvelope({ labels: [RED, { color: 'green' as const, title: null }] }) })
+    )
+    const chips = labeled.wrapper.findAll('[data-test="draft-screen"] .bb-labels .label-chip')
+    expect(chips).toHaveLength(2)
+    expect(chips[0]!.text()).toBe('旅行')
+    expect(chips[0]!.classes()).toContain('label-red')
+    expect(chips[0]!.attributes('aria-label')).toBe('旅行')
+    // untitled label: a bare color chip — no text, spoken name only
+    expect(chips[1]!.text()).toBe('')
+    expect(chips[1]!.classes()).toContain('label-green')
+    expect(labeled.wrapper.find('[data-test="draft-screen"]').text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
+
+    // unlabeled draft: nothing rendered
+    const plain = await mountWidget(fakeHost({ toolOutput: draftEnvelope() }))
+    expect(plain.wrapper.find('[data-test="draft-screen"] .bb-labels').exists()).toBe(false)
+    expect(plain.wrapper.find('[data-test="draft-screen"] .label-chip').exists()).toBe(false)
   })
 
   it('[covers:widget.stats-label-filter] 絞り込み無しの新応答の後はラベル絞り込みを再適用しない', async () => {

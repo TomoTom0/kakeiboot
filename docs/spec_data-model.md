@@ -28,7 +28,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 
 - 0001 はユーザー・家計簿（users のアカウント特定用の列を含む）。
 - 0002 は認証・認可・招待（WebAuthn、web セッション、invitations、OAuth、アカウント特定・回復依頼のテーブル、`oauth_grants.active_ledger_id` の越境防止トリガと ledger_members の所属変更トリガ）。0001 の users / ledgers / ledger_members を参照するため 0001 の後に置く。
-- 0008 は家計簿 UI（`ledger_members.color` の追加と backfill、自動作成済み個人 ledger の `default book` 改名）。
+- 0008 は家計簿 UI（`ledger_members.color` の追加と backfill、当時「<表示名>の家計簿」で作られていた個人 ledger の `default book` 改名。登録経路の命名は TASK-79 で「<表示名>の家計簿」に戻った）。
 - 0009 はラベル（`ledger_labels` / `receipt_labels`、seed トリガ、既存 ledger への backfill）。
 - 0010 は一括作成（`drafts.batch_id` の追加と部分索引 `drafts_batch`。TASK-18）。
 - 0011 は登録招待（`register_invitations`。CREATE TABLE のみ。TASK-32）。
@@ -44,7 +44,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 ## 4. 家計簿（ledger）スコープと越境防止
 
 - データ行は `ledger_id` でスコープし、作成者は `created_by` / `user_id` に保持する。全データ行は ledger_id 経由または user_id 直接で認証主体に辿れる。
-- ユーザー作成時に個人 ledger を1つ自動作成し、`users.default_ledger_id` に設定する（`ledger_members.role='owner'`）。家族共有はメンバー追加で行う。個人 ledger の名前は共有の定数 `default book`（`store::DEFAULT_LEDGER_NAME`。0008 より前は「<表示名>の家計簿」で作られ、0008 で改名された）。名前は web 画面と MCP（`rename_ledger`）から変更できる（`ledgers.name`。trim 後 1〜100 字〔`max_ledger_name_chars`〕。同一ユーザーの所属内での重複は申告レベルで拒否し DB 制約は持たない。別ユーザー間の同名は可）。
+- ユーザー作成時に個人 ledger を1つ自動作成し、`users.default_ledger_id` に設定する（`ledger_members.role='owner'`）。家族共有はメンバー追加で行う。個人 ledger の名前は「<表示名>の家計簿」（`store::personal_ledger_name`。TASK-79。0008 で一斉 `default book` 化された後、登録経路は同式に戻った。trim 後空の表示名と `max_ledger_name_chars` に接尾が入らない設定値のみ定数 `default book` へ fallback し、表示名側を切詰めて全体を上限内に収める）。名前は web 画面と MCP（`rename_ledger`）から変更できる（`ledgers.name`。trim 後 1〜100 字〔`max_ledger_name_chars`〕。同一ユーザーの所属内での重複は申告レベルで拒否し DB 制約は持たない。別ユーザー間の同名は可。import〔spec_mcp-tools §12 の取り込み〕は取り込み元の名前をそのまま使うためこの重複検査の対象外で、同名の家計簿が並ぶことがある）。
 - `ledger_members.color` はユーザーごとの家計簿表示色。6色パレット（teal / orange / pink / brown / slate / graphite）のキーを保存（CHECK、NOT NULL DEFAULT 'teal'）。所属行の作成時にそのユーザーで未使用のパレット先頭キーを自動割当し、全色使用済みなら所属数 mod 6 のキーにする（TASK-34。ユーザー操作での変更 UI・API は持たない）。
 - 認可は「認証主体の user_id → 対象 ledger → `ledger_members` で所属と role を確認」で解決し、全データクエリは `ledger_id = ?` で絞る。書き込み（承認等）は role が editor 以上であることを確認する。対象 ledger は次の順で決める（詳細は `spec_auth.md` §5-3・§6）。
   - web 画面: `users.default_ledger_id`。
@@ -53,6 +53,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 「`ledger_id = ?` で絞る」の例外（いずれも所属 ledger の範囲に限る）:
   - 自分の draft 一覧（`get_receipt_drafts` の一覧）: `WHERE user_id = ?` で全所属 ledger を横断する。
   - widget 用の画像 URL 発行と配信（`refresh_widget_images`、`/media/img/<token>`）: `ledger_id IN (所属 ledger)` で絞り、配信時に所属・レシートの削除状態・draft の状態と user を再検査する（`spec_mcp-tools.md` §11-5）。
+- データの書き出し・取り込み（TASK-58）: 書き出し（`POST /api/ledgers/{l}/export`）は対象 ledger 1件の確定データ（labels・categories・stores・images・live receipts+items+labels。drafts・論理削除済み・members・認証系を除く）を単一 JSON ファイルに書き出し、取り込み（`POST /api/ledgers/import`）はそれを**新規 ledger** として復元する（既存 ledger には触れない・id は置換・正規化導出列は再計算。形式・上限・検証の詳細は `spec_mcp-tools.md` §12）。利用者向けのデータ持ち出し・復帰であって、運用 backup の代替ではない。
 - `oauth_grants.active_ledger_id` には grant の user が所属する ledger しか設定できない（トリガ）。メンバーから外れると、その user の grant の選択はトリガで NULL に戻る。`ledger_members` の `ledger_id` / `user_id` は変更不可（所属変更は DELETE + INSERT）。
 - tool / web 入力の ID は必ず `WHERE id = ? AND ledger_id = ?` で解決する。
 - 最終防衛線として、別 ledger を参照しうる FK（明細の `category_id`、レシートの `store_id`/`image_id`、店の `category_id`、別名の `store_id`、draft の `image_id`、画像アクセス token の `image_id`、カテゴリの `parent_id`、明細の `receipt_id`、ラベル付与の `receipt_id`）は BEFORE INSERT / BEFORE UPDATE トリガで ledger 一致を強制し、`ledger_id` の変更も禁止する。複合 FK は ON DELETE SET NULL が NOT NULL の `ledger_id` と衝突するため使わない。唯一の例外は `receipt_labels` の `(ledger_id, color) → ledger_labels` 複合 FK（0009）で、ON DELETE CASCADE のためこの衝突が起きない（定義行が消えるのは ledger 削除時のみ）。
@@ -120,7 +121,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 固定5色（red / yellow / green / blue / purple）・ledger 単位の共有ラベル。1色=1定義行（`ledger_labels`、PK `(ledger_id, color)`、WITHOUT ROWID）。既定は色だけで、タイトルは任意（`title` nullable TEXT。trim 後 1〜20字・Unicode scalar、空文字は NULL、一意制約なし。上限は `configs/<env>/mcp.toml` の `max_label_title_chars`）。色の増減は migration を伴う設計変更（3節）。
 - 定義行は `AFTER INSERT ON ledgers` トリガ（0009）で5行 seed する。`store::create_ledger_with_seed`・登録 ceremony の直接 INSERT・テスト helper の直接 INSERT など作成経路に依らない。既存 ledger へは 0009 の backfill で投入した。`ledger_id` / `color` はトリガで不変（`title` のみ UPDATE 可）。ledger 行の削除（アプリ経路は無い）で CASCADE する。
 - 付与は `receipt_labels(receipt_id, color)` の関連行（insert / delete only。行の UPDATE はトリガで禁止）。1レシートに複数色を付与できる。`receipt_id` の ledger 一致はトリガで強制し、色の妥当性は `(ledger_id, color) → ledger_labels` の複合 FK（CASCADE）で保証する（`color` に CHECK を付けない）。
-- 付け外しは差分（add / remove）で冪等・可換（add は `INSERT OR IGNORE`、remove は `DELETE`）。`receipts.revision` / `updated_at` は変えない（楽観ロックと独立に失われる更新がない）。変化したレシートにのみ audit（entity_type `receipt` / action `label`、before・after は色キーの配列）。タイトル変更は entity_type `ledger_label` / action `update`（同値の再設定は記録しない）。
+- 付け外しは差分（add / remove）で冪等・可換（add は `INSERT OR IGNORE`、remove は `DELETE`）。`receipts.revision` / `updated_at` は変えない（楽観ロックと独立に失われる更新がない）。変化したレシートにのみ audit（entity_type `receipt` / action `label`、before・after は色キーの配列）。タイトル変更は entity_type `ledger_label` / action `update`（同値の再設定は記録しない）。draft の作成時指定（`payload.label_colors`・TASK-21）の承認時付与も `INSERT OR IGNORE` で行い、作成時付与の証跡は draft 承認の audit（`after_json` = payload_json）に一元化して receipt/label の audit 行は重複して残さない（§7-5）。
 - 論理削除しても付与は保持し、復元でそのまま戻る。削除中の付け外しは不可（web は 409 `deleted`、MCP は skipped）。90日の物理削除（purge）で FK CASCADE によりレシートと共に消える。
 - 書き込み（付与・解除・タイトル設定）は editor 以上。定義一覧の読み取りと検索・集計のラベル絞り込みは member 全員。
 
@@ -137,6 +138,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
   "purchased_on": "2026-10-11", "purchased_time": "18:42",
   "tax_mode": "inclusive", "total_amount": 1234, "tax_amount": 91,
   "payment_method": "credit_card", "note": null,
+  "label_colors": ["red", "blue"],
   "items": [
     {"line_no": 1, "line_kind": "item", "name": "牛乳", "name_raw": "ｷﾞｭｳﾆｭｳ1L",
      "quantity": 1, "unit_price": 198, "amount": 198, "tax_rate": 8,
@@ -151,6 +153,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 購入日が読めない場合、draft 段階で撮影日時（EXIF 優先）の日付を初期値に入れる。承認時は `purchased_on` 必須。
 - revision 履歴テーブルは持たない（承認時の最終 payload は audit_events に残る）。
 - `batch_id`（TEXT、NULL 可）: 同じ `create_receipt_drafts` 呼び出しで作った draft（兄弟）の共通 ID（ULID）。1件版の作成と reopen は NULL。用途は重複検知の file_id 照合から兄弟を除外することだけ（`spec_mcp-tools.md` §6）。reopen は batch_id をコピーしない。
+- `label_colors`（TASK-21）: 作成時（#1 / #20 の payload）と `update_receipt_draft` の `set` で指定する draft 段階ラベルの色キー配列。保存前に重複を除き定義順（red / yellow / green / blue / purple）へ正規化し、null と空配列は「なし」（None）として保存するため、保存済み payload は常に正規形。reopen は `payload_json` のコピーでそのまま引き継ぐ。承認時に `receipt_labels` へ引き継がれる（§7-5）。
 
 ### 7-2 ライフサイクル
 
@@ -262,6 +265,10 @@ BEGIN IMMEDIATE;
      INSERT INTO stores ... ; INSERT INTO store_aliases ...（store_category 名は store_categories で解決、未知は NULL + 警告）
 3. INSERT INTO receipts (ledger_id, created_by, source, image_id, store_id, store_name_raw, purchased_on, ...)
      VALUES (..., 'image' or 'manual', ...) RETURNING id;   -- source は image_status='none' なら manual、それ以外は image（6-1）
+3b. payload.label_colors の各色を INSERT OR IGNORE INTO receipt_labels (receipt_id, ledger_id, color, created_by, created_at)
+     で引き継ぐ（TASK-21。冪等再承認は手順1で return するためここへ来ない。FK 先の定義行は seed 済みで常に存在。
+     作成時付与の証跡は手順6の draft 承認 audit〔after_json = payload_json が label_colors を含む〕に一元化し、
+     receipt/label の audit 行は書かない。label_receipts による後からの付け外しは従来どおり audit を残す）
 4. 各明細: カテゴリ名 → item_categories（WHERE ledger_id = :lid）で解決（未知は NULL + 警告、category_source='model'）、
    tax_mode と tax_rate から amount_incl を算出。item 行を先に INSERT し、値引行は parent_line_no → parent_item_id と category 複写。
      INSERT INTO receipt_items (...)   -- FTS はトリガで同期
@@ -339,7 +346,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 ## 11. 監査
 
 - 全ドメイン行に `created_at` / `updated_at`。
-- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。家計簿名の変更は `entity_type=ledger` / `action=rename_ledger`（entity_id は ledger_id、before・after に名前。TASK-20）。
+- audit_events に actor（`actor_kind`: web / mcp / mcp_anonymous / system、`client_id`）、対象（`entity_type` / `entity_id`）、`action`（create / update / delete / restore / approve / discard / reopen / merge / label ...）、変更前後の JSON を記録する。MCP 経由の変更を後から追え、明細の誤編集は before_json から戻せる。ラベル操作の記録は `entity_type=receipt` / `action=label`（before・after は色キー配列）と `entity_type=ledger_label` / `action=update`（タイトル設定。entity_id は ledger_id、before・after に色とタイトル）。draft の作成時ラベル付与（`payload.label_colors`・TASK-21）の承認時確定は draft 承認の audit（`after_json` = payload_json）で証跡化し、receipt/label の audit 行は重複して残さない（§6-4・§7-5）。家計簿名の変更は `entity_type=ledger` / `action=rename_ledger`（entity_id は ledger_id、before・after に名前。TASK-20）。既定家計簿の変更は `entity_type=user` / `action=default_ledger`（entity_id は user_id、after に before/after の ledger_id。TASK-13）。データの書き出し・取り込みは同じく `entity_type=ledger` で `action=export`（after に件数・bytes。誰がいつ何を書き出したかの記録）/ `action=import`（新規 ledger 作成。after に名前・件数。TASK-58）。
 - 認証系の記録: `actor_kind=mcp_anonymous` は匿名の MCP 呼び出し（`request_recovery` の受付）。`entity_type` に `user` / `webauthn_credential` / `invitation` / `oauth_grant` / `recovery_request` 等、`action` に `switch_ledger` / `grant_create` / `consent` / `login_mismatch` / `counter_regression` / `token_issue` / `token_revoke` / `token_use` / `passkey_revoke` / `user_disable` / `user_note` / `recovery_resolve` / `recovery_reject` / `grant_revoke` / `session_revoke` 等を加える（アプリ側 enum。一覧の正本は `spec_auth.md`）。
 
 ## 12. TTL 掃除
@@ -458,6 +465,34 @@ FROM receipt_items i JOIN receipts r ON r.id = i.receipt_id AND r.deleted_at IS 
 WHERE i.ledger_id = ?1 AND i.name_norm = ?2 AND i.category_id IS NOT NULL
 ORDER BY (i.category_source = 'user') DESC, r.purchased_on DESC
 LIMIT 1;
+```
+
+分析系 web API（TASK-89。`spec_mcp-tools.md` §12 の /analysis 3 endpoint）の軸集計も `v_item_facts` 上の都度集計（事前集計テーブル無しの維持）:
+
+- 軸キーは category→`category_top_id`（category filter 指定時はその `category_id`）/ store→`store_id` / item→`name`（品名。同名品目=1品目〔`/analysis/item` の item_query と同じ品名概念。REVIEW-13 M-3〕）/ payment_method→`payment_method` / label は `receipt_labels` への JOIN（下記 SQL）。count 系指標は `COUNT(DISTINCT receipt_id)`（レシート件数ベース。「1件あたり」=1レシート平均）。
+- ラベル軸（axis=label）は 1レシート複数ラベルで明細が複数軸値に重複計上され、軸合計が全体金額を超えうる（OR 絞り込みと同型）。share の分母はこの重複込みの軸合計とし、内訳の合計が100%になることを保証する。行名は `ledger_labels.title` 優先（空文字・無題はパレットの既定表示名）、無ラベル行は「ラベルなし」（key NULL の別行）。
+- 積み上げ推移は2段クエリ: 期間全体の軸値合計（`GROUP BY key`）で上位 N 系列を確定してから、`GROUP BY bucket_expr, key` を IN 句で絞り込む。bucket 式は day=`f.purchased_on` / week=月曜アンカーの `date(f.purchased_on, '-' || ((strftime('%w', f.purchased_on)+6)%7) || ' days')` / month=生成列 `f.purchased_month`。bucket 合計（bucket_totals）は系列絞りなしの別クエリ（ラベル軸は重複込みの labeled 分 + unlabeled 分の和）。
+- 品目stats の単価規約は item_price_history と同一（`unit_price` ないし `round(amount_incl / quantity)`）。SQL 内で MIN/MAX/AVG に使うときは `CAST(... AS INTEGER)` を付ける（SQLite の ROUND は REAL を返すため）。
+
+```sql
+-- ラベル軸の軸値集計（重複計上）と無ラベル行（key NULL）
+SELECT rl.color AS "k!: String", SUM(f.amount_incl) AS "a!: i64", COUNT(DISTINCT f.receipt_id) AS "c!: i64"
+FROM v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+GROUP BY rl.color ORDER BY 2 DESC;
+SELECT COALESCE(SUM(f.amount_incl), 0), COUNT(DISTINCT f.receipt_id)
+FROM v_item_facts f
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+  AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id);
+
+-- 積み上げ行列（週 bucket・上位系列を IN 句で絞り込む2段目）
+SELECT date(f.purchased_on, '-' || ((strftime('%w', f.purchased_on)+6)%7) || ' days') AS "b!: String",
+       CAST(f.category_top_id AS TEXT) AS k,
+       SUM(f.amount_incl) AS "a!: i64", COUNT(DISTINCT f.receipt_id) AS "c!: i64"
+FROM v_item_facts f
+WHERE f.ledger_id = ?1 AND f.purchased_on BETWEEN ?2 AND ?3
+  AND f.category_top_id IN (?4)
+GROUP BY 1, 2;
 ```
 
 ## 14. 認証系テーブル

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-// view=draft (spec §11-2): ledger badge, header, duplicate band, image state,
-// line list (unknown category in warning color), totals diff, revision and the
-// approve button (spec §11-3). Editing happens in the conversation.
+// view=draft (spec §11-2): ledger badge, header (with the draft's label
+// chips, TASK-21), duplicate band, image state, line list (unknown category
+// in warning color), totals diff, revision and the approve button (spec
+// §11-3). Editing happens in the conversation.
 import { computed, ref } from 'vue'
 import type { DraftEnvelope } from '@/shared/types'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import ItemTable, { type ItemRow } from '@/shared/components/ItemTable.vue'
+import LabelDots from '@/shared/components/LabelDots.vue'
 import { paymentLabel } from '@/shared/format'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import DuplicateBand from '../components/DuplicateBand.vue'
@@ -56,6 +58,11 @@ function select(lineNo: number) {
           {{ p.purchased_time }}
         </template> ・ {{ paymentLabel(p.payment_method) }}
       </p>
+      <LabelDots
+        v-if="d.labels?.length"
+        :labels="d.labels"
+        class="bb-labels"
+      />
       <p class="bb-total">
         <span>合計</span>
         <MoneyAmount :value="p.total_amount ?? d.resolution.items_total" />

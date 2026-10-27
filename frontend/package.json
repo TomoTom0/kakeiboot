@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
+    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build && vite build --config vite.widget.config.ts",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.node.json && vue-tsc --noEmit -p tsconfig.vitest.json",
     "lint": "eslint .",
     "test": "vitest run"

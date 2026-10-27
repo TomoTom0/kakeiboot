@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
+import IconButton from '../../components/IconButton.vue'
 import RowMenu, { type RowMenuItem } from '../../components/RowMenu.vue'
+import { authApi } from '../../api/auth'
 import { useDataApi } from '../../api/data'
 import { ApiError } from '../../api/http'
 import { errorMessage } from '../../composables/format'
@@ -15,13 +17,13 @@ import { useSessionStore } from '../../stores/session'
 // a membership is created and cannot be changed by the user (TASK-34).
 // TASK-20: owner / editor rows carry the trailing "..." (名前を変更) that
 // turns the row into an inline rename editor (Enter saves, Escape gives up,
-// the result lands on the row); viewer rows stay display-only with no menu.
+// the result lands on the row). TASK-13: non-default rows also offer
+// 既定の家計簿にする in the same menu (any role — the default picks the
+// initial view, it is not a permission); the default row keeps its badge.
 const session = useSessionStore()
 const api = useDataApi()
 
 const ROLE_LABEL: Record<string, string> = { owner: 'オーナー', editor: '編集', viewer: '閲覧のみ' }
-
-const menuItems: RowMenuItem[] = [{ action: 'rename', label: '名前を変更', test: 'menu-rename' }]
 
 const rootEl = ref<HTMLElement | null>(null)
 // one editor at a time; switching rows simply discards the draft (the list
@@ -31,6 +33,23 @@ const editName = ref('')
 const busy = ref(false)
 // inline result on the row it belongs to: success role=status, failure role=alert
 const statusOf = ref<{ id: number; role: 'status' | 'alert'; text: string } | null>(null)
+
+const defaultLedgerId = computed(() => session.me?.default_ledger_id ?? null)
+
+/** Per-row menu (TASK-13): non-default rows get 既定の家計簿にする (any
+ * role), owner / editor rows add 名前を変更. The default row offers rename
+ * only — and a viewer default row has no menu at all. */
+function menuItems(id: number): RowMenuItem[] {
+  const items: RowMenuItem[] = []
+  if (id !== defaultLedgerId.value) {
+    items.push({ action: 'default', label: '既定の家計簿にする', test: 'menu-default' })
+  }
+  const role = session.me?.ledgers.find((l) => l.id === id)?.role
+  if (role === 'owner' || role === 'editor') {
+    items.push({ action: 'rename', label: '名前を変更', test: 'menu-rename' })
+  }
+  return items
+}
 
 function openRename(id: number, name: string): void {
   if (busy.value) return
@@ -43,8 +62,26 @@ function openRename(id: number, name: string): void {
   })
 }
 
+async function makeDefault(id: number): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  statusOf.value = null
+  try {
+    await authApi.setDefaultLedger(id)
+    // the store update moves the 既定 badge without a re-fetch; the current
+    // selection and the per-grant active ledger stay put (spec_auth.md 6-1)
+    session.setDefaultLedger(id)
+    statusOf.value = { id, role: 'status', text: '既定の家計簿にしました' }
+  } catch (e) {
+    statusOf.value = { id, role: 'alert', text: errorMessage(e) }
+  } finally {
+    busy.value = false
+  }
+}
+
 function onMenu(id: number, name: string, action: string): void {
   if (action === 'rename') openRename(id, name)
+  if (action === 'default') void makeDefault(id)
 }
 
 /** Escape / やめる give up — never while a save is in flight. */
@@ -117,10 +154,15 @@ async function save(): Promise<void> {
               /></span>
               <strong>{{ l.name }}</strong>
               <span class="muted small">{{ ROLE_LABEL[l.role] ?? l.role }}</span>
+              <span
+                v-if="l.id === defaultLedgerId"
+                class="badge"
+                data-test="default-badge"
+              >既定</span>
             </div>
             <RowMenu
-              v-if="editingId !== l.id && l.role !== 'viewer'"
-              :items="menuItems"
+              v-if="editingId !== l.id && menuItems(l.id).length > 0"
+              :items="menuItems(l.id)"
               :ariaLabel="`${l.name}の操作`"
               :test="`row-menu-${l.id}`"
               @select="onMenu(l.id, l.name, $event)"
@@ -138,23 +180,20 @@ async function save(): Promise<void> {
                 @keydown.enter.prevent="save"
                 @keydown.esc.prevent="cancel"
               >
-              <button
-                class="btn btn-primary"
-                type="button"
+              <IconButton
+                icon="check"
+                label="保存"
+                variant="primary"
                 :disabled="busy"
-                data-test="edit-save"
+                test="edit-save"
                 @click="save"
-              >
-                保存
-              </button>
-              <button
-                class="btn"
-                type="button"
+              />
+              <IconButton
+                icon="close"
+                label="やめる"
                 :disabled="busy"
                 @click="cancel"
-              >
-                やめる
-              </button>
+              />
             </div>
             <p
               v-if="statusOf !== null && statusOf.id === l.id"
@@ -166,6 +205,9 @@ async function save(): Promise<void> {
             </p>
           </li>
         </ul>
+        <p class="muted small">
+          既定の家計簿は web 画面を開いたときの初期表示と、次に接続するアプリの最初の家計簿になります。
+        </p>
       </dd>
     </dl>
   </section>

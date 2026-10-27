@@ -1,7 +1,7 @@
 支出を集計する（金額の合計・内訳・推移）。個々のレシートを探すときは search_receipts を使う。
 
 report:
-- monthly_overview: 当月の合計・前月比・カテゴリ内訳・上位店・直近6か月の推移
+- monthly_overview: 当月の合計・カテゴリ内訳・上位店・直近6か月の推移
 - by_category: 品目カテゴリ別（filters.category でその小分類別）
 - by_store: 店別
 - monthly_trend: 月別推移（filters 併用でカテゴリ・店の推移）

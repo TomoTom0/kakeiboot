@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use super::auth::{AuthContext, auth};
 use super::registry::{self, ToolDef};
 use super::tools::{self, ToolEnv};
-use super::widget_resource::WidgetResource;
+use super::widget_resource::{WidgetResource, is_legacy_hash_uri};
 use crate::auth::oauth::assertion as oauth_assertion;
 use crate::auth::session::now_ms;
 use crate::config::Config;
@@ -208,13 +208,16 @@ impl ServerHandler for BudgetBookMcp {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        if request.uri.as_str() != self.env.widget.uri.as_str() {
+        // Accept the stable URI or a legacy content-hash URI alias (spec
+        // 11-1, TASK-106); anything else is an unknown resource.
+        let uri = request.uri.as_str();
+        if uri != self.env.widget.uri.as_str() && !is_legacy_hash_uri(uri) {
             return Err(ErrorData::invalid_params(
                 format!("unknown resource {}", request.uri),
                 None,
             ));
         }
-        let result: ReadResourceResult = serde_json::from_value(self.env.widget.read_json())
+        let result: ReadResourceResult = serde_json::from_value(self.env.widget.read_json(uri))
             .map_err(|e| ErrorData::internal_error(format!("widget resource: {e}"), None))?;
         Ok(ReadResourceResponse::Complete(result))
     }

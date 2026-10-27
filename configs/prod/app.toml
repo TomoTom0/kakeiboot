@@ -50,3 +50,11 @@ dev_port = 40281
 # Built frontend directory the backend serves (SPA shell + hashed assets;
 # relative paths resolve against the project root).
 static_dir = "frontend/dist"
+
+[data_io]
+# TASK-58 settings-page export/import caps: the payload cap bounds the export
+# response (serialized JSON) and the import request body (route body limit);
+# the count caps bound one import transaction's DB work.
+max_payload_bytes = 67108864
+max_receipts = 5000
+max_items_total = 50000

@@ -15,6 +15,9 @@ const WIDTHS = [390, 360, 768, 1280] as const
 const SCREENS = [
   { name: 'home', path: '/' },
   { name: 'categories', path: '/categories' },
+  // the axis detail screens (TASK-89 /axes/* routes)
+  { name: 'axis-category', path: '/axes/category/1?month=2026-10' },
+  { name: 'axis-store', path: '/axes/store/1?month=2026-10' },
   { name: 'receipt-feed', path: '/receipts/101' },
   // settings tabs (TASK-36 real-device rework: four horizontal tabs) and the
   // label manage screen that lights the data tab
@@ -144,6 +147,10 @@ for (const width of WIDTHS) {
     })
 
     test('screens, sidebar, logos', async ({ page, browser }) => {
+      // capture walks 10+ screens with viewport + fullPage shots per width, so
+      // it sits close to the default 30s budget under concurrent repo load
+      // (parallel verify runs in worktrees); give the capture room to finish
+      test.setTimeout(120_000)
       const metrics: Record<string, unknown> = {}
       await installApiStub(page)
       // browser-side errors go to the run log; Vite HMR websocket noise is
@@ -168,8 +175,8 @@ for (const width of WIDTHS) {
 
       // sidebar / drawer open. The shell class is the source of truth for
       // the open state (the overlay hides via transform, not display):
-      // mobile starts closed, so the menu button opens it; desktop starts
-      // open (TASK-33 overlay unification) — and a closed shot follows.
+      // TASK-89 has the drawer start closed at every width (the desktop
+      // default-open is gone), so the menu button always opens it here.
       await page.goto('/')
       await expect(page.locator('.topbar')).toBeVisible()
       await page.waitForLoadState('networkidle')

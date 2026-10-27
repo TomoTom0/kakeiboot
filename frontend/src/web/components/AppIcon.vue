@@ -62,6 +62,20 @@ const PATHS = {
     'M12 16h3',
     'M12 19h2',
   ],
+  // TASK-47: the passkey-add glyph (key + top-right plus, the user-plus recipe)
+  'key-plus': [
+    'M15.5 7.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z',
+    'M12 11v10',
+    'M12 16h3',
+    'M12 19h2',
+    'M20 3v4',
+    'M18 5h4',
+  ],
+  // TASK-48: the copy control's resting glyph (two overlapping sheets)
+  copy: [
+    'M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z',
+    'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2',
+  ],
   check: ['M20 6 9 17l-5-5'],
   lock: ['M5 11h14v10H5z', 'M8 11V7a4 4 0 0 1 8 0v4'],
   chat: ['M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z'],

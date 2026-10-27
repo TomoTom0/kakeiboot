@@ -331,9 +331,9 @@ async fn setup_finish_creates_user_and_personal_ledger() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    // TASK-16: the personal ledger is DEFAULT_LEDGER_NAME and the first
+    // TASK-79: the personal ledger is named "<表示名>の家計簿" and the first
     // membership gets the first palette key
-    assert_eq!(ledger_name, "default book");
+    assert_eq!(ledger_name, "setup-userの家計簿");
     assert_eq!(role, "owner");
     assert_eq!(color, "teal");
     let cats: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_categories WHERE ledger_id = ?")
@@ -500,7 +500,7 @@ async fn invite_finish_joins_ledger_and_records_lineage() {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-            assert_eq!(name, "default book", "personal ledger name");
+            assert_eq!(name, "invitee-falseの家計簿", "personal ledger name");
         }
         let roles: Vec<(i64, String)> = sqlx::query_as(
             "SELECT ledger_id, role FROM ledger_members m JOIN users u ON u.id = m.user_id WHERE u.display_name = ? AND m.ledger_id = ?",
@@ -589,7 +589,7 @@ async fn register_token_creates_user_and_personal_ledger() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(ledger_name, "default book");
+    assert_eq!(ledger_name, "registeredの家計簿");
     assert_eq!(role, "owner");
     assert_eq!(color, "teal");
     let cats: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_categories WHERE ledger_id = ?")

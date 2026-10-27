@@ -117,7 +117,7 @@ const itemRows = computed(() =>
       const parent = node === null ? null : catalog.parentIdOf('item', node.id)
       if (node) {
         catTo = {
-          path: parent === null ? `/categories/${node.id}` : `/categories/${parent}/${node.id}`,
+          path: parent === null ? `/axes/category/${node.id}` : `/axes/category/${parent}/${node.id}`,
           query: linkQuery.value,
         }
       }
@@ -368,10 +368,10 @@ const labelSlotProps = computed(() => ({
             tabindex="-1"
           >
             <span data-test="store-name"><RouterLink
-              v-if="receipt.store"
-              class="store-link"
-              :to="{ path: `/stores/${receipt.store.store_id}`, query: linkQuery }"
-            >{{ receipt.store.name }}</RouterLink>
+                                           v-if="receipt.store"
+                                           class="store-link"
+                                           :to="{ path: `/axes/store/${receipt.store.store_id}`, query: linkQuery }"
+                                         >{{ receipt.store.name }}</RouterLink>
               <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
             <span
               v-if="receipt.deleted_at"
@@ -383,16 +383,24 @@ const labelSlotProps = computed(() => ({
             {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}
           </p>
           <div class="tags">
-            <span
+            <!-- TASK-65: the payment tag filters the receipts list (the
+                 store-category tag pattern: the purchase month rides along) -->
+            <RouterLink
               v-if="receipt.payment_method"
-              class="tag"
-            >{{ PAYMENT_LABEL[receipt.payment_method] }}</span>
+              class="tag tag-link"
+              :to="{ path: '/receipts', query: { payment_method: receipt.payment_method, ...linkQuery } }"
+              data-test="payment-method"
+            >
+              {{ PAYMENT_LABEL[receipt.payment_method] }}
+            </RouterLink>
             <RouterLink
               v-if="receipt.store?.category"
               class="tag tag-link"
               :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
               data-test="store-category"
-            >{{ receipt.store.category }}</RouterLink>
+            >
+              {{ receipt.store.category }}
+            </RouterLink>
             <span
               v-if="receipt.has_image"
               class="tag"
@@ -599,7 +607,9 @@ const labelSlotProps = computed(() => ({
                     class="cat-link"
                     :to="row.catTo"
                     :data-test="`item-cat-${row.it.item_id}`"
-                  >{{ row.it.category }}</RouterLink>
+                  >
+                    {{ row.it.category }}
+                  </RouterLink>
                   <span
                     v-else
                     class="muted small block"

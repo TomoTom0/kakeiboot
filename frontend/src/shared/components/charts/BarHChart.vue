@@ -5,9 +5,8 @@ import { computed } from 'vue'
 import { formatYen, truncateLabel } from '@/shared/format'
 import { type ChartDatum, niceMax, seriesColor } from './types'
 
-const props = withDefaults(defineProps<{ data: ChartDatum[]; labelChars?: number; showCompare?: boolean }>(), {
+const props = withDefaults(defineProps<{ data: ChartDatum[]; labelChars?: number }>(), {
   labelChars: 9,
-  showCompare: false,
 })
 
 const W = 320
@@ -16,14 +15,13 @@ const VALUE_W = 70
 const ROW = 30
 const BAR_W = W - LABEL_W - VALUE_W
 
-const max = computed(() => niceMax(Math.max(0, ...props.data.flatMap((d) => [d.value, d.compare ?? 0]))))
+const max = computed(() => niceMax(Math.max(0, ...props.data.map((d) => d.value))))
 const rows = computed(() =>
   props.data.map((d, i) => ({
     label: truncateLabel(d.label, props.labelChars),
     full: d.label,
     value: d.value,
     width: (Math.max(0, d.value) / max.value) * BAR_W,
-    compareWidth: d.compare === null || d.compare === undefined ? null : (Math.max(0, d.compare) / max.value) * BAR_W,
     y: i * ROW,
     color: seriesColor(i),
     valueText: formatYen(d.value),
@@ -51,15 +49,6 @@ const height = computed(() => Math.max(ROW, rows.value.length * ROW))
         x="0"
         :y="ROW / 2 + 4"
       >{{ r.label }}</text>
-      <rect
-        v-if="showCompare && r.compareWidth !== null"
-        class="bb-chart__compare"
-        :x="LABEL_W"
-        :y="ROW / 2 + 5"
-        :width="r.compareWidth"
-        height="4"
-        rx="1"
-      />
       <rect
         class="bb-chart__bar"
         :x="LABEL_W"

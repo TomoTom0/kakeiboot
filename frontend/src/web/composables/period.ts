@@ -24,15 +24,55 @@ export function monthLabel(month: string): string {
   return `${y}年${m}月`
 }
 
-/** First/last axis labels for a monthly trend ("YYYY-MM" keys, oldest first).
- *  Short "M月" while both ends are in one year, full "YYYY年M月" across years,
- *  null when there are no bars, last=null for a single bar. */
-export function axisMonthLabels(keys: readonly string[]): { first: string; last: string | null } | null {
+/** Axis tick indices for n bars (TASK-100): at most 5 ticks, ascending, and
+ *  always the first and the last bar. 1..5 bars keep every index; beyond
+ *  that the n-1 span is quartered — step = ceil((n-1)/4), which caps the
+ *  enumerated points at 4 (the old ceil(n/5) thinned n=10/14 to 6 ticks).
+ *  When the last enumerated point lands directly adjacent to n-1 the pair
+ *  would crowd the right edge — swap it for the end itself (n=14: the
+ *  enumeration 0,4,8,12 yields [0,4,8,13], not 5 points). */
+export function axisTickIndices(n: number): number[] {
+  if (n <= 0) return []
+  if (n <= 5) return Array.from({ length: n }, (_, i) => i)
+  const step = Math.ceil((n - 1) / 4)
+  const out: number[] = []
+  for (let i = 0; i < n - 1; i += step) out.push(i)
+  if (out.length === 4 && out[3] === n - 2) out[3] = n - 1
+  else out.push(n - 1)
+  return out
+}
+
+export interface AxisMonthLabel { key: string; label: string }
+
+/** Axis labels for a monthly trend ("YYYY-MM" keys, oldest first).
+ *  first/last keep the TASK-42 window-ends contract (short "M月" while both
+ *  ends are in one year, full "YYYY年M月" across years, last=null for a
+ *  single bar) — ReceiptsPage's inline card consumes these. TASK-100 adds
+ *  `items` for TrendBars: the thinned tick positions with one year format
+ *  rule — a label goes full "YYYY年M月" when its year differs from the
+ *  previous shown label, or at the head when the window crosses years or
+ *  starts on January; same-year labels stay short "M月". */
+export function axisMonthLabels(keys: readonly string[]): {
+  first: string
+  last: string | null
+  items: AxisMonthLabel[]
+} | null {
   if (keys.length === 0) return null
   const first = keys[0]!
   const last = keys[keys.length - 1]!
   const fmt = (k: string) => (first.slice(0, 4) === last.slice(0, 4) ? `${Number(k.slice(5))}月` : monthLabel(k))
-  return { first: fmt(first), last: keys.length > 1 ? fmt(last) : null }
+  let prevYear: number | null = null
+  const items = axisTickIndices(keys.length).map((i) => {
+    const key = keys[i]!
+    const year = Number(key.slice(0, 4))
+    const full =
+      prevYear === null
+        ? first.slice(0, 4) !== last.slice(0, 4) || first.slice(5) === '01'
+        : year !== prevYear
+    prevYear = year
+    return { key, label: full ? monthLabel(key) : `${Number(key.slice(5))}月` }
+  })
+  return { first: fmt(first), last: keys.length > 1 ? fmt(last) : null, items }
 }
 
 /** Days elapsed in a period for a per-day average: through today while the
@@ -54,6 +94,25 @@ export function monthEnd(month: string): string {
 export function shortDate(d: string | null | undefined): string {
   if (!d) return '-'
   return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+}
+
+/** "2026-10-05" ± n days -> "YYYY-MM-DD" (UTC math, no TZ drift). */
+export function shiftDate(d: string, days: number): string {
+  return new Date(Date.parse(d) + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** Monday of the week containing d ("YYYY-MM-DD"; Sunday joins the previous
+ *  Monday). Weeks are Monday-anchored (TASK-53, the JST calendar standard). */
+export function weekStart(d: string): string {
+  const day = new Date(Date.parse(d)).getUTCDay() // 0 = Sunday
+  return shiftDate(d, -((day + 6) % 7))
+}
+
+/** "18:30"/"09:05:30" -> "18:30"/"09:05"; null -> "-" (TASK-63/57: the day
+ *  group rows show the time — the group head already carries the date). */
+export function shortTime(t: string | null | undefined): string {
+  if (!t) return '-'
+  return t.slice(0, 5)
 }
 
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土']

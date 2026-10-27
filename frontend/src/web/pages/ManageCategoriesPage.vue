@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataApi, type Catalog, type CategoryKind, type CategoryNode } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import IconButton from '../components/IconButton.vue'
 import RowMenu, { type RowMenuItem } from '../components/RowMenu.vue'
 import { errorMessage } from '../composables/format'
 import { useLedger } from '../composables/ledger'
@@ -531,22 +532,19 @@ watch(ledgerId, () => {
         @keydown.enter.prevent="submitAdd"
         @keydown.esc.prevent="cancelAdd"
       >
-      <button
-        class="btn btn-primary"
-        type="button"
+      <IconButton
+        icon="check"
+        label="作成"
+        variant="primary"
         :disabled="busy || addValue.trim() === ''"
         @click="submitAdd"
-      >
-        作成
-      </button>
-      <button
-        class="btn"
-        type="button"
+      />
+      <IconButton
+        icon="close"
+        label="やめる"
         :disabled="busy"
         @click="cancelAdd"
-      >
-        やめる
-      </button>
+      />
       <p
         v-if="addStatus"
         class="row-status"
@@ -640,22 +638,19 @@ watch(ledgerId, () => {
               {{ t }} の下へ
             </option>
           </select>
-          <button
-            class="btn btn-primary"
-            type="button"
+          <IconButton
+            icon="check"
+            label="保存"
+            variant="primary"
             :disabled="busy"
             @click="saveEditor"
-          >
-            保存
-          </button>
-          <button
-            class="btn"
-            type="button"
+          />
+          <IconButton
+            icon="close"
+            label="やめる"
             :disabled="busy"
             @click="cancelEditor"
-          >
-            やめる
-          </button>
+          />
         </div>
         <p
           v-if="statusOf(root.id)"
@@ -710,22 +705,19 @@ watch(ledgerId, () => {
                   {{ t }} の下へ
                 </option>
               </select>
-              <button
-                class="btn btn-primary"
-                type="button"
+              <IconButton
+                icon="check"
+                label="保存"
+                variant="primary"
                 :disabled="busy"
                 @click="saveEditor"
-              >
-                保存
-              </button>
-              <button
-                class="btn"
-                type="button"
+              />
+              <IconButton
+                icon="close"
+                label="やめる"
                 :disabled="busy"
                 @click="cancelEditor"
-              >
-                やめる
-              </button>
+              />
             </div>
             <RowMenu
               v-else
@@ -754,22 +746,19 @@ watch(ledgerId, () => {
               @keydown.enter.prevent="submitAdd"
               @keydown.esc.prevent="cancelAdd"
             >
-            <button
-              class="btn btn-primary"
-              type="button"
+            <IconButton
+              icon="check"
+              label="作成"
+              variant="primary"
               :disabled="busy || addValue.trim() === ''"
               @click="submitAdd"
-            >
-              作成
-            </button>
-            <button
-              class="btn"
-              type="button"
+            />
+            <IconButton
+              icon="close"
+              label="やめる"
               :disabled="busy"
               @click="cancelAdd"
-            >
-              やめる
-            </button>
+            />
             <p
               v-if="addStatus"
               class="row-status"

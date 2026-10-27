@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily kakeiboot %i backup
+
+[Timer]
+# 運用機timezoneはEtc/UTC（実測）。systemdのOnCalendarはlocaltime解釈のため
+# UTC 19:30 = JST 04:30（翌日）。JSTの早朝は利用者アクセスが最も少なく、
+# 日中のdraft承認後でDB書込が静止しやすい時間帯を狙う。
+OnCalendar=*-*-* 19:30
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

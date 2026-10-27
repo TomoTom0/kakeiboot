@@ -76,6 +76,13 @@ export interface SwitchLedgerResult {
   previous: { id: number; name: string | null } | null
 }
 
+/** An issued share / registration URL (201 {url, expires_at}); the plain
+ * token comes back exactly once, so the row lives in browser memory only. */
+export interface IssuedInvitation {
+  url: string
+  expires_at: number
+}
+
 const pre = { authOptional: true }
 
 export const authApi = {
@@ -115,19 +122,26 @@ export const authApi = {
   renamePasskey: (id: number, label: string) =>
     request<Record<string, never>>('PATCH', `/api/passkeys/${id}`, { label }),
   deletePasskey: (id: number) => request<void>('DELETE', `/api/passkeys/${id}`),
-  createInvitation: (role: 'editor' | 'viewer', inviterNote?: string) =>
-    request<{ url: string; expires_at: number }>(
+  // TASK-78: the target ledger is chosen at issue time (owned ledgers only;
+  // the backend checks ownership). The note is capped at 200 chars.
+  createInvitation: (role: 'editor' | 'viewer', ledgerId: number, inviterNote?: string) =>
+    request<IssuedInvitation>(
       'POST',
       '/api/invitations',
-      inviterNote ? { role, inviter_note: inviterNote } : { role },
+      inviterNote ? { role, ledger_id: ledgerId, inviter_note: inviterNote } : { role, ledger_id: ledgerId },
     ),
   // Registration-only invitation (TASK-32): any active user, the note is
   // mandatory, no ledger join. Separate endpoint from /api/invitations.
   createRegisterInvitation: (inviterNote: string) =>
-    request<{ url: string; expires_at: number }>(
-      'POST',
-      '/api/register-invitations',
-      { inviter_note: inviterNote },
+    request<IssuedInvitation>('POST', '/api/register-invitations', { inviter_note: inviterNote }),
+  // TASK-13: the user-level default ledger (web initial selection and the
+  // initial active ledger of future grants; the per-grant selection has its
+  // own endpoint in oauthApi.switchActiveLedger).
+  setDefaultLedger: (ledgerId: number) =>
+    request<{ ledger: { id: number; name: string; role: LedgerRole } }>(
+      'PUT',
+      '/api/auth/me/default-ledger',
+      { ledger_id: ledgerId },
     ),
 }
 

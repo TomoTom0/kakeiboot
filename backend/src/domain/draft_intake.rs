@@ -90,6 +90,13 @@ pub async fn prepare(
 ) -> Result<Prepared, PrepareFail> {
     let mut payload = input.payload;
     dd::strip_sources(&mut payload.items);
+    // draft labels: normalize to the palette order, empty -> None (TASK-21)
+    if let Some(colors) = payload.label_colors.as_mut() {
+        super::labels::normalize_colors(colors);
+        if colors.is_empty() {
+            payload.label_colors = None;
+        }
+    }
     let mut errs = dd::validate_payload(&payload, lim);
     let max = lim.max_name_chars;
     if input
@@ -340,8 +347,9 @@ pub async fn approve_one(
                 warnings,
             });
         }
-        // duplicates are read before the draft closes (spec 6)
-        let dups = dd::find_duplicates(pool, row, &payload).await?;
+        // duplicates are read before the draft closes (spec 6); the
+        // connection is acquired inline (find_duplicates takes &mut conn)
+        let dups = dd::find_duplicates(&mut *pool.acquire().await?, row, &payload).await?;
         for d in dups {
             let code = match d.match_kind.as_str() {
                 "file_id" => "duplicate_file",

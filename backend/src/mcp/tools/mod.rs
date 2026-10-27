@@ -137,6 +137,11 @@ impl Call<'_> {
             }
         }
     }
+
+    /// Content-text line: 「webで見る: <origin>/receipts/<id>」(spec 3-3, TASK-80).
+    pub fn receipt_web_line(&self, receipt_id: i64) -> String {
+        format!("webで見る: {}", self.env.widget.receipt_web_url(receipt_id))
+    }
 }
 
 /// role >= editor for writes (spec 4: 「この家計簿は閲覧のみです」).

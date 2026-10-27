@@ -148,7 +148,7 @@ async fn widget_resource_list_and_read() {
     let resources = result_of(&list)["resources"].as_array().cloned().unwrap();
     assert_eq!(resources.len(), 1, "one widget template");
     let uri = resources[0]["uri"].as_str().unwrap().to_string();
-    assert!(uri.starts_with("ui://budget-book/widget-"), "{uri}");
+    assert_eq!(uri, "ui://budget-book/widget.html", "stable URI");
     assert_eq!(resources[0]["mimeType"], "text/html;profile=mcp-app");
     let read = post_mcp(
         &router,
@@ -158,6 +158,11 @@ async fn widget_resource_list_and_read() {
     .await;
     let contents = result_of(&read)["contents"].as_array().cloned().unwrap();
     assert_eq!(contents.len(), 1);
+    assert_eq!(
+        contents[0]["uri"].as_str(),
+        Some(uri.as_str()),
+        "read echoes the requested URI"
+    );
     assert!(contents[0]["text"].as_str().unwrap().contains("<"));
     // an unknown URI is an error, not the template
     let bad = post_mcp(
@@ -170,7 +175,91 @@ async fn widget_resource_list_and_read() {
         ),
     )
     .await;
-    assert!(bad.get("error").is_some(), "unknown resource rejected");
+    assert_eq!(
+        bad["error"]["code"],
+        json!(-32602),
+        "unknown resource rejected"
+    );
+}
+
+// [covers:mcp-tools.widget-resource-alias]
+#[tokio::test]
+async fn widget_resource_legacy_hash_alias() {
+    let (router, _pool, token, _grant, _user, _active) = setup_with_ledger().await;
+    // a legacy hash URI (observed in the stg journal, TASK-106) reads the
+    // current template and echoes the requested URI
+    let alias_uri = "ui://budget-book/widget-4e4f5a2a8f81.html";
+    let alias = post_mcp(
+        &router,
+        &token,
+        rpc(1, "resources/read", json!({ "uri": alias_uri })),
+    )
+    .await;
+    let contents = result_of(&alias)["contents"].as_array().cloned().unwrap();
+    assert_eq!(contents.len(), 1);
+    assert_eq!(
+        contents[0]["uri"].as_str(),
+        Some(alias_uri),
+        "alias read echoes the requested URI"
+    );
+    assert!(contents[0]["text"].as_str().unwrap().contains("<"));
+    // the alias answer carries the same text and _meta as the stable-URI
+    // answer (REVIEW-22 low-2: the alias reuses meta() as-is)
+    let stable = post_mcp(
+        &router,
+        &token,
+        rpc(
+            2,
+            "resources/read",
+            json!({ "uri": "ui://budget-book/widget.html" }),
+        ),
+    )
+    .await;
+    let stable_contents = result_of(&stable)["contents"].as_array().cloned().unwrap();
+    assert_eq!(
+        contents[0]["text"], stable_contents[0]["text"],
+        "alias serves the current template"
+    );
+    assert_eq!(
+        contents[0]["_meta"], stable_contents[0]["_meta"],
+        "alias keeps the stable-URI _meta"
+    );
+    // any well-formed legacy hash URI reads (12 lowercase hex; the current
+    // stg build hash and an all-zero hash both qualify)
+    for uri in [
+        "ui://budget-book/widget-ab3275e3800d.html",
+        "ui://budget-book/widget-000000000000.html",
+    ] {
+        let v = post_mcp(
+            &router,
+            &token,
+            rpc(3, "resources/read", json!({ "uri": uri })),
+        )
+        .await;
+        assert!(v.get("error").is_none(), "legacy alias {uri} reads: {v}");
+    }
+    // malformed shapes are unknown resources: too few / 11 / 13 hex chars,
+    // uppercase, no extension, wrong prefix
+    for uri in [
+        "ui://budget-book/widget-abc.html",
+        "ui://budget-book/widget-4e4f5a2a8f8.html",
+        "ui://budget-book/widget-4e4f5a2a8f812.html",
+        "ui://budget-book/widget-4E4F5A2A8F81.html",
+        "ui://budget-book/widget-4e4f5a2a8f81",
+        "ui://budget-book/other.html",
+    ] {
+        let v = post_mcp(
+            &router,
+            &token,
+            rpc(4, "resources/read", json!({ "uri": uri })),
+        )
+        .await;
+        assert_eq!(
+            v["error"]["code"],
+            json!(-32602),
+            "malformed URI {uri} is an unknown resource"
+        );
+    }
 }
 
 // [covers:mcp-tools.whoami-envelope]

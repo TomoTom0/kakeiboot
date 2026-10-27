@@ -66,6 +66,9 @@ export type DraftPayload = {
   tax_amount?: Integer | null
   payment_method?: PaymentMethod | null
   note?: string | null
+  /** draft-stage labels, chosen at intake and carried into the receipt at
+   *  approval (TASK-21; normalized to the palette order by the server) */
+  label_colors?: LabelColor[] | null
   items: DraftItem[]
 }
 
@@ -94,6 +97,9 @@ export type DraftView = {
     taken_at_source: 'exif' | 'model' | null
   } | null
   payload: DraftPayload
+  /** draft-stage labels with the ledger's titles, palette order (TASK-21;
+   *  empty when unlabeled — older payloads omit it) */
+  labels?: Label[]
   resolution: {
     store: { status: 'existing' | 'new'; store_id?: Integer }
     categories: {
@@ -245,8 +251,6 @@ export type StatsRow = {
   keys: (string | Integer | null)[]
   labels: string[]
   value: Integer
-  compare_value?: Integer | null
-  diff?: Integer | null
   share?: number
 }
 
@@ -341,12 +345,8 @@ export type StatsEnvelope = Envelope<
     /** Echo of the applied filters (spec §10), incl. label_colors (TASK-17). */
     filters?: StatsFilters | null
     period_resolved: PeriodResolved
-    compare_period?: PeriodResolved | null
     totals: {
       value: Integer
-      compare_value?: Integer | null
-      diff?: Integer | null
-      diff_pct?: number | null
       receipts: Integer
     }
     sections: StatsSection[]

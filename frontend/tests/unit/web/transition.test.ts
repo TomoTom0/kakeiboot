@@ -209,7 +209,7 @@ describe('branch transition (login/logout shell swap)', () => {
     // home endpoints stay unmocked (404): the call log still records them,
     // which is what the exactly-once check below reads
     const fetches = mockFetch({})
-    const statsCalls = () => fetches.calls.filter((c) => c.path.startsWith('/api/ledgers/1/stats'))
+    const statsCalls = () => fetches.calls.filter((c) => c.path.startsWith('/api/ledgers/1/analysis'))
     const { router, pinia } = await mountApp('/login', { attach: true, stubs: { transition: false } })
     const publicRoot = document.querySelector('main.public')!
     expect(publicRoot).not.toBe(null)
@@ -225,16 +225,17 @@ describe('branch transition (login/logout shell swap)', () => {
     expect(publicRoot.classList.contains('page-leave-active')).toBe(true)
     expect(publicRoot.classList.contains('page-leave-from')).toBe(true)
     expect(publicRoot.querySelector('[data-test="login"]')).not.toBe(null)
-    expect(publicRoot.querySelector('[data-test="kpi"]')).toBe(null)
+    expect(publicRoot.querySelector('[data-test="period-total"]')).toBe(null)
     expect(document.querySelector('.shell')).toBe(null)
     await leaveDone()
     expect(publicRoot.isConnected).toBe(false)
     expect(document.querySelector('.shell')).not.toBe(null)
     // home mounted exactly once — the leaving branch never fetched. One
-    // Home load issues two stats calls since TASK-66 (monthly_trend rides
-    // before the monthly_overview primary), so exactly-once = 2 calls
+    // Home load issues three analysis-path calls: the category breakdown
+    // and the month-window trend since TASK-93, plus TASK-103's week fetch
+    // (getAnalysisTrend granularity:week limit:1), so exactly-once = 3
     await settle()
-    expect(statsCalls()).toHaveLength(2)
+    expect(statsCalls()).toHaveLength(3)
   })
 
   it('[covers:web-shell.page-transition] logout（replace→clear）は shell の fade-out → login の fade-in', async () => {

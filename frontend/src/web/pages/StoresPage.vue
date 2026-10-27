@@ -3,29 +3,35 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import { useDataApi, type CategoryNode, type StatsResult, type StatsRow } from '../api/data'
+import {
+  useDataApi,
+  type AnalysisResult,
+  type CategoryNode,
+  type StatsRow,
+} from '../api/data'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import PeriodHeader from '../components/PeriodHeader.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
-import TrendBars from '../components/TrendBars.vue'
+import TrendWindow from '../components/TrendWindow.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { firstString } from '../composables/receiptContext'
+import { currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
+import { useTrendWindow } from '../composables/trendWindow'
 import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
 
-// Store list (read-only, TASK-74 §4-7): the period's total, the store
-// ranking (a row press drills into /stores/:id; その他 / 店不明 stay plain
-// rows) and the trend, with the store-category chip row above the ranking
-// (D28 §4-1 案1: the ranking is the primary structure, the classification
-// narrows it — single select over catalog.store_categories, riding the URL
-// as store_category= and reaching getStats through the A1 wiring). A legacy
-// ?store=<name> deep link resolves through listStores and replaces into
-// /stores/<id>. Renames / merges live in /settings/stores. The period and
-// label filters moved to the topbar center bar (TASK-44 §11): they ride on
-// the period store and this page re-queries through the watches below.
+// Store list (read-only, TASK-89 redesign, the compare side removed): the
+// period header, the stacked trend (this axis) and the full-store ranking,
+// with the store-category
+// chip row above the ranking (D28 §4-1 案1: the ranking is the primary
+// structure, the classification narrows it — single select over
+// catalog.store_categories, riding the URL as store_category=). A row press
+// drills into /axes/store/<id>; the rest and 店不明 rows stay plain rows.
+// The legacy ?store=<name> deep link resolution is gone (TASK-89).
 const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
@@ -34,13 +40,22 @@ const catalog = useCatalogStore()
 const { markReady } = usePageReady()
 period.fromQuery(route.query)
 
-const overall = ref<StatsResult | null>(null)
-const trend = ref<StatsResult | null>(null)
+const analysis = ref<AnalysisResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 
 /** The store-category selection of the chip row (single, from the URL). */
 const storeCategory = computed(() => firstString(route.query.store_category))
+
+// the trend's movable window (TASK-104): the composable owns the trend
+// fetch and the stacked assembly; the store-category narrowing rides the
+// filters getter (read at fetch time, so the URL chip re-fetches through
+// the page watch below)
+const win = useTrendWindow({
+  axis: () => 'store',
+  filters: () => (storeCategory.value ? { store_category: storeCategory.value } : {}),
+  onError: (m) => (error.value = m ?? ''),
+})
 
 let seq = 0
 async function load(id?: number): Promise<void> {
@@ -50,16 +65,11 @@ async function load(id?: number): Promise<void> {
   loading.value = true
   error.value = ''
   const cat = storeCategory.value ? { store_category: storeCategory.value } : {}
+  const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
   try {
-    // the trend query goes first so the primary by_store call (the one
-    // carrying the selected month/year key) is the load's last stats call
-    const [tr, o] = await Promise.all([
-      api.getStats(l, { report: 'monthly_trend', ...period.trendQuery(), ...cat }),
-      api.getStats(l, { report: 'by_store', ...period.query(), ...cat }),
-    ])
+    const a = await api.getAnalysis(l, { axis: 'store', metric: 'amount', ...period.query(), ...cat, ...labels, limit: 50 })
     if (n !== seq) return
-    overall.value = o
-    trend.value = tr
+    analysis.value = a
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -71,7 +81,16 @@ async function load(id?: number): Promise<void> {
 }
 
 const ledgerId = useLedger((id) => load(id))
-watch([() => period.range, () => period.labelQuery, () => storeCategory.value], () => void load())
+// storeCategory is not a composable watch source (its getter is read at
+// fetch time), so the chip re-fetch rides this watch like AxisDetail's route
+// watch — identical to the composable's own fetch, the guard keeps it one
+watch(
+  [() => period.range, () => period.labelQuery, () => storeCategory.value],
+  () => {
+    void load()
+    win.refresh()
+  },
+)
 
 // --- the store-category chip row ----------------------------------------------
 void catalog.load().catch((e) => {
@@ -96,62 +115,70 @@ function toggleStoreCategory(path: string): void {
   void router.replace({ query: rest })
 }
 
-// --- the legacy ?store= gate (§4-7) -------------------------------------------
-async function redirectLegacyStore(): Promise<void> {
-  const name = firstString(route.query.store)
-  const l = ledgerId.value
-  if (!name || l === null) return
-  try {
-    const hit = (await api.listStores(l)).find((s) => s.name === name)
-    if (!hit) return
-    const rest: LocationQueryRaw = { ...route.query }
-    delete rest.store
-    await router.replace({ path: `/stores/${hit.store_id}`, query: rest })
-  } catch {
-    // a failed lookup leaves the list as-is
-  }
-}
-void redirectLegacyStore()
-
-
-// The manage entry lives behind the "..." page menu (TASK-45 §2-4): no
-// standalone manage link on a read-only dashboard. TASK-40 rev2 §2-4 adds
-// the classification entry ("店カテゴリを管理" opens the manage screen's
-// store-kind tab); both entries are fine for viewers (read-only there).
+// The manage entries live behind the "..." page menu (TASK-45 §2-4).
 const menuItems: PageMenuItem[] = [
   { to: '/settings/stores', label: '店を管理', icon: 'store', test: 'manage-link' },
   { to: '/settings/categories?kind=store', label: '店カテゴリを管理', icon: 'tag', test: 'manage-store-categories-link' },
 ]
 
-const rows = computed(() => overall.value?.sections[0]?.rows ?? [])
-const totals = computed(() => overall.value?.totals ?? null)
+const totals = computed(() => analysis.value?.totals ?? null)
 
-/** The context the row links carry down a level (the store's own category is
- * fixed on the detail page, so store_category does not ride). */
+const rows = computed<StatsRow[]>(() => {
+  const res = analysis.value
+  if (!res) return []
+  const sorted = [...res.rows].sort((a, b) => b.amount - a.amount)
+  const out: StatsRow[] = sorted.map((r) => ({
+    keys: [r.key],
+    labels: [r.label],
+    value: r.amount,
+    share: r.share ?? undefined,
+  }))
+  if (res.truncated_rows > 0) {
+    // the folded tail's amount: the period total minus the shown rows (the
+    // value cell is money, not the row count — REVIEW-13 M-1)
+    const restAmount = totals.value ? totals.value.amount - sorted.reduce((a, r) => a + r.amount, 0) : 0
+    out.push({
+      keys: [null],
+      labels: [`ほか ${res.truncated_rows}件・計${formatYen(restAmount)}`],
+      value: restAmount,
+      share: undefined,
+    })
+  }
+  return out
+})
+
+const trendCurrent = computed(() =>
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+)
+function onTrendSelect(key: string): void {
+  if (win.granularity.value === 'day') {
+    void router.push({
+      path: '/receipts',
+      query: { from: key, to: key, ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}) },
+    })
+    return
+  }
+  if (win.granularity.value === 'week') period.setWeek(key)
+  else period.setMonth(key)
+}
+
+/** The context the row links carry down a level. */
 const listQuery = computed(() => ({
   ...period.urlQuery,
   ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
 }))
 
-/** A ranking row's destination: keys[0] (the store id) builds /stores/<id>;
- * その他 and 店不明 (keys[0]=null) stay non-link rows. */
+/** A ranking row's destination: keys[0] (the store id) builds
+ *  /axes/store/<id>; the rest and 店不明 rows stay non-link. */
 function rowTo(row: StatsRow): RouteLocationRaw | null {
   const id = row.keys[0]
   if (typeof id !== 'number') return null
-  return { path: `/stores/${id}`, query: { ...listQuery.value } }
-}
-
-function diffText(d: number | null | undefined): string {
-  if (d === null || d === undefined || d === 0) return '±0円'
-  return `${d > 0 ? '+' : '−'}${formatYen(Math.abs(d))}`
+  return { path: `/axes/store/${id}`, query: { ...listQuery.value } }
 }
 </script>
 
 <template>
   <div class="view-page">
-    <!-- the chip-less one-row toolbar (TASK-75 §6-3/§6-5): the "..." menu
-         alone rides the row's right end — no standalone menu row above the
-         dashboard cards -->
     <BrowseToolbar>
       <template #menu>
         <PageMenu
@@ -170,7 +197,7 @@ function diffText(d: number | null | undefined): string {
       {{ error }}
     </p>
 
-    <!-- the detail page's unknown-id redirect lands here with ?missing= -->
+    <!-- the axis detail's unknown-id redirect lands here with ?missing= -->
     <p
       v-if="firstString(route.query.missing)"
       class="msg msg-error"
@@ -181,84 +208,91 @@ function diffText(d: number | null | undefined): string {
     </p>
 
     <div
-      v-if="overall && totals"
-      class="dash-grid"
+      v-if="analysis && totals"
+      class="view-stack"
       :class="{ loading }"
     >
-      <section
-        class="card kpi"
-        data-test="kpi"
-      >
-        <p class="kpi-head">
-          <span class="label">{{ period.label }}の支出</span>
-          <strong
-            class="kpi-value"
-            data-test="total"
-          >{{ formatYen(totals.value) }}</strong>
-          <span
-            v-if="totals.diff !== null"
-            class="chip"
-            :class="totals.diff > 0 ? 'chip-up' : totals.diff < 0 ? 'chip-down' : ''"
-          >{{ period.compareLabel }}比 {{ diffText(totals.diff) }}</span>
-        </p>
-        <!-- the 最多 name keeps the full-text title (review L2): the summary
-             line ellipsizes, the title is the one way to see the whole name -->
-        <p class="kpi-sub">
-          利用した店 {{ rows.length }} ・ 最多 <span :title="rows[0]?.labels[0] ?? undefined">{{ rows[0]?.labels[0] ?? '-' }}</span> ・ レシート {{ totals.receipts }}件
-        </p>
-      </section>
+      <PeriodHeader
+        :label="`${period.label}の支出`"
+        :total="totals.amount"
+      />
 
-      <section
-        class="card"
-        data-test="trend-card"
-      >
-        <h2>支出の推移</h2>
-        <TrendBars
-          v-if="trend"
-          :rows="trend.sections[0]?.rows ?? []"
-          :current="period.mode === 'month' ? period.month : null"
-          @select="period.setMonth"
-        />
-      </section>
-
-      <section
-        class="card wide"
-        data-test="ranking"
-      >
-        <h2>店別</h2>
-        <!-- the store-category chip row (single select, D28 §4-2): narrows
-             the ranking through the A1 store_category wiring -->
-        <div
-          v-if="storeCategories.length"
-          class="store-cats"
-          data-test="store-categories"
-          role="group"
-          aria-label="店カテゴリ"
-        >
-          <button
-            v-for="p in storeCategories"
-            :key="p"
-            type="button"
-            class="filter-chip-btn store-cat"
-            :aria-pressed="storeCategory === p"
-            data-test="store-category"
-            @click="toggleStoreCategory(p)"
+      <div class="dash-cols">
+        <div class="col-main">
+          <section
+            class="zone"
+            :class="{ 'is-loading': win.loading.value }"
+            data-test="trend-card"
           >
-            {{ p }}
-          </button>
+            <div class="zone-head">
+              <h2 class="zone-title">
+                支出の推移
+              </h2>
+            </div>
+            <TrendWindow
+              v-if="win.result.value"
+              :stacked="win.stacked.value"
+              :granularity="win.granularity.value"
+              :span="win.window.value"
+              :current="trendCurrent"
+              :nav="win.active.value"
+              :can-prev="win.canPrev.value"
+              :can-next="win.canNext.value"
+              :window-key="win.windowKey.value"
+              :transition-name="win.transitionName.value"
+              @prev="win.prev"
+              @next="win.next"
+              @select="onTrendSelect"
+            />
+          </section>
         </div>
-        <p
-          v-if="rows.length === 0"
-          class="muted empty"
-        >
-          この期間の記録はありません。
-        </p>
-        <RankedList
-          v-else
-          :rows="rows"
-          :to="rowTo"
-        />
-      </section>
+
+        <div class="col-side">
+          <section
+            class="zone zone--list"
+            data-test="ranking"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                店別
+              </h2>
+            </div>
+            <!-- the store-category chip row (single select, D28 §4-2): narrows
+                 the ranking through the store_category wiring -->
+            <div
+              v-if="storeCategories.length"
+              class="store-cats"
+              data-test="store-categories"
+              role="group"
+              aria-label="店カテゴリ"
+            >
+              <button
+                v-for="p in storeCategories"
+                :key="p"
+                type="button"
+                class="filter-chip-btn store-cat"
+                :aria-pressed="storeCategory === p"
+                data-test="store-category"
+                @click="toggleStoreCategory(p)"
+              >
+                {{ p }}
+              </button>
+            </div>
+            <p
+              v-if="rows.length === 0"
+              class="muted empty"
+            >
+              この期間の記録はありません。
+            </p>
+            <RankedList
+              v-else
+              :rows="rows"
+              :to="rowTo"
+              axis="store"
+            />
+          </section>
+        </div>
+      </div>
     </div>
     <DashSkeleton v-else-if="loading" />
   </div>

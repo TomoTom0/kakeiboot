@@ -187,7 +187,8 @@ describe('search page: receipts tab', () => {
     )
 
     // the label filter applies to the search results too (and rides the URL)
-    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    // — the toggles live in the search dialog's lower half (TASK-101)
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
@@ -195,6 +196,7 @@ describe('search page: receipts tab', () => {
       q: '牛乳',
       scope: 'period',
       year: '2026',
+      
       labels: 'red',
     })
     expect(list).toHaveBeenLastCalledWith(
@@ -277,7 +279,7 @@ describe('search page: items tab', () => {
     const cat = wrapper.find('[data-test="search-item-category"]')
     expect(cat.exists()).toBe(true)
     const cu = new URL(cat.attributes('href')!, 'http://localhost')
-    expect(cu.pathname).toBe('/categories/1/2')
+    expect(cu.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(cu.searchParams)).toEqual({})
 
     // the scope chip narrows the item query the same way — and the category
@@ -289,13 +291,14 @@ describe('search page: items tab', () => {
       tab: 'items',
       scope: 'period',
       month: '2026-10',
+      
     })
     expect(itemCalls.at(-1)).toEqual([
       1,
       expect.objectContaining({ q: '牛乳', from: '2026-10-01', to: '2026-10-31' }),
     ])
     const cu2 = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(cu2.pathname).toBe('/categories/1/2')
+    expect(cu2.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(cu2.searchParams)).toEqual({ month: '2026-10' })
   })
 
@@ -304,12 +307,13 @@ describe('search page: items tab', () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/search?q=牛乳&tab=items&scope=period&month=2026-10')
     // a label selection rides the category link like the period does
-    await wrapper.find('[data-test="filter-labels"]').trigger('click')
+    // (picked through the search dialog's lower half, TASK-101)
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
     await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
     const withLabel = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(withLabel.pathname).toBe('/categories/1/2')
+    expect(withLabel.pathname).toBe('/axes/category/1/2')
     expect(Object.fromEntries(withLabel.searchParams)).toEqual({ month: '2026-10', labels: 'red' })
 
     // a category path the catalog cannot resolve (a deleted / foreign tree)
@@ -377,9 +381,12 @@ describe('search page: URL restore', () => {
     expect(wrapper.find('[data-test="search-tab-items"]').attributes('aria-selected')).toBe('true')
     expect(wrapper.find('[data-test="search-tab-receipts"]').attributes('aria-selected')).toBe('false')
     expect(wrapper.find('[data-test="filter-period"]').attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
-    const labelChip = wrapper.find('[data-test="filter-labels"]')
-    expect(labelChip.classes()).toContain('active')
-    expect(labelChip.attributes('aria-label')).toBe('ラベルで絞り込み: ラベル1')
+    // the search chip carries the q and the restored label together (TASK-101)
+    const searchChip = wrapper.find('[data-test="filter-search"]')
+    expect(searchChip.classes()).toContain('active')
+    expect(searchChip.findAll('.label-filter-dot')).toHaveLength(1)
+    expect(searchChip.findAll('.label-filter-dot')[0]!.classes()).toContain('label-red')
+    expect(searchChip.attributes('aria-label')).toBe('検索: 牛乳、ラベル: ラベル1')
     // the item query carries the scoped period and the label filter
     expect(itemCalls.at(-1)).toEqual([
       1,

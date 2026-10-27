@@ -37,11 +37,11 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 | kind | 発行者 | 既定 TTL | できること |
 |---|---|---|---|
 | `setup` | 運用者 CLI（`admin token issue --kind setup --note`） | 24時間 | 新規 user と個人 ledger の作成 |
-| `invite` | ledger の owner が web 画面から（step-up 必須） | 72時間 | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer） |
+| `invite` | 対象 ledger の owner が web 画面から（対象 ledger は発行時に選択。TASK-78） | 168時間（`invite_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer） |
 | `recovery` | 運用者 CLI（`admin token issue --kind recovery` / `admin recovery resolve`） | 1時間（`--ttl` で最大24時間） | 対象 user へのパスキー追加のみ |
-| `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（step-up 必須・メモ必須） | 24時間（`register_ttl_hours`） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
+| `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（メモ必須） | 168時間（`register_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
 
-- web 画面（設定の認証tab）での呼称: invite の発行 UI は「<既定の家計簿名>を共有」の共有語（家計簿名を明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
+- invite の対象 ledger は発行時に選ぶ（自分が owner の ledger のみ。無指定なら発行者の既定 ledger）。web 画面（設定の認証tab）での呼称: invite の発行 UI は「家計簿を共有」の共有語（対象家計簿名は発行 dialog で明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
 
 - URL は `https://<host>/register?token=<T>`。frontend は URL から token を読んだ直後に `history.replaceState` で消し、以降は POST body で送る。
 - 未使用の register token は発行者ごとに5本まで（超過時 400 `register_open_limit`）。
@@ -92,13 +92,13 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 
 ### 2-6 step-up 再認証
 
-- 対象操作: パスキーの追加・削除、招待発行（invite / 登録招待）。条件は直近 10分以内のパスキー認証（`web_sessions.auth_at`）。
+- 対象操作: パスキーの削除のみ（TASK-46 で追加・発行系からは外れた。条件は直近 10分以内のパスキー認証 `web_sessions.auth_at`）。
 - 満たさない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
 - step-up は非 discoverable 認証（`start_passkey_authentication(当該 user の credential 全件)`）とし、他 user のパスキーで step-up できないようにする。成功時は同じ session 行の `auth_at` を更新する。
 
 ### 2-7 パスキー管理
 
-- 設定画面から追加・一覧・改名・削除。追加・削除は step-up 必須。
+- 設定画面から追加・一覧・改名・削除。削除は step-up 必須（追加は不要。TASK-46）。追加は「パスキーを追加」button から小さな dialog で名前を入力して行う（常設の入力欄は持たない）。
 - web 画面では最後の1本は削除不可（409）。
 - 2本目のパスキーを勧める表示は出さない。
 
@@ -141,13 +141,14 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | `POST /api/webauthn/login/start` | `{req?}` | 200 RequestChallengeResponse + ceremony cookie |
 | `POST /api/webauthn/login/finish` | `{credential}` | 200 `{next}` + session cookie |
 | `POST /api/webauthn/reauth/start` / `finish` | session | 200（`auth_at` 更新） |
-| `POST /api/passkeys/start` / `finish` | session + step-up | 200 |
+| `POST /api/passkeys/start` / `finish` | session（TASK-46 で step-up 廃止） | 200 |
 | `GET /api/passkeys` | session | `[{id, label, created_at, last_used_at, backup_state}]` |
 | `PATCH /api/passkeys/{id}` | session、`{label}` | 200 |
 | `DELETE /api/passkeys/{id}` | session + step-up | 204 / 409（最後の1本） |
-| `POST /api/invitations` | session、ledger owner + step-up、`{role, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す） |
-| `POST /api/register-invitations` | session + step-up（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
+| `POST /api/invitations` | session、対象 ledger の owner（`ledger_id` で指定。無指定は既定 ledger。TASK-78）、`{role, ledger_id?, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す。対象が editor 以下なら 403 `owner_required`・非所属/不在は 404） |
+| `POST /api/register-invitations` | session（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
 | `GET /api/auth/me` | session | `{user_id, account_number, display_name, default_ledger_id, ledgers, auth_at}`（`ledgers` は `[{id, name, role, color}]`。`default_ledger_id` は所属している ledger のみ。所属していなければ null） |
+| `PUT /api/auth/me/default-ledger` | session、`{ledger_id}`（自分の所属 ledger。role 不問） | 200 `{ledger: {id, name, role}}`（非所属/不在は同一視の 404。TASK-13） |
 | `POST /api/auth/logout` / `logout-all` | session | 204 |
 
 - 文字数上限は文字数で数える（バイト数ではない）: 表示名とパスキーラベルは 100 文字まで、`inviter_note` は 200 文字まで（register 発行では必須）。超過は 400。
@@ -405,7 +406,7 @@ MCP の対象 ledger は grant 単位の選択状態 `oauth_grants.active_ledger
 - grant の失効で選択状態も一緒に消える。refresh rotation では維持される。
 - web 画面で `default_ledger_id` を変えても既存 grant の選択は変わらない。「接続中のアプリ」一覧に各接続の選択中 ledger 名を表示する。
 - ledger の削除で未選択になる（FK `ON DELETE SET NULL`）。メンバーから外れた場合も DB トリガで未選択に戻る。default へ自動では戻さない。
-- web 画面の初期選択（および選択中 ledger が所属から消えたときの再選択）は `default_ledger_id`（`GET /api/auth/me` が所属しているもののみ返す）→ 所属の先頭の順。選択は画面内の一時状態で、`default_ledger_id` 自体を変更する API は無い。
+- web 画面の初期選択（および選択中 ledger が所属から消えたときの再選択）は `default_ledger_id`（`GET /api/auth/me` が所属しているもののみ返す）→ 所属の先頭の順。選択は画面内の一時状態。`default_ledger_id` 自体は設定画面（一般tab の家計簿一覧の「既定の家計簿にする」）から `PUT /api/auth/me/default-ledger` で変更する（TASK-13。role は不問で、既存 grant の選択と現在の web 画面の選択は動かさない）。
 
 ### 6-2 MCP tool
 
@@ -518,6 +519,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。invite / register の発行は web のみ（CLI では不可） |
 | `admin recovery list [--status open]` / `recovery show <R-番号>` | 回復依頼の一覧・詳細（受付日時、note、候補 user のアカウント番号・表示名・admin_note・系譜・候補の根拠と subject の first / last seen）。一覧の先頭に全体上限の超過件数を表示 |
 | `admin recovery resolve <R-番号> --user <user_id>` / `recovery reject <R-番号> [--reason]` | 帯域外の本人確認後に再登録 URL を発行して解決（`token issue --kind recovery` と同じ処理・確認）／却下 |
+| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/deploy.md`）と script（`scripts/backup/`）から利用 |
 
 確認規則（取り違え・誤操作防止）:
 
@@ -530,6 +532,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `user disable` | 表示名とアカウント番号の再入力 |
 
 - audit: token の発行・失効・使用、パスキー失効、ユーザー無効化、メモ更新、回復依頼の解決・却下、grant / session の失効をすべて `audit_events` に `actor_kind=system` で記録する（`action` は `token_issue` / `token_revoke` / `token_use` / `passkey_revoke` / `user_disable` / `user_note` / `recovery_resolve` / `recovery_reject` / `grant_revoke` / `session_revoke`。CLI 実行時の OS ユーザー名を after_json に含める）。token の平文は audit・ログに残さない。
+- backup の仕様: `admin backup --dest <file>` は db を backup 専用に **read-only open**（`create_if_missing(false)`・migration 不実行。他 variant 共通の read-write 接続〔create + migration 付き〕は使わない）で開き、`VACUUM INTO` を `<dest>.tmp` へ 1 文実行（bind parameter・transaction 外）した後に `fs::rename` で `dest` へ置く。db file 不在（`--config-dir` の path 誤り）は open error として即座に失敗し、**誤 path へ空 DB を新規作成しない**。`VACUUM INTO` は既存 file へ上書きしないため実行前に既存の `<dest>.tmp` を削除する（kill・OOM で tmp が残留していても同名再実行・同日再実行が冪等に走る）。dest の親 dir 不在・`VACUUM INTO` 失敗時は tmp を掃除して非ゼロ exit する（中途 file を残さない）。`VACUUM INTO` は read transaction＝WAL reader として動作するため並行 writer をブロックせず、出力は単一時点のトランザクション整合を持つ単一 file になる（`PRAGMA integrity_check` ok）。audit_events には記録しない（操作主体が運用者で日次実行のため。記録は journal〔systemd unit 経由〕と backup 側の `last_success` file が担う）。
 - 回復の運用手順:
   1. 通常の紛失: 本人確認 → `token issue --kind recovery`（または `recovery resolve`）→ URL を帯域外で渡す → 再登録完了で既存 web session は自動失効。
   2. 乗っ取りが疑われる場合: 本人確認 → `session revoke --all-of` → `grant revoke --all-of` → `passkey revoke --all` → `token issue --kind recovery` の順で攻撃者の経路を閉じてから再登録させる。再登録後、ユーザーは ChatGPT で再接続する。
@@ -774,7 +777,12 @@ sequenceDiagram
 
 ## 13. 将来: Sign in with ChatGPT
 
-OpenAI の「Sign in with ChatGPT」（OIDC。署名付き ID token の `sub`）が一般開放されたら、ログインと回復の手段として追加する（現在は商用パートナー限定）。
+OpenAI の「Sign in with ChatGPT」（OIDC。署名付き ID token の `sub`）が一般開発者に開放されたら、ログインと回復の手段として追加する。2026-10-19調査時点の状況（TASK-9）:
+
+- オープンソース・ローカル実行（127.0.0.1 callback の host ID 方式）の個人アプリ向けに技術公開済み（cookbook・quickstart・token-sharing-open-source、2026-09-28頃。DevDay 2026で16パートナーとともに公式ローンチ）
+- リモートホストの有料/非公開アプリ（本appの形態）は選定制waitlist: 「selected commercial partners through a limited trial」（https://developers.openai.com/siwc/website）。申請は interest form（https://openai.com/form/sign-in-with-chatgpt-interest/）経由で時期不読
+- よって本appは現行の登録招待+パスキー+運用者CLI回復のまま運用し、以下のウォッチ条件のいずれかが成立したら導入を検討する: (1) client ID発行ページ（https://developers.openai.com/siwc/request-client-id）がself-service/個人アプリ向けに変化 (2) interest formの選定がprivate/personal appsへ拡大する旨の発表 (3) registered callback持ちclient IDのフォームなし発行が可能になる
+- 開放時の補足: 本appはSIWCではOpenAIをOPとするRP（OIDC client）になり、既存のOAuth 2.1認可サーバー（MCPクライアント向け）とはendpoint・client registryが別で競合しない。client_id/secret・callback URL（例: `<origin>/auth/siwc/callback`）はconfigs/管理。SIWCログインは招待制を維持した「既存userのもう1つの認証手段」に位置づける
 
 - 外部 ID 紐付けテーブル `user_external_identities`（user_id、issuer、client_id、sub、UNIQUE(issuer, client_id, sub)）を、その時点の仕様（pairwise sub の有無、必要な列）に合わせて migration で追加する。初版の migration には含めない。
 - 紐付けはパスキー認証済みの user が web 画面から行い、ID token の署名（issuer の JWKS）・`iss`・`aud`・`exp`・`nonce` を検証してから `sub` を保存する。

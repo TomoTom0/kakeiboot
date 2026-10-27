@@ -322,8 +322,16 @@ pub async fn update(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     if row.status != "pending" {
         return Err(conflict(c, &row, &ledger).await);
     }
-    let (payload, changed) =
+    let (mut payload, changed) =
         apply_patch(&row.payload(), &patch).map_err(|e| result::invalid(&e))?;
+    // draft labels: keep the stored payload in the normalized form (TASK-21),
+    // same as the intake path
+    if let Some(colors) = payload.label_colors.as_mut() {
+        crate::domain::labels::normalize_colors(colors);
+        if colors.is_empty() {
+            payload.label_colors = None;
+        }
+    }
     let errs = validate_payload(&payload, c.limits());
     if !errs.is_empty() {
         return Err(result::invalid(&errs));
@@ -460,6 +468,7 @@ pub async fn approve(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
     for w in &warnings {
         lines.push(format!("注意: {}", w.message));
     }
+    lines.push(c.receipt_web_line(receipt_id));
     Ok(result::ok(
         lines.join("\n"),
         envelope(
@@ -1306,6 +1315,14 @@ pub async fn approve_batch(c: &Call<'_>, args: &Map<String, Value>) -> ToolResul
     }
     for w in &warnings {
         lines.push(format!("注意: {}", w.message));
+    }
+    for r in &results {
+        if !matches!(r["outcome"].as_str(), Some("approved") | Some("idempotent")) {
+            continue;
+        }
+        if let Some(rid) = r["receipt_id"].as_i64() {
+            lines.push(c.receipt_web_line(rid));
+        }
     }
     let body = json!({ "batch_id": null, "drafts": views, "results": results });
     let structured = envelope("draft_batch", ledger_info.as_ref(), &warnings, body);

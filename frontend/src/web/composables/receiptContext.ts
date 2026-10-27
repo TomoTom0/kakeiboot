@@ -5,6 +5,7 @@
 // TASK-17 adds one row (labels <-> label_colors) and TASK-41 two more
 // (q / store_id, the /search context) — every link follows.
 import type { ReceiptListQuery } from '../api/data'
+import { isPaymentMethod } from '../composables/labels'
 import type { LabelColor } from '@/shared/labels'
 import { formatLabelQuery, parseLabelQuery } from '@/shared/labels'
 
@@ -26,6 +27,13 @@ export const CONTEXT_FIELDS: readonly ContextField[] = [
   { query: 'store', field: 'store' },
   { query: 'item', field: 'item_query' },
   { query: 'category', field: 'category' },
+  // TASK-65: the payment-method filter rides the feed context; an unknown
+  // value drops out (isPaymentMethod) instead of a broken 400 link
+  {
+    query: 'payment_method',
+    field: 'payment_method',
+    parse: (v) => (isPaymentMethod(v) ? v : undefined),
+  },
   { query: 'include_deleted', field: 'include_deleted' },
   // TASK-17: the URL key stays short ("labels=red,blue"), the query field
   // follows the API name (label_colors). Unknown colors are dropped.

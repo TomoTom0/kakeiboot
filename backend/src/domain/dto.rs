@@ -94,6 +94,12 @@ pub struct DraftPayload {
     pub payment_method: Option<PaymentMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Draft-stage labels (TASK-21): color keys chosen at intake, normalized
+    /// to the palette order (spec_mcp-tools.md 7-1). None/empty = unlabeled;
+    /// carried into `receipt_labels` by the approval transaction
+    /// (spec_data-model.md 7-5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_colors: Option<Vec<super::labels::LabelColor>>,
     pub items: Vec<DraftItem>,
 }
 
@@ -237,6 +243,10 @@ pub struct DraftView {
     pub reported: ReportedMeta,
     pub image_meta: Option<ImageMetaView>,
     pub payload: DraftPayload,
+    /// Draft-stage labels with the ledger's titles in palette order
+    /// (TASK-21, spec_mcp-tools.md 7-1): what approval will carry into
+    /// `receipt_labels`. Always an array (empty when unlabeled).
+    pub labels: Vec<Label>,
     pub resolution: Resolution,
     pub approved_receipt_id: Option<i64>,
     pub possible_duplicates: Vec<PossibleDuplicate>,
@@ -326,9 +336,6 @@ pub struct PeriodResolved {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatsTotals {
     pub value: i64,
-    pub compare_value: Option<i64>,
-    pub diff: Option<i64>,
-    pub diff_pct: Option<f64>,
     pub receipts: i64,
 }
 
@@ -337,10 +344,6 @@ pub struct StatsRow {
     pub keys: Vec<serde_json::Value>,
     pub labels: Vec<String>,
     pub value: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compare_value: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share: Option<f64>,
 }
@@ -360,7 +363,6 @@ pub struct StatsSection {
 pub struct StatsResult {
     pub report: Option<String>,
     pub period_resolved: PeriodResolved,
-    pub compare_period: Option<PeriodResolved>,
     pub totals: StatsTotals,
     pub sections: Vec<StatsSection>,
     pub notes: Vec<String>,
@@ -369,4 +371,149 @@ pub struct StatsResult {
     /// (chart axis labels), spec_mcp-tools.md 10.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filters: Option<super::stats::Filters>,
+}
+
+// ---------------------------------------------------------------------------
+// web analysis API (TASK-89, spec_mcp-tools.md 12). Web-only shapes; the MCP
+// stats contract above is unchanged.
+
+/// One axis value of a breakdown. `key` is the axis key (item -> item_id,
+/// label -> color or null for the unlabeled bucket).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AnalysisRow {
+    pub key: serde_json::Value,
+    pub label: String,
+    pub amount: i64,
+    pub count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<f64>,
+    /// metric value / axis total (null when metric=unit). The label axis
+    /// total counts duplicate postings, so the shares sum to 100%.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AnalysisTotals {
+    pub amount: i64,
+    pub count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<f64>,
+    pub days: i64,
+}
+
+/// GET /api/ledgers/{l}/analysis: the period totals + axis breakdown in one
+/// fetch (Home and axis-detail screens).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AnalysisResult {
+    pub axis: String,
+    pub metric: String,
+    pub period: PeriodResolved,
+    pub totals: AnalysisTotals,
+    /// axis values by metric value desc, top `limit` rows. No "その他" row:
+    /// the remainder is truncated_rows + totals.
+    pub rows: Vec<AnalysisRow>,
+    pub truncated_rows: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<super::stats::Filters>,
+}
+
+/// One stacked-trend series (top `limit` by whole-range metric total). The
+/// "other" series is not returned: the frontend derives it from
+/// bucket_totals - series. `values` / `total` are integer JSON for
+/// amount/count and a one-decimal number or null for unit.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrendSeries {
+    pub key: serde_json::Value,
+    pub label: String,
+    pub values: Vec<serde_json::Value>,
+    pub total: serde_json::Value,
+}
+
+/// GET /api/ledgers/{l}/analysis/trend: the stacked matrix (zero-filled
+/// buckets ascending; week buckets are Mondays).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrendResult {
+    pub axis: String,
+    pub metric: String,
+    pub granularity: String,
+    pub period: PeriodResolved,
+    pub buckets: Vec<String>,
+    pub series: Vec<TrendSeries>,
+    /// per-bucket total over every axis value (top series + remainder)
+    pub bucket_totals: Vec<serde_json::Value>,
+    /// number of series dropped by the limit
+    pub truncated_rows: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemRef {
+    pub item_id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemStatsSummary {
+    /// item lines (line_kind='item') in the period
+    pub count: i64,
+    pub amount: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_unit_price: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_unit_price: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_unit_price: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_purchased_on: Option<String>,
+    /// distinct store names of the period purchases
+    pub stores: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemPrice {
+    pub date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_id: Option<i64>,
+    pub store_name: String,
+    /// unit_price, or round(amount_incl / quantity) when absent (the
+    /// item_price_history rule; quantity is NOT NULL DEFAULT 1)
+    pub unit_price: i64,
+    pub quantity: f64,
+    pub amount_incl: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemStoreAgg {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_id: Option<i64>,
+    pub store_name: String,
+    pub count: i64,
+    pub amount: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_unit_price: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemMonthly {
+    /// "YYYY-MM", zero-filled over the period
+    pub ym: String,
+    pub count: i64,
+    pub amount: i64,
+}
+
+/// GET /api/ledgers/{l}/analysis/item: the item stats (the web version of
+/// the widget's item_price_history).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemStatsResult {
+    /// the representative (latest-purchased) match; null when nothing
+    /// matched / no purchases in the period
+    pub item: Option<ItemRef>,
+    pub period: PeriodResolved,
+    pub summary: ItemStatsSummary,
+    /// ascending by date, capped at stats_max_rows
+    pub prices: Vec<ItemPrice>,
+    pub by_store: Vec<ItemStoreAgg>,
+    pub monthly: Vec<ItemMonthly>,
+    /// number of price rows dropped by the cap
+    pub truncated_rows: i64,
 }

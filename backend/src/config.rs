@@ -167,6 +167,18 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub frontend: FrontendConfig,
     pub maintenance: MaintenanceConfig,
+    pub data_io: DataIoConfig,
+}
+
+/// TASK-58 settings-page export / import caps. The payload cap bounds the
+/// export response (serialized) and the import request body (route body
+/// limit); the count caps bound one import transaction's DB work.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataIoConfig {
+    pub max_payload_bytes: usize,
+    pub max_receipts: usize,
+    pub max_items_total: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -683,6 +695,14 @@ fn validate(app: &AppConfig) -> Result<(), ConfigError> {
             "maintenance.cleanup_interval_secs must be positive".into(),
         ));
     }
+    if app.data_io.max_payload_bytes == 0
+        || app.data_io.max_receipts == 0
+        || app.data_io.max_items_total == 0
+    {
+        return Err(ConfigError::Invalid(
+            "data_io values must be positive".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -711,10 +731,10 @@ ttl_secs = 300
 
 [auth.invitation]
 setup_ttl_hours = 24
-invite_ttl_hours = 72
+invite_ttl_hours = 168
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
-register_ttl_hours = 24
+register_ttl_hours = 168
 
 [auth.rate_limit]
 webauthn_per_minute = 20
@@ -830,6 +850,11 @@ dev_port = 5173
 [maintenance]
 cleanup_interval_secs = 3600
 image_root = "var/images"
+
+[data_io]
+max_payload_bytes = 67108864
+max_receipts = 5000
+max_items_total = 50000
 "#;
 
     #[test]

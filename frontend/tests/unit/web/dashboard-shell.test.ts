@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, type VueWrapper } from '@vue/test-utils'
+import PeriodHeader from '@/web/components/PeriodHeader.vue'
+import RankedList from '@/web/components/RankedList.vue'
 import { setDataApi, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { ME, cleanup, fireMediaChange, mockFetch, mountApp, setMediaMatches, settle } from './helpers'
@@ -18,272 +21,358 @@ afterEach(() => {
   cleanup()
 })
 
-describe('HomePage (dashboard)', () => {
-  it('[covers:web-home.dashboard-month-overview][covers:web-browse.trend-axis-minimal] 今月の支出・前月比・内訳・推移・店・最近のレシート', async () => {
+describe('HomePage (dashboard, TASK-89 redesign)', () => {
+  it('[covers:web-home.period-header] 期間ヘッダ: 期間label+特大合計のみ（対比・diff・KPIカード形式なし）でanalysis は1fetch', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const spy = vi.spyOn(api, 'getStats')
+    const spy = vi.spyOn(api, 'getAnalysis')
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const { wrapper } = await mountApp('/')
-    expect(spy).toHaveBeenCalledWith(1, { report: 'monthly_overview', month: '2026-10' })
-    // TASK-66: the trend is its own monthly_trend call now — a 6-month
-    // window through the selected month (trendQuery(5)); the overview stays
-    // the load's last stats call
-    expect(spy).toHaveBeenCalledWith(1, { report: 'monthly_trend', from: '2026-05-01', to: '2026-10-31' })
-    // the KPI drops the "今月" special case (TASK-66 §1-1): {period.label}の支出
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年10月の支出')
-    expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
-    expect(wrapper.find('[data-test="diff"]').text()).toContain('+948円')
-    // TASK-75 §6-4: the KPI is two rows — the head row (label + amount + the
-    // diff chip) and one 0.8rem summary line joined with 「・」
-    expect(wrapper.find('[data-test="kpi"] .kpi-head [data-test="total"]').exists()).toBe(true)
-    const sub = wrapper.find('[data-test="kpi"] .kpi-sub')
-    expect(sub.text()).toContain('レシート 3件')
-    expect(sub.text()).toContain('1日あたり 63円')
-    expect(sub.text()).toContain('前月 0円')
-    expect(sub.find('[data-test="receipt-count"]').text()).toBe('3件')
-    // breakdown: the donut + the ranked rows (TASK-75 replaced the legend
-    // with RankedList — same order, same colors, one-line rows)
-    const rows = wrapper.findAll('[data-test="breakdown"] .ranked-row')
-    expect(rows[0]!.text()).toContain('食費')
-    expect(rows[0]!.text()).toContain('550円')
-    expect(rows[1]!.text()).toContain('日用品')
-    expect(wrapper.find('[data-test="breakdown"] .donut').exists()).toBe(true)
-    // TASK-66 §1-3 案D: the inline bars are the shared TrendBars now, so the
-    // section is trend-card (the .bars inside keeps data-test="trend")
-    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(6)
-    // TASK-42: no per-bar month labels; the axis carries the window ends
-    expect(wrapper.find('[data-test="trend-card"] .bar-label').exists()).toBe(false)
-    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['5月', '10月'])
-    expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
-    expect(wrapper.find('[data-test="bar-2026-10"]').attributes('aria-label')).toBe('2026年10月 948円')
-    // TASK-75 §6-4: the value label rides the selected month's bar only
-    expect(wrapper.findAll('[data-test="trend-card"] .bar-val')).toHaveLength(1)
-    expect(wrapper.find('[data-test="bar-2026-10"] .bar-val').text()).toBe('948')
-    // the TrendBars integration brings the shared note along as well
-    expect(wrapper.find('[data-test="trend-card"] .trend-note').text()).toContain('月平均 948円')
-    expect(wrapper.find('[data-test="stores"]').text()).toContain('Aマート')
-    // the link carries the period context (web-receipts.recent-links-carry-context);
-    // TASK-75 §6-4: the row is one line (date / store / labels / amount, no icon)
-    const recentRow = wrapper.find('[data-test="recent-101"]')
-    const recent = new URL(recentRow.attributes('href')!, 'http://localhost')
-    expect(recent.pathname).toBe('/receipts/101')
-    expect(recentRow.find('.recent-icon').exists()).toBe(false)
-    expect(recentRow.text()).toContain('10/10')
-    expect(recentRow.text()).toContain('Aマート')
-    expect(recentRow.text()).toContain('400円')
-    expect(recentRow.text()).not.toContain('品目')
-    expect(recentRow.find('[data-test="label-dot"]').exists()).toBe(true)
-    // TASK-74: the breakdown and store rows drill into the hierarchy routes
-    // (keys[0] = the top category / store id), carrying the period
-    const legendLink = new URL(wrapper.find('[data-test="breakdown"] [data-test="row-食費"]').attributes('href')!, 'http://localhost')
-    expect(legendLink.pathname).toBe('/categories/1')
-    expect(legendLink.searchParams.get('month')).toBe('2026-10')
-    expect(legendLink.searchParams.get('category')).toBe(null)
-    const storeRow = new URL(wrapper.find('[data-test="stores"] [data-test="row-Aマート"]').attributes('href')!, 'http://localhost')
-    expect(storeRow.pathname).toBe('/stores/1')
-    expect(storeRow.searchParams.get('month')).toBe('2026-10')
-
-    // a 未分類 row (an item with no category) links to the uncategorized
-    // carve-out; the その他 aggregate stays a non-link span
-    cleanup()
-    mockFetch({ 'GET /api/auth/me': { body: ME } })
-    await api.updateReceipt(1, 102, { revision: 1, upsert_items: [{ item_id: 1003, category: null }] })
-    const again = await mountApp('/')
-    const unc = again.wrapper.findAll('[data-test="breakdown"] .ranked-row').find((row) => row.text().includes('未分類'))!
-    expect(unc.element.tagName).toBe('A')
-    expect(new URL(unc.attributes('href')!, 'http://localhost').pathname).toBe('/categories/uncategorized')
-    // the store rows all carry their store id (mock parity keys)
-    expect(again.wrapper.findAll('[data-test="stores"] .ranked-row').every((a) => a.element.tagName === 'A')).toBe(true)
+    // the four loads (TASK-103 adds the month-mode week fetch): the category
+    // analysis (the period header total and the breakdown), the stacked
+    // trend, the week rows and the recent receipts
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(1, { axis: 'category', metric: 'amount', month: '2026-10', limit: 50 })
+    expect(trendSpy).toHaveBeenCalledWith(1, {
+      axis: 'category',
+      metric: 'amount',
+      granularity: 'month',
+      from: '2026-05-01',
+      to: '2026-10-31',
+      limit: 5,
+    })
+    // TASK-103: the month mode's fourth load — the selected month's week
+    // buckets (limit 1: the rows read bucket_totals, not the series)
+    expect(trendSpy).toHaveBeenCalledTimes(2)
+    expect(trendSpy).toHaveBeenCalledWith(1, {
+      axis: 'category',
+      metric: 'amount',
+      granularity: 'week',
+      from: '2026-10-01',
+      to: '2026-10-31',
+      limit: 1,
+    })
+    // the period header: the period label and the big total — no compare
+    // selector, no diff values, no KPI card
+    const head = wrapper.find('.period-head')
+    expect(head.find('.period-label').text()).toBe('2026年10月の支出')
+    expect(head.find('[data-test="period-total"]').text()).toBe('948円')
+    expect(wrapper.find('[data-test="compare-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="compare-diff-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="kpi"]').exists()).toBe(false)
+    expect(wrapper.find('.kpi-value').exists()).toBe(false)
   })
 
-  it('[covers:web-home.dashboard-month-overview] 内訳は上位5行+その他の折り畳みで、その他行も上位行と同じ形式の割合列を持つ（非リンク）', async () => {
+  // TASK-105 (design tmp/tasks/tm-105/design_dashboard-visual.md §1): the
+  // zone headings left the sr-only form for visible h2.zone-title text riding
+  // the .zone-head row — the wording stays the TASK-95 copy verbatim (data
+  // names only, no new invention), and the guide icon links sit at the
+  // heading row's right end (the standalone .zone-more row is gone).
+  it('[covers:web-common.zone-headings-visible] zone見出しは可視h2.zone-title（.zone-head行・sr-onlyなし・文言はTASK-95流用）・誘導icon linkは見出し行の右端', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    // seven top categories in the month (adding five items to receipt 102):
-    // the section's rows past the 5th fold into Home's own その他 aggregate —
-    // 550+398+100+90+80 stay rows, 60+40 fold (review M1: the folded row
-    // keeps a share like every backend row and the old legend did; the
-    // denominator top5+rest is the whole section, matching the other rows)
+    const { wrapper } = await mountApp('/')
+    // every zone heading is a visible .zone-title inside the .zone-head row,
+    // keeping the TASK-95 wording as-is (no invented copy)
+    const headings = wrapper.findAll('.zone .zone-head h2.zone-title')
+    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '支出の内訳', '最近のレシート'])
+    // no zone heading stays sr-only and none sits outside a .zone-head
+    expect(wrapper.find('.zone h2.sr-only').exists()).toBe(false)
+    expect(wrapper.findAll('.zone h2.zone-title').length).toBe(wrapper.findAll('.zone .zone-head h2.zone-title').length)
+    // the section links are icon-only (chevron), not word links — and they
+    // ride the heading row as its last child (the .zone-more row is gone)
+    const cat = wrapper.find('[data-test="breakdown-more"]')
+    expect(cat.attributes('aria-label')).toBe('カテゴリ別に見る')
+    expect(new URL(cat.attributes('href')!, 'http://localhost').pathname).toBe('/categories')
+    expect(cat.element.closest('.zone-head')!.lastElementChild).toBe(cat.element)
+    const all = wrapper.find('[data-test="recent-more"]')
+    expect(all.attributes('aria-label')).toBe('すべて見る')
+    expect(new URL(all.attributes('href')!, 'http://localhost').pathname).toBe('/receipts')
+    expect(all.element.closest('.zone-head')!.lastElementChild).toBe(all.element)
+    expect(wrapper.find('.zone-more').exists()).toBe(false)
+  })
+
+
+  // TASK-105 (web-home.breakdown-rest-row revised + web-common.series-color-
+  // assignment, design §4-2): every row — top rows AND the「ほか」rest row —
+  // carries the leading 12px round swatch `.ranked-swatch`; RankedList sets
+  // `--rank-color` = seriesColor(row.keys[0] ?? null, axis) on each row, the
+  // top rows' swatch + in-row bar carry the series color and the「ほか n件・
+  // 計xx円」row resolves to var(--series-rest).
+  it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（全行swatch・上位行は系列色・残余行はrest色）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    // seven top categories this month (five extra items on receipt 102)
     await api.updateReceipt(1, 102, {
       revision: 1,
       upsert_items: [
-        { name: 'バス代', amount: 100, category: '交通費' },
-        { name: '雑誌', amount: 90, category: '趣味' },
-        { name: '風邪薬', amount: 80, category: '医療' },
-        { name: '教科書', amount: 60, category: '教育' },
-        { name: '贈り物', amount: 40, category: '交際' },
+        { item_id: 1003, category: '日用品' },
+        { name: 'シャンプー', amount: 300, category: '日用品' },
+        { name: '電池', amount: 200, category: '交通費' },
+        { name: '雑誌', amount: 350, category: '趣味' },
+        { name: 'ティッシュ', amount: 150, category: null },
+        { name: '歯ブラシ', amount: 120, category: null },
+        { name: 'ガム', amount: 120, category: 'その他' },
       ],
     })
     const { wrapper } = await mountApp('/')
     const rows = wrapper.findAll('[data-test="breakdown"] .ranked-row')
-    expect(rows).toHaveLength(6)
-    // the backend rows' own shares ride along (550 / 1318)
-    expect(wrapper.find('[data-test="breakdown"] [data-test="row-食費"] .ranked-share').text()).toBe('42%')
-    const rest = wrapper.find('[data-test="breakdown"] [data-test="row-その他"]')
-    expect(rest.element.tagName).toBe('SPAN')
-    expect(rest.find('.ranked-share').text()).toBe('8%')
-    expect(rest.text()).toContain('100円')
+    // six real categories (日用品698・食費550・趣味350・未分類270・交通費200・
+    // その他120) fold into top-5 + the rest row (その他 120)
+    expect(rows.length).toBe(6)
+    const rest = rows.at(-1)!
+    // REVIEW-13 M-1: the exact rest-row text — formatYen already appends 円
+    // (the old label doubled it) and the amount cell holds the rest amount,
+    // never the truncated row count
+    expect(rest.find('.ranked-label').text()).toBe('ほか 1件・計120円')
+    expect(rest.find('.amount').text()).toBe('120円')
+    expect(rest.element.tagName).not.toBe('A')
+    // every row renders the leading swatch (the legend the graph never
+    // grows), rest rows included — the swatch paints var(--rank-color) and
+    // the rest row's color resolves to the unattributed rest token
+    expect(rows.map((r) => r.find('.ranked-swatch').exists())).toEqual([true, true, true, true, true, true])
+    expect((rest.attributes('style') ?? '')).toContain('--rank-color: var(--series-rest)')
+    // the top rows keep their drill links into /axes/category/<id> and carry
+    // a series slot color (日用品 is catalog id 4 -> var(--series-4), the
+    // same token the trend segment paints)
+    expect(new URL(rows[0]!.attributes('href')!, 'http://localhost').pathname).toBe('/axes/category/4')
+    expect((rows[0]!.attributes('style') ?? '')).toContain('--rank-color: var(--series-4)')
   })
 
-  it('[covers:web-home.dashboard-month-switch] 月送りは topbar の時期チップ・dialog から（Home にページ内月送りUI無し・当月より先へ不可・空表示・TrendBars 棒押下で画面間共有）', async () => {
+  // TASK-105 (web-home.stacked-trend-fixed revised, design §4-1): the
+  // segment colors are seriesColor(s.key, axis) CSS variable refs — the
+  // mock's current month holds 食費 (id 1) -> var(--series-1) and 日用品
+  // (id 4) -> var(--series-4) — the residual「ほか」segment is
+  // var(--series-rest), the hover titles carry the share form「名称 〜円
+  // （n%）」, value-0 series segments are omitted from the assembly, and
+  // .bar-seg gains min-height: 2px + the 1px var(--bb-surface) border
+  // between adjacent segments.
+  it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額+構成比title・色はseriesColor写像）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const stats = vi.spyOn(api, 'getStats')
+    const { wrapper } = await mountApp('/')
+    const card = wrapper.find('[data-test="trend-card"]')
+    // no mode / metric chrome anywhere in the card (TASK-95: the chart is
+    // the only expression — total height = the period total, colors = the
+    // composition, no word tabs)
+    expect(card.find('[data-test="trend-stacked"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-total"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-metric-count"]').exists()).toBe(false)
+    expect(card.find('[data-test="trend-metric-unit"]').exists()).toBe(false)
+    // every column is the stacked money view: the current month holds both
+    // series segments (value-0 series are omitted), each titled with the
+    // money + share form and painted the seriesColor of its key
+    const col = card.find('[data-test="bar-2026-10"]')
+    expect(col.classes()).toContain('stacked')
+    const segs = col.findAll('.bar-seg')
+    expect(segs.length).toBe(2)
+    expect(segs.every((s) => /円（\d+%）$/.test(s.attributes('title') ?? ''))).toBe(true)
+    const byLabel = (l: string) => segs.find((s) => (s.attributes('title') ?? '').startsWith(l))!
+    expect(byLabel('食費').attributes('style')).toContain('background: var(--series-1)')
+    expect(byLabel('日用品').attributes('style')).toContain('background: var(--series-4)')
+    // TASK-100: every bar carries its value label (the TASK-75 current-only
+    // rule is withdrawn; compactYen — 万/千 compression, no "k" suffix — and
+    // the zero months render the empty string)
+    const vals = card.findAll('.bar-col .bar-val')
+    expect(vals).toHaveLength(6)
+    expect(vals.map((v) => v.text())).toEqual(['', '', '', '', '', '948'])
+  })
+
+  it('[covers:web-home.trend-day-bar-receipts] 日粒度の棒は button で押下可・押下でその日のレシート一覧（/receipts?from=d&to=d）へ・月棒は period 移動', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper, router } = await mountApp('/')
-    // the page carries no month switch of its own anymore: the month moves
-    // only through the topbar's period chip (TASK-44 §11-5)
-    expect(wrapper.find('.page-toolbar').exists()).toBe(false)
-    expect(wrapper.find('[data-test="month-prev"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="month-next"]').exists()).toBe(false)
-
-    const chip = () => wrapper.find('[data-test="filter-period"]')
-    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
-    await chip().trigger('click')
+    // month mode: 6 month bars, a press moves the shared period
+    await wrapper.find('[data-test="bar-2026-05"]').trigger('click')
     await settle()
-    // Home offers all three modes like every other screen (TASK-66: the
-    // month-only tab restriction is gone)
-    for (const m of ['mode-month', 'mode-year', 'mode-range']) {
-      expect(wrapper.find(`[data-test="${m}"]`).exists(), m).toBe(true)
+    const store = (await import('@/web/stores/period')).usePeriodStore()
+    expect(store.month).toBe('2026-05')
+    // week mode: 7 day bars as buttons; the 10-10 bar routes to that day
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const week = await mountApp('/?week=2026-10-05')
+    const bar = week.wrapper.find('[data-test="bar-2026-10-10"]')
+    expect(bar.element.tagName).toBe('BUTTON')
+    expect(bar.classes()).toContain('bar-btn')
+    await bar.trigger('click')
+    await settle()
+    expect(week.router.currentRoute.value.path).toBe('/receipts')
+    expect(week.router.currentRoute.value.query).toMatchObject({ from: '2026-10-10', to: '2026-10-10' })
+    void router
+  })
+
+  it('[covers:web-home.week-card] 週ごとの支出zone: 月モードは選択月の各週（月曜アンカー）の全幅button行で押下は週モードへ、週/年/rangeはzoneなし・ラベル絞り込みは週fetchへ流れる', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
+    const { wrapper } = await mountApp('/')
+    const zone = () => wrapper.find('[data-test="week-card"]')
+    // month mode: the selected month's weeks as Monday-anchored rows — the
+    // first bucket's Monday lives in September so its label clips at the
+    // month edge, and the month's three receipts (948円) all sit in the
+    // 10/5 week (the zero rows keep their 0円 stubs)
+    expect(zone().exists()).toBe(true)
+    const rows = zone().findAll('button.week-row')
+    expect(rows.map((b) => b.attributes('data-test'))).toEqual([
+      'row-2026-09-28',
+      'row-2026-10-05',
+      'row-2026-10-12',
+      'row-2026-10-19',
+      'row-2026-10-26',
+    ])
+    expect(rows.map((b) => b.find('.week-label').text())).toEqual([
+      '10/1〜10/4',
+      '10/5〜10/11',
+      '10/12〜10/18',
+      '10/19〜10/25',
+      '10/26〜10/31',
+    ])
+    expect(rows.map((b) => b.find('.amount').text())).toEqual(['0円', '948円', '0円', '0円', '0円'])
+    // today (2026-10-15) highlights the row of the week holding it
+    expect(zone().find('[data-test="row-2026-10-12"]').classes()).toContain('current')
+    // a label filter rides the week fetch too (label_colors like the others)
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+      granularity: 'week',
+      from: '2026-10-01',
+      to: '2026-10-31',
+      limit: 1,
+      label_colors: ['red'],
+    }))
+    // a row press moves the shared period into that week's week mode and the
+    // month-only zone disappears with the mode itself
+    await zone().find('[data-test="row-2026-10-05"]').trigger('click')
+    await settle()
+    const store = (await import('@/web/stores/period')).usePeriodStore()
+    expect(store.mode).toBe('week')
+    expect(store.week).toBe('2026-10-05')
+    expect(zone().exists()).toBe(false)
+    // week / year / range modes never mount the zone and stay at the single
+    // trend call (day or month granularity — no week-bucket fetch)
+    for (const path of ['/?week=2026-10-05', '/?year=2026', '/?from=2026-10-03&to=2026-10-15']) {
+      cleanup()
+      mockFetch({ 'GET /api/auth/me': { body: ME } })
+      const other = vi.spyOn(api, 'getAnalysisTrend')
+      const m = await mountApp(path)
+      expect(m.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
+      expect(other).toHaveBeenCalledTimes(1)
     }
-    // the current month cannot move forward
-    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
-    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    // a range spanning exactly the month draws the zone again once the month
+    // tab returns (the mode change must re-run the load)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const back = await mountApp('/?from=2026-10-01&to=2026-10-31')
+    expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
+    await back.wrapper.find('[data-test="filter-period"]').trigger('click')
     await settle()
-    // the empty previous month: the KPI reads 2026年9月 with zero and the
-    // empty-state nudge; the dialog stays open and next is enabled again
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年9月の支出')
-    expect(wrapper.find('[data-test="total"]').text()).toBe('0円')
-    expect(wrapper.find('[data-test="recent"]').text()).toContain('ChatGPT でレシートの写真を送ると')
-    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
-
-    // a trend bar press moves the shared store (and the chip) as well
-    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await back.wrapper.find('[data-test="mode-month"]').trigger('click')
     await settle()
-    keydown('Escape')
-    await settle()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    const bar = wrapper.find('[data-test="bar-2026-09"]').exists()
-      ? wrapper.find('[data-test="bar-2026-09"]')
-      : wrapper
-          .findAll('[data-test="trend"] .bar-col')
-          .find((b) => (b.attributes('title') ?? '').startsWith('2026年9月'))
-    expect(bar).toBeTruthy()
-    await bar!.trigger('click')
-    await settle()
-    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年9月')
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年9月の支出')
-    // the month is shared: another screen queries the same 2026-09
-    await router.push('/categories')
-    await settle()
-    expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ month: '2026-09' }))
+    expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(true)
   })
 
-  it('[covers:web-shell.loading-skeleton] 初回 loading は dash-grid 同形の skeleton（aria-hidden + sr-only 文言）、再取得は既存 grid の dim', async () => {
+  it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal][covers:web-browse.trend-y-axis][covers:web-browse.trend-note-removed] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは間引き・値ラベルは全棒', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const orig = api.getStats.bind(api)
-    let release!: () => void
-    let gate = new Promise<void>((r) => (release = r))
-    vi.spyOn(api, 'getStats').mockImplementation(async (...args: Parameters<typeof orig>) => {
-      await gate
-      return orig(...args)
-    })
-    const { wrapper, pinia } = await mountApp('/')
-    // first load: the dash-grid silhouette, decorative blocks aria-hidden,
-    // the loading state itself stays readable (sr-only)
-    const sk = wrapper.find('[data-test="loading"]')
-    expect(sk.exists()).toBe(true)
-    expect(sk.classes()).toContain('skeleton')
-    expect(sk.attributes('aria-hidden')).toBe('true')
-    expect(sk.find('.sr-only').text()).toBe('読み込んでいます...')
-    expect(wrapper.find('[data-test="kpi"]').exists()).toBe(false)
-    release()
-    await settle()
-    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="total"]').text()).toBe('948円')
-
-    // reload (a ledger switch; the month switch itself moved to the topbar
-    // period chip in TASK-44): the loaded grid stays and dims, no skeleton
-    gate = new Promise((r) => (release = r))
-    const { useSessionStore } = await import('@/web/stores/session')
-    useSessionStore(pinia).selectedLedgerId = 2
-    await settle()
-    const grid = wrapper.find('.dash-grid')
-    expect(grid.classes()).toContain('loading')
-    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
-    release()
-    await settle()
-    expect(wrapper.find('.dash-grid').classes()).not.toContain('loading')
+    const { wrapper } = await mountApp('/')
+    // month mode: a 6-month window, no per-bar labels, thinned axis ticks
+    // and a value label on every bar (6 bars = non-dense)
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(6)
+    expect(wrapper.find('[data-test="bar-2026-10"]').classes()).toContain('current')
+    expect(wrapper.findAll('[data-test="trend-card"] .bar-col .bar-val')).toHaveLength(6)
+    expect(
+      wrapper
+        .find('[data-test="trend-axis"]')
+        .findAll('span')
+        .map((s) => s.text())
+        .filter(Boolean),
+    ).toEqual(['5月', '7月', '9月', '10月'])
+    // the y-axis: three compactYen ticks (mock max 948 -> niceMax 1000)
+    expect(wrapper.find('[data-test="trend-card"] .y-axis').attributes('aria-hidden')).toBe('true')
+    expect(
+      wrapper
+        .find('[data-test="trend-card"] .y-axis')
+        .findAll('span')
+        .map((s) => s.text()),
+    ).toEqual(['1千', '500', '0'])
+    // the note line is gone (TASK-100 removes the trend-note entirely)
+    expect(wrapper.find('[data-test="trend-card"] .trend-note').exists()).toBe(false)
+    // a 13-day range gives day bars (the analysis trend endpoint ships the
+    // buckets; the span rules live in trendGranularity/spanGranularity)
+    cleanup()
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const range = await mountApp('/?from=2026-10-03&to=2026-10-15')
+    expect(range.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(13)
+    expect(
+      range.wrapper
+        .find('[data-test="trend-axis"]')
+        .findAll('span')
+        .map((s) => s.text())
+        .filter(Boolean),
+    ).toEqual(['10/3', '10/6', '10/9', '10/12', '10/15'])
   })
 
-  it('[covers:web-home.dashboard-period-modes] 年・期間モードに追従（正規化なし・KPI語彙・1日あたり・推移・リンクのquery）', async () => {
+  it('[covers:web-shell.loading-skeleton] 初回 loading は view-stack 同形の skeleton（aria-hidden + sr-only 文言）、再取得は既存 stack の dim', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const stats = vi.spyOn(api, 'getStats')
-    // pick the year on another screen first: entering Home must keep it (the
-    // old month normalization is gone). One mount with an in-mount navigation
-    // — cleanup() would restore the spy, so no remount inside this test
-    // (the same pattern as the month-switch test's /categories round trip)
-    const { wrapper, router } = await mountApp('/categories')
-    const chip = () => wrapper.find('[data-test="filter-period"]')
-    await chip().trigger('click')
+    const resolvers: ((v: never) => void)[] = []
+    vi.spyOn(api, 'getAnalysis').mockImplementation(
+      () => new Promise((r) => resolvers.push(r)) as never,
+    )
+    const { wrapper } = await mountApp('/')
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="loading"]').attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('[data-test="loading"] .sr-only').text()).toContain('読み込んでいます')
+    for (const r of resolvers) r({} as never)
     await settle()
-    await wrapper.find('[data-test="mode-year"]').trigger('click')
-    await settle()
-    await router.push('/')
-    await settle()
-    // the overview (the load's last stats call; the trend rides first, the
-    // Categories ordering) and the trend both follow the year; the KPI drops
-    // the "今月" special case and the compare vocabulary is 前年
-    expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', year: 2026 })
-    expect(stats).toHaveBeenCalledWith(1, { report: 'monthly_trend', year: 2026 })
-    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年')
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026年の支出')
-    expect(wrapper.find('[data-test="diff"]').text()).toContain('前年比 +948円')
-    // the compare vocabulary rides the summary line as well (the diff chip
-    // alone could pass while it still reads 前月) — 948 / 288日
-    const sub = wrapper.find('[data-test="kpi"] .kpi-sub').text()
-    expect(sub).toContain('レシート 3件')
-    expect(sub).toContain('1日あたり 3円')
-    expect(sub).toContain('前年 0円')
-    // the year rides its own bars: 12 zero-filled months, no current highlight
-    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(12)
-    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['1月', '12月'])
-    expect(wrapper.find('.bar-col.current').exists()).toBe(false)
-    // TASK-75 §6-4: with no selected month there is no value label either
-    expect(wrapper.find('[data-test="trend-card"] .bar-val').exists()).toBe(false)
-    // links carry the period in its URL form (year=, not from&to); the
-    // breakdown rows drill into the category route (TASK-74) instead of the
-    // legacy ?category= selection
-    const legend = new URL(wrapper.find('[data-test="breakdown"] [data-test="row-食費"]').attributes('href')!, 'http://localhost')
-    expect(legend.pathname).toBe('/categories/1')
-    expect(legend.searchParams.get('year')).toBe('2026')
-    expect(legend.searchParams.get('category')).toBe(null)
-    const more = new URL(wrapper.find('[data-test="recent"] a.more').attributes('href')!, 'http://localhost')
-    expect(more.searchParams.get('year')).toBe('2026')
+    // the settled load drops the skeleton (the empty object fails the
+    // data check and renders nothing — the skeleton is gone either way)
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+  })
 
-    // a custom range: the compare is the same-length previous period (mock
-    // parity), per-day divides by the days elapsed so far
-    await chip().trigger('click')
+  it('[covers:web-dashboard.label-filter] 検索dialog下段のラベル選択は Home の analysis 再取得へ label_colors で流れる', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const spy = vi.spyOn(api, 'getAnalysis')
+    const { wrapper } = await mountApp('/')
+    expect(spy).not.toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red'] }))
+    await wrapper.find('[data-test="filter-search"]').trigger('click')
     await settle()
-    await wrapper.find('[data-test="mode-range"]').trigger('click')
+    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
     await settle()
-    await wrapper.find('[data-test="range-from"]').setValue('2026-10-03')
-    await wrapper.find('[data-test="range-to"]').setValue('2026-10-15')
-    await wrapper.find('[data-test="range-apply"]').trigger('click')
-    await settle()
-    expect(stats).toHaveBeenLastCalledWith(1, { report: 'monthly_overview', from: '2026-10-03', to: '2026-10-15' })
-    expect(wrapper.find('[data-test="kpi"] .label').text()).toBe('2026/10/03 〜 2026/10/15の支出')
-    expect(wrapper.find('[data-test="diff"]').text()).toContain('前期間比 +948円')
-    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('1日あたり 73円') // 948 / 13日
-    expect(wrapper.find('[data-test="kpi"] .kpi-sub').text()).toContain('前期間 0円')
-    expect(wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(1)
-    expect(wrapper.find('[data-test="trend-axis"]').findAll('span').map((s) => s.text())).toEqual(['10月'])
-    const recent = new URL(wrapper.find('[data-test="recent-101"]').attributes('href')!, 'http://localhost')
-    expect(recent.searchParams.get('from')).toBe('2026-10-03')
-    expect(recent.searchParams.get('to')).toBe('2026-10-15')
+    expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ label_colors: ['red'], limit: 50 }))
   })
 })
 
-type W = Awaited<ReturnType<typeof mountApp>>['wrapper']
+describe('PeriodHeader (component)', () => {
+  it('期間labelと合計のみを描画する（diff・選択器の部位を持たない）', () => {
+    const w = mount(PeriodHeader, {
+      props: {
+        label: '2026年10月の支出',
+        total: 948,
+      },
+    })
+    expect(w.find('.period-label').text()).toBe('2026年10月の支出')
+    expect(w.find('[data-test="period-total"]').text()).toBe('948円')
+    expect(w.find('[data-test^="compare-"]').exists()).toBe(false)
+  })
+})
 
-/** Items of the top-right account menu (open it first). */
-function accountItems(w: W) {
+describe('RankedList (component)', () => {
+  it('残余行は to が null を返す行として span（非リンク）・上位行は RouterLink', () => {
+    const w = mount(RankedList, {
+      props: {
+        rows: [
+          { keys: [1], labels: ['食費'], value: 550, share: 0.58 },
+          { keys: [null], labels: ['ほか 2件・計270円'], value: 270, share: undefined },
+        ],
+        to: (r) => (typeof r.keys[0] === 'number' ? { path: '/axes/category/1' } : null),
+      },
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>', props: ['to'] },
+        },
+      },
+    })
+    expect(w.findAll('.ranked-row')[0]!.element.tagName).toBe('A')
+    expect(w.findAll('.ranked-row')[1]!.element.tagName).toBe('SPAN')
+  })
+})
+
+function accountItems(w: VueWrapper) {
   return w.findAll('[data-test="account-menu"] [role="menuitem"]')
 }
 
@@ -296,20 +385,22 @@ const isInert = (el: Element | undefined) =>
   !!el && ((el as HTMLElement).inert === true || el.hasAttribute('inert'))
 
 describe('App shell', () => {
-  it('[covers:web-shell.navigation] 主ナビはデータ4節（sidebar に brand 見出しなし）、表題は SECTION_TITLES からアイコン併記、設定は右上メニューで示す', async () => {
+  it('[covers:web-shell.navigation] 主ナビはデータ4節＋区切り付きで設定（sidebar に brand 見出しなし）、表題は SECTION_TITLES からアイコン併記', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     const { wrapper, router } = await mountApp('/')
     const side = wrapper.find('[data-test="sidebar"]')
     for (const n of ['home', 'receipts', 'categories', 'stores']) {
       expect(side.find(`[data-test="nav-${n}"] svg`).exists()).toBe(true)
     }
-    expect(side.findAll('.side-link')).toHaveLength(4)
+    // TASK-56: the sidebar's side-links are the four data sections plus the
+    // settings entry of the separated second group
+    expect(side.findAll('.side-link')).toHaveLength(5)
     // the sidebar is nav + user only: no brand heading (TASK-27)
     expect(side.find('.sidebar-head').exists()).toBe(false)
     expect(side.find('a.brand').exists()).toBe(false)
-    expect(wrapper.find('[data-test="nav-settings"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="nav-apps"]').exists()).toBe(false)
     expect(side.find('[data-test="nav-home"]').classes()).toContain('active')
+    // the tabbar keeps the four data sections only (TASK-56)
     const tabbar = wrapper.find('[data-test="tabbar"]')
     const tabs = tabbar.findAll('a')
     expect(tabs.map((t) => t.text())).toEqual(['ホーム', 'レシート', 'カテゴリ', '店'])
@@ -348,6 +439,48 @@ describe('App shell', () => {
     expect(receiptsSvg.html()).toContain('M5 3h14v18l-2.5-1.5') // the "receipt" glyph
   })
 
+  it('[covers:web-shell.sidebar-settings-nav] sidebar 主 nav の下に区切り付きの設定 nav（tabbar とアカウントメニューは不変）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    const { wrapper, router } = await mountApp('/')
+    const side = wrapper.find('[data-test="sidebar"]')
+    // the settings link rides in a separated second group under the main nav
+    const settingsLink = side.find('[data-test="nav-settings"]')
+    expect(settingsLink.exists()).toBe(true)
+    expect(settingsLink.attributes('href')).toBe('/settings')
+    expect(settingsLink.classes()).toContain('side-link')
+    expect(settingsLink.find('svg').exists()).toBe(true)
+    expect(settingsLink.text()).toBe('設定')
+    expect(side.find('.side-nav-secondary').exists()).toBe(true)
+    // the settings link rides in the separated second group inside the same
+    // nav (below the four data links), and home is not active while on /
+    expect(side.find('.side-nav [data-test="nav-settings"]').exists()).toBe(true)
+    expect(side.find('.side-nav > [data-test="nav-settings"]').exists()).toBe(false)
+    expect(side.find('.side-nav-secondary [data-test="nav-settings"]').exists()).toBe(true)
+    // on / the home entry is active and the settings entry is not
+    expect(side.find('[data-test="nav-home"]').classes()).toContain('active')
+    expect(settingsLink.classes()).not.toContain('active')
+
+    // pressing it navigates to /settings and the entry turns active
+    await settingsLink.trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/settings/general')
+    expect(wrapper.find('[data-test="nav-settings"]').classes()).toContain('active')
+    // the manage screens inherit the settings section (TASK-74) — active too
+    await router.push('/settings/labels')
+    await settle()
+    expect(wrapper.find('[data-test="nav-settings"]').classes()).toContain('active')
+
+    // the tabbar keeps the four data tabs and the account menu keeps its
+    // settings item (TASK-56: no removal, both entries live on)
+    const tabbar = wrapper.find('[data-test="tabbar"]')
+    expect(tabbar.findAll('a')).toHaveLength(4)
+    expect(tabbar.attributes('style')).toMatch(/--tab-count:\s*4/)
+    expect(tabbar.find('[data-test="nav-settings"]').exists()).toBe(false)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    const settingsItem = accountItems(wrapper).find((i) => i.text().includes('設定'))
+    expect(settingsItem?.attributes('aria-current')).toBe('page')
+  })
+
   it('[covers:web-shell.section-from-meta] section・ledgerScoped は route.meta から（/search の表題・ledger スコープ・nav active・manage-* の settings 継承）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     const { wrapper, router } = await mountApp('/search')
@@ -355,9 +488,13 @@ describe('App shell', () => {
     // route.meta and SECTION_TITLES carries search (TASK-74 §4-2)
     expect(wrapper.find('.topbar-title').text()).toBe('検索')
     expect(wrapper.find('.topbar-title svg').exists()).toBe(true)
-    // search joins the ledger-scoped browsing routes: the switcher shows
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    // search joins the ledger-scoped browsing routes: the band is on and the
+    // switcher rides the account menu (TASK-101: no topbar trigger)
     expect(wrapper.find('header.topbar').classes()).toContain('ledger-scoped')
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
     // search is no nav section: none of the four tabs claims it
     for (const n of ['home', 'receipts', 'categories', 'stores']) {
       expect(wrapper.find(`[data-test="nav-${n}"]`).classes()).not.toContain('active')
@@ -369,11 +506,15 @@ describe('App shell', () => {
     expect(m('/receipts')).toMatchObject({ section: 'receipts', depth: 1, ledgerScoped: true })
     expect(m('/receipts/101')).toMatchObject({ section: 'receipts', depth: 2, ledgerScoped: true })
     expect(m('/categories')).toMatchObject({ section: 'categories', depth: 1, ledgerScoped: true })
-    expect(m('/categories/1')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
-    expect(m('/categories/1/2')).toMatchObject({ section: 'categories', depth: 3, ledgerScoped: true })
-    expect(m('/categories/uncategorized')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
+    expect(m('/axes/category/1')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
+    expect(m('/axes/category/1/2')).toMatchObject({ section: 'categories', depth: 3, ledgerScoped: true })
+    expect(m('/axes/category/uncategorized')).toMatchObject({ section: 'categories', depth: 2, ledgerScoped: true })
     expect(m('/stores')).toMatchObject({ section: 'stores', depth: 1, ledgerScoped: true })
-    expect(m('/stores/1')).toMatchObject({ section: 'stores', depth: 2, ledgerScoped: true })
+    expect(m('/axes/store/1')).toMatchObject({ section: 'stores', depth: 2, ledgerScoped: true })
+    // the name-keyed axes light the home section (their lists do not exist)
+    expect(m('/axes/item/牛乳')).toMatchObject({ section: 'home', depth: 2, ledgerScoped: true })
+    expect(m('/axes/label/red')).toMatchObject({ section: 'home', depth: 2, ledgerScoped: true })
+    expect(m('/axes/payment/cash')).toMatchObject({ section: 'home', depth: 2, ledgerScoped: true })
     expect(m('/search')).toMatchObject({ section: 'search', depth: 1, ledgerScoped: true })
     // manage-* inherits the settings section from the /settings parent record
     // but keeps the ledger scope; the plain settings tabs have no scope
@@ -383,16 +524,20 @@ describe('App shell', () => {
     expect(m('/apps').section).toBe('apps')
     expect(m('/usage/connect').section).toBe('usage')
 
-    // the manage screen keeps the settings title with its switcher; usage is
-    // not ledger scoped
+    // the manage screen keeps the settings title with its ledger section in
+    // the account menu; usage is not ledger scoped
     await router.push('/settings/categories')
     await settle()
     expect(wrapper.find('.topbar-title').text()).toBe('設定')
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     await router.push('/usage')
     await settle()
     expect(wrapper.find('.topbar-title').text()).toBe('使い方')
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(false)
   })
 
   it('[covers:web-shell.menus] 左上 menu ボタンで drawer を開閉（aria・アイコン・フォーカス・inert・scrim）、右上アカウントメニューからログアウト', async () => {
@@ -412,12 +557,14 @@ describe('App shell', () => {
     expect(menuBtn().find('svg').html()).toContain('M4 6h16') // the "menu" glyph
 
     // open: the same button at the same spot becomes the close control
+    // (TASK-52: the glyph points where the panel goes — a left chevron, not
+    // the close X that read as a second hamburger)
     await menuBtn().trigger('click')
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
     expect(menuBtn().attributes('aria-expanded')).toBe('true')
     expect(menuBtn().attributes('aria-label')).toBe('メニューを閉じる')
-    expect(menuBtn().find('svg').html()).toContain('M6 6l12 12') // the "close" glyph
+    expect(menuBtn().find('svg').html()).toContain('M15 18l-6-6 6-6') // the "chevron-left" glyph
     // focus lands on the active section's link (receipts, not the first item)
     expect(document.activeElement).toBe(wrapper.find('[data-test="nav-receipts"]').element)
     // no separate close button; the content columns are inert, the topbar is not
@@ -434,8 +581,9 @@ describe('App shell', () => {
     expect(menuBtn().attributes('aria-label')).toBe('メニューを開く')
     expect(document.activeElement).toBe(menuBtn().element)
 
-    // a section without a nav entry (settings): the first link takes the focus
-    await router.push('/settings')
+    // a section without a nav entry (usage): the first link takes the focus
+    // (settings gained its own sidebar entry in TASK-56)
+    await router.push('/usage')
     await settle()
     await menuBtn().trigger('click')
     await settle()
@@ -463,14 +611,17 @@ describe('App shell', () => {
     expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
     expect(menuBtn().attributes('aria-expanded')).toBe('false')
 
-    // ledger switching is the LedgerSwitcher, not a select
+    // ledger switching is the account menu's radio section, not a select
+    // and not a topbar trigger (TASK-101)
     expect(wrapper.find('[data-test="ledger-select"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ledger-switch"]').exists()).toBe(false)
 
     expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(false)
     const accountBtn = wrapper.find('[data-test="account-button"]')
     expect(accountBtn.attributes('aria-haspopup')).toBe('menu')
     await accountBtn.trigger('click')
+    // /stores is ledger scoped: the switcher rides the menu as radio rows
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="account-menu"]').text()).not.toContain(ME.account_number)
     expect(wrapper.find('[data-test="account-menu"]').text()).toContain(ME.display_name)
     const labels = accountItems(wrapper).map((i) => i.text().trim())
@@ -489,9 +640,13 @@ describe('App shell', () => {
     expect(wrapper.find('[data-test="login"]').exists()).toBe(true)
   })
 
-  it('[covers:web-shell.nav-open-state-on-resize] 900px 以上へリサイズしてもナビは開いたまま（modal 効果の inert・drawer-lock は解ける）、desktop のボタンで同じ overlay を閉じ・開ける', async () => {
+  it('[covers:web-shell.nav-open-state-on-resize][covers:web-shell.sidebar-default-closed] 900px 以上へリサイズしてもナビは開いたまま（modal 効果の inert・drawer-lock は解ける）、desktop のボタンで同じ overlay を閉じ・開ける（初期は全幅で閉じている）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
+    // TASK-89: the drawer starts closed at every width (desktop default-open
+    // is gone)
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    expect(wrapper.find('[data-test="menu-button"]').attributes('aria-expanded')).toBe('false')
     await wrapper.find('[data-test="menu-button"]').trigger('click')
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
@@ -531,34 +686,39 @@ describe('App shell', () => {
     expect(document.documentElement.classList.contains('drawer-lock')).toBe(true)
   })
 
-  it('[covers:web-shell.sidebar-overlay] desktop は初期 open・非モーダル（scrim 担当なし・inert・drawer-lock なし・遷移と Escape では閉じない）', async () => {
-    // mount inside the desktop viewport class: the shell starts open
+  it('[covers:web-shell.sidebar-overlay][covers:web-shell.sidebar-default-closed] desktop の初期は closed・開ければ非モーダル（inert・drawer-lock なし）だが scrim 外タップ・Escape・遷移でも閉じる（TASK-89）', async () => {
+    // mount inside the desktop viewport class: the shell starts closed
     setMediaMatches('(min-width: 900px)', true)
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    const btn = wrapper.find('[data-test="menu-button"]')
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    await btn.trigger('click')
+    await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
     // the desktop overlay is not modal: main stays interactive
     expect(isInert(wrapper.find('.main-col').element)).toBe(false)
     expect(isInert(wrapper.find('[data-test="tabbar"]').element)).toBe(false)
     expect(document.documentElement.classList.contains('drawer-lock')).toBe(false)
-    // navigating from the sidebar leaves it open (it is persistent there)
-    await wrapper.find('[data-test="nav-stores"]').trigger('click')
-    await settle()
-    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
-    // Escape (on the sidebar, where the handler lives) does not close it
-    keydown('Escape', wrapper.find('[data-test="sidebar"]').element)
-    await settle()
-    expect(wrapper.find('.shell').classes()).toContain('drawer-open')
-    // the menu button is the one way to slide it closed and back
-    const btn = wrapper.find('[data-test="menu-button"]')
-    await btn.trigger('click')
+    // TASK-89: the scrim shows at every width now — an outside tap closes
+    // the desktop overlay too
+    await wrapper.find('.scrim').trigger('click')
     await settle()
     expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
-    expect(btn.attributes('aria-label')).toBe('メニューを開く')
+    // Escape closes it as well (the topbar carries the handler)
     await btn.trigger('click')
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
-    expect(btn.attributes('aria-label')).toBe('メニューを閉じる')
+    keydown('Escape', wrapper.find('[data-test="sidebar"]').element)
+    await settle()
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    // and a navigation from the sidebar closes it (no persistent overlay)
+    await btn.trigger('click')
+    await settle()
+    await wrapper.find('[data-test="nav-stores"]').trigger('click')
+    await settle()
+    expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
   })
 
   it('[covers:web-shell.menus-stay-on-query-change] receipt ルート内の id 変化・query だけの変化ではメニューを閉じない', async () => {
@@ -576,19 +736,21 @@ describe('App shell', () => {
     await settle()
     expect(wrapper.find('.shell').classes()).toContain('drawer-open')
 
-    // the ledger switcher stays open on a query-only change
+    // the account menu (with the ledger section inside, TASK-101) stays open
+    // on a query-only change
     await router.push('/receipts')
     await settle()
-    await wrapper.find('[data-test="ledger-switch"]').trigger('click')
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(true)
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(true)
     await router.replace({ path: '/receipts', query: { item: '牛乳' } })
     await settle()
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(true)
 
     // another path closes everything
     await router.push('/stores')
     await settle()
-    expect(wrapper.find('[data-test="ledger-menu"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="account-menu"]').exists()).toBe(false)
     expect(wrapper.find('.shell').classes()).not.toContain('drawer-open')
 
@@ -603,8 +765,9 @@ describe('App shell', () => {
   it('[covers:web-shell.popover-menu] PopoverMenu: 矢印キー移動・Escape・外側クリックで閉じフォーカスはトリガへ', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/', { attach: true })
-    // the top-right account menu is a PopoverMenu with four items (TASK-37
-    // added 使い方)
+    // the top-right account menu is a PopoverMenu; on a ledgerScoped screen
+    // (TASK-101) it opens with the two ledger radio rows above the four
+    // plain items (TASK-37 added 使い方)
     const trigger = () => wrapper.find('[data-test="account-button"]')
     ;(trigger().element as HTMLElement).focus()
     await trigger().trigger('click')
@@ -613,13 +776,16 @@ describe('App shell', () => {
     expect(menu.exists()).toBe(true)
     expect(trigger().attributes('aria-expanded')).toBe('true')
     const items = () => wrapper.findAll('[role="menu"] [role^="menuitem"]').map((i) => i.element)
-    expect(items()).toHaveLength(4)
+    expect(items()).toHaveLength(6)
     keydown('ArrowDown')
     await settle()
+    // the first landing is the leading ledger row, the second the next one
     expect(document.activeElement).toBe(items()[0])
+    expect(items()[0]!.getAttribute('data-test')).toBe('ledger-option-1')
     keydown('ArrowDown')
     await settle()
     expect(document.activeElement).toBe(items()[1])
+    expect(items()[1]!.getAttribute('data-test')).toBe('ledger-option-2')
     keydown('ArrowUp')
     await settle()
     expect(document.activeElement).toBe(items()[0])

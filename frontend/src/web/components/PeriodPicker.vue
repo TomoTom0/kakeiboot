@@ -4,16 +4,19 @@ import { usePeriodStore, type PeriodMode } from '../stores/period'
 import AppIcon from './AppIcon.vue'
 
 // The period dialog's content (TASK-44 §11-3/11-6): the former in-page
-// PeriodBar's pieces — the month / year / range tabs, the prev-next step and
-// the explicit "表示" range form — carried by the topbar period chip's
-// PopoverPanel. Tab switches and steps apply at once (the dialog stays open;
-// pages re-query through their existing watch(period.range)); a typed range
-// only commits on the 表示 button.
+// PeriodBar's pieces — the week / month / year / Custom tabs, the prev-next
+// step and the explicit "表示" range form — carried by the topbar period
+// chip's PopoverPanel. Tab switches and steps apply at once (the dialog
+// stays open; pages re-query through their existing watch(period.range)); a
+// typed range only commits on the 表示 button. TASK-90/91 (real-device):
+// the tabs run in natural ascending order 週｜月｜年 and the free-form
+// fourth tab says Custom.
 const period = usePeriodStore()
 const MODES: { id: PeriodMode; label: string }[] = [
+  { id: 'week', label: '週' },
   { id: 'month', label: '月' },
   { id: 'year', label: '年' },
-  { id: 'range', label: '期間' },
+  { id: 'range', label: 'Custom' },
 ]
 const from = ref(period.from)
 const to = ref(period.to)
