@@ -5,7 +5,8 @@ import type { RouteLocationRaw } from 'vue-router'
 import type { AnalysisAxis, StatsRow } from '../api/data'
 import AppIcon from './AppIcon.vue'
 import { formatYen } from '../composables/format'
-import { SERIES_REST, SERIES_SLOT_COUNT, seriesColor } from '../lib/seriesColor'
+// TASK-116: the mapping lives in shared/lib (web + widget, same palette)
+import { SERIES_REST, SERIES_SLOT_COUNT, seriesColor } from '@/shared/lib/seriesColor'
 
 // Ranked rows as one 44px line (TASK-75 §6-4): swatch / label / share % /
 // amount / chevron on a single grid — the proportional bar rides the row's

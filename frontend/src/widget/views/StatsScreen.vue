@@ -14,6 +14,7 @@ import BarVChart from '@/shared/components/charts/BarVChart.vue'
 import LineChart from '@/shared/components/charts/LineChart.vue'
 import ShareBar from '@/shared/components/charts/ShareBar.vue'
 import type { ChartDatum } from '@/shared/components/charts/types'
+import { stackedOf } from '@/shared/lib/stackedBars'
 import { formatIsoDateJa } from '@/shared/format'
 import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
@@ -72,10 +73,26 @@ const labelFilter = computed(() => {
   return colors && colors.length > 0 ? colors : carriedLabelColors.value.length > 0 ? [...carriedLabelColors.value] : null
 })
 
+// TASK-116 (design §3-3-2): each row's series key rides the datum (the
+// bar_h / stacked_bar rows paint seriesColor(key), null included) and the
+// bar_v bars stack the composition off `_meta.trend_matrix` — stackedOf
+// (shared) assembles the segments, matched to the section rows by index
+// (both are the range's months, zero-filled ascending); a count mismatch
+// drops the segments (the single-rect fallback draws).
 function rowsToData(section: StatsSection): ChartDatum[] {
-  return section.rows.map((r: StatsRow) => {
-    if (section.chart === 'scatter_line') return { label: formatIsoDateJa(r.labels[0] ?? ''), sub: r.labels[1] ?? null, value: r.value }
-    return { label: r.labels.join(' / '), value: r.value }
+  const bars = section.chart === 'bar_v' ? store.trendMatrix : null
+  const matrix = bars && stackedOf(bars)
+  const useSegs = matrix !== null && matrix !== undefined && matrix.length === section.rows.length
+  return section.rows.map((r: StatsRow, i: number) => {
+    const base =
+      section.chart === 'scatter_line'
+        ? { label: formatIsoDateJa(r.labels[0] ?? ''), sub: r.labels[1] ?? null, value: r.value }
+        : { label: r.labels.join(' / '), value: r.value }
+    return {
+      ...base,
+      key: r.keys[0],
+      ...(useSegs ? { segments: matrix![i]!.segments } : {}),
+    }
   })
 }
 

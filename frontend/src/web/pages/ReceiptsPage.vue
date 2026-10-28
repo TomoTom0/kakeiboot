@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
 import { parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
-import { useDataApi, type AnalysisResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
+import { useDataApi, type AnalysisResult, type AnalysisTrendResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
@@ -17,6 +17,7 @@ import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { axisMonthLabels, dayLabel, monthLabel, periodDays, shortDate, shortTime } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
 import { bucketSpan, spanGranularity } from '../composables/trend'
+import { stackedOf } from '@/shared/lib/stackedBars'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
@@ -70,7 +71,9 @@ const totalCount = ref(0)
 const sumAmount = ref(0)
 const nextCursor = ref<string | null>(null)
 const payments = ref<AnalysisResult | null>(null)
-const trendTotals = ref<{ buckets: string[]; totals: (number | null)[] }>({ buckets: [], totals: [] })
+// TASK-116 (design §3-2): the WHOLE trend result stays (stackedOf reads the
+// series off it — limit 5 fetches the top series for the stacked bars)
+const trendRes = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 // first load finished at least once: until then the screen shows the
@@ -117,7 +120,9 @@ async function load(id?: number): Promise<void> {
       // the payment ranking rides the analysis endpoint (TASK-89: the old
       // GET /stats web route is gone)
       api.getAnalysis(l, { axis: 'payment_method', ...analysisFilters(), limit: 50 }),
-      api.getAnalysisTrend(l, { axis: 'category', granularity: spanGranularity(...period.range), ...analysisFilters(), limit: 1 }),
+      // TASK-116 (design §3-2): limit 5 so the bars can stack their series
+      // (top-5 + the client-side residual; the call count stays three)
+      api.getAnalysisTrend(l, { axis: 'category', granularity: spanGranularity(...period.range), ...analysisFilters(), limit: 5 }),
     ])
     if (n !== seq) return
     receipts.value = list.receipts
@@ -125,7 +130,7 @@ async function load(id?: number): Promise<void> {
     sumAmount.value = list.sum_amount
     nextCursor.value = list.next_cursor
     payments.value = pm
-    trendTotals.value = { buckets: tr.buckets, totals: tr.bucket_totals }
+    trendRes.value = tr
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -294,15 +299,19 @@ const paymentRows = computed<StatsRow[]>(() => {
 
 /** TASK-55/A8: the trend card follows the period's length — day (<=62 days,
  *  e.g. a month's 31 bars), Monday-anchored weeks (63..366) or months — so it
- *  never disappears on long periods. The data stays the overview call's
- *  daily_cumulative (no extra request). */
+ *  never disappears on long periods. TASK-116 (design §3-2): the bars stack
+ *  their series — stackedOf (shared) assembles each bucket's segments (top-5
+ *  + the residual「ほか」) off the same getAnalysisTrend fetch. */
 const trendGran = computed(() => spanGranularity(...period.range))
 const trendTitle = computed(() =>
   trendGran.value === 'day' ? '日別の支出' : trendGran.value === 'week' ? '週別の支出' : '月別の支出',
 )
 const trendCols = computed(() => {
-  const { buckets, totals } = trendTotals.value
+  const res = trendRes.value
+  if (!res) return []
   const [from, to] = period.range
+  const totals = res.bucket_totals
+  const stacked = stackedOf(res)
   const max = Math.max(
     ...totals.map((t) => t ?? 0),
     1,
@@ -313,9 +322,22 @@ const trendCols = computed(() => {
     const [lo, hi] = bucketSpan(key, 'week', from, to)
     return `${shortDate(lo)}〜${shortDate(hi)} ${formatYen(value)}`
   }
-  return buckets.map((key, i) => {
+  return res.buckets.map((key, i) => {
     const value = totals[i] ?? 0
-    return { key, value, height: value ? Math.max(Math.round((value / max) * 100), 3) : 0, title: title(key, value) }
+    const total = value
+    return {
+      key,
+      value,
+      height: value ? Math.max(Math.round((value / max) * 100), 3) : 0,
+      title: title(key, value),
+      // TrendBars' BarView math: the segment share of the BAR height with
+      // the 1% floor for positive values, and the hover share title
+      segments: (stacked[i]?.segments ?? []).map((s) => ({
+        ...s,
+        segHeight: total > 0 ? Math.max((s.value / total) * 100, s.value > 0 ? 1 : 0) : 0,
+        pct: total > 0 ? Math.round((s.value / total) * 100) : null,
+      })),
+    }
   })
 })
 const trendAxis = computed(() => {
@@ -481,10 +503,22 @@ const groups = computed(() => {
                 class="daily-col"
                 :title="c.title"
               >
+                <!-- TASK-116 (design §3-2): the bar is a stacked container —
+                     column-reverse puts the first (top) series at the base;
+                     a zero bucket keeps the height-0 element with no
+                     segments (the same drawing as before: no visible bar) -->
                 <span
                   class="daily-bar"
                   :style="{ height: `${c.height}%` }"
-                />
+                >
+                  <span
+                    v-for="(seg, i) in c.segments"
+                    :key="i"
+                    class="daily-seg"
+                    :style="{ height: `${seg.segHeight}%`, background: seg.color }"
+                    :title="`${seg.label} ${formatYen(seg.value)}${seg.pct !== null ? `（${seg.pct}%）` : ''}`"
+                  />
+                </span>
               </span>
             </div>
             <div

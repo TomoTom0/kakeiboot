@@ -10,6 +10,7 @@
 
 import { expect, test, type Page } from '@playwright/test'
 import { installApiStub } from './stub'
+import { createMockDataApi } from '@/web/api/data/mock'
 
 /**
  * Landing expectation of a feed panel: the effective px of .receipt-panel's
@@ -209,6 +210,190 @@ test.describe('daily bars (360x780)', () => {
     expect(m.count, '2026-10 has 31 day columns').toBe(31)
     expect(m.minWidth, 'every column keeps the 4px minimum (0.05px tolerance)').toBeGreaterThanOrEqual(3.95)
     expect(m.scrollWidth, 'the track fits inside the card').toBeLessThanOrEqual(m.clientWidth + 1)
+  })
+})
+
+// --- TASK-116 (design tmp/tasks/tm-116/design_breakdown-expansion.md §5-3):
+// the newly stacked bars measured in the real layout — the daily segments'
+// visible geometry (the min-height overshoot clips from the top inside the
+// overflow-hidden container while the first series anchors the bottom), the
+// week row's multi-stop inline gradient, and the 360px fit of both zones. ---
+
+test.describe('stacked breakdown bars (360x780)', () => {
+  test.use({ viewport: { width: 360, height: 780 } })
+
+  test('[covers:web-receipts.trend-card-granularity] daily bars stack their series: first series anchors the bottom, segments paint real series colors', async ({ page }) => {
+    logPageIssues(page, 'daily-seg')
+    await installApiStub(page)
+    await page.goto('/receipts?month=2026-10')
+    await expect(page.locator('[data-test="daily"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const daily = document.querySelector('[data-test="daily"]')!
+      const bars = Array.from(daily.querySelectorAll('.daily-bar')) as HTMLElement[]
+      const segBars = bars.filter((b) => b.querySelector('.daily-seg') !== null)
+      // 10/5 (おにぎり 150円 食費) — the first recorded day, one segment
+      const first = segBars[0]!
+      const segs = Array.from(first.querySelectorAll('.daily-seg')) as HTMLElement[]
+      const barR = first.getBoundingClientRect()
+      return {
+        segBars: segBars.length,
+        overflow: getComputedStyle(first).overflow,
+        barH: barR.height,
+        colH: (first.parentElement as HTMLElement).getBoundingClientRect().height,
+        bottomGap: segs.map((s) => barR.bottom - s.getBoundingClientRect().bottom),
+        visibleSum: segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0),
+        colors: segs.map((s) => getComputedStyle(s).backgroundColor),
+      }
+    })
+    expect(m.segBars, 'the three recorded days carry segments').toBe(3)
+    expect(m.overflow).toBe('hidden')
+    // the column keeps the fixed 110px track height
+    expect(m.colH).toBeCloseTo(110, 0)
+    // the visible segment sum may reach past the bar height (min-height 2px
+    // per segment clips from the top) — the bar itself never exceeds the
+    // container and the FIRST series anchors the bottom edge
+    expect(m.barH).toBeLessThanOrEqual(m.colH + 1)
+    expect(m.visibleSum).toBeGreaterThanOrEqual(m.barH - 1)
+    expect(Math.min(...m.bottomGap)).toBeLessThanOrEqual(1)
+    // the segments paint resolved series colors (light palette --series-1
+    // #0072B2 on 10/5), never transparent
+    expect(m.colors.length).toBeGreaterThanOrEqual(1)
+    for (const c of m.colors) expect(c).not.toBe('rgba(0, 0, 0, 0)')
+    expect(m.colors[0]).toBe('rgb(0, 114, 178)')
+  })
+
+  test('[covers:web-home.week-card] week rows: the inline bar is a multi-stop series gradient and zero weeks drop it', async ({ page }) => {
+    logPageIssues(page, 'week-gradient')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="week-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-test="week-card"] button.week-row')) as HTMLElement[]
+      const filled = rows.find((r) => r.dataset.test === 'row-2026-10-05')!
+      const zero = rows.find((r) => r.dataset.test === 'row-2026-10-12')!
+      const raw = filled.getAttribute('style') ?? ''
+      const img = raw.match(/background-image:[^;]+/)?.[0] ?? ''
+      return {
+        raw,
+        resolved: getComputedStyle(filled).backgroundImage,
+        zeroRaw: zero.getAttribute('style') ?? '',
+        stopPcts: [...img.matchAll(/(\d+(?:\.\d+)?)%/g)].map((x) => Number(x[1])),
+        // REVIEW-3 Low-1: the fill the stops must fit inside rides the same
+        // inline style as --rank-fill; the head stops live before the tail
+        fillPct: Number(raw.match(/--rank-fill:\s*([\d.]+)%/)?.[1] ?? NaN),
+        headPcts: [...img.slice(0, img.indexOf('transparent')).matchAll(/([\d.]+)%/g)].map((x) => Number(x[1])),
+        tailPct: Number(img.match(/transparent\s+([\d.]+)%/)?.[1] ?? NaN),
+      }
+    })
+    // the inline style writes a multi-stop gradient: the mock month's two
+    // series colors (食費 s1 + 日用品 s4) + the transparent tail
+    expect(m.raw).toContain('background-image')
+    expect(m.raw).toContain('var(--series-1)')
+    expect(m.raw).toContain('var(--series-4)')
+    expect(m.raw).toContain('transparent')
+    expect(m.resolved).toContain('linear-gradient')
+    // the percent stops stay ordered within the fill
+    expect(m.stopPcts.length).toBeGreaterThanOrEqual(2)
+    expect(Math.max(...m.stopPcts)).toBeLessThanOrEqual(100)
+    // and the color stops stay inside the row's OWN fill (design §5-1): the
+    // head stops sit at or below the --rank-fill value, the last one closes
+    // exactly at it and the transparent tail opens there
+    expect(Number.isNaN(m.fillPct)).toBe(false)
+    expect(m.headPcts.length).toBeGreaterThanOrEqual(2)
+    for (const p of m.headPcts) expect(p).toBeLessThanOrEqual(m.fillPct)
+    expect(Math.max(...m.headPcts)).toBe(m.fillPct)
+    expect(m.tailPct).toBe(m.fillPct)
+    // zero-total weeks carry no color stop at all
+    expect(m.zeroRaw).not.toContain('var(--series-')
+  })
+
+  // REVIEW-3 Low-1: the fill-bound stop check above only proves itself when
+  // a row's fill actually sits below 100 — the stock mock records a single
+  // week (that row IS the max, fill=100, where "stops <= fill" and
+  // "<= 100" coincide by accident). A week-trend-only route override (the
+  // later registration wins the match; everything else falls through to the
+  // installed stub) re-seeds the receipts so a second, heavier week becomes
+  // the max and the 10/5 row's gradient must still close inside its own
+  // sub-100 fill.
+  test('[covers:web-home.week-card] week gradient stops close inside a sub-100 fill (a second heavier week)', async ({ page }) => {
+    logPageIssues(page, 'sub100-fill')
+    await installApiStub(page)
+    // the week-trend answer comes off a re-seeded mock: receipt 103 moves
+    // into the 10/12 week at 1200円, so the 10/5 week keeps both series
+    // (798円) and fills round(798/1200*100) = 67%
+    const mock = createMockDataApi()
+    await mock.updateReceipt(1, 103, {
+      revision: 1,
+      set: { purchased_on: '2026-10-13' },
+      upsert_items: [{ item_id: 1004, amount: 1200 }],
+    })
+    await page.route(
+      (url) => url.pathname === '/api/ledgers/1/analysis/trend' && url.searchParams.get('granularity') === 'week',
+      async (route) => {
+        const body = await mock.getAnalysisTrend(1, {
+          axis: 'category',
+          metric: 'amount',
+          granularity: 'week',
+          from: '2026-10-01',
+          to: '2026-10-31',
+          limit: 5,
+        })
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      },
+    )
+    await page.goto('/')
+    await expect(page.locator('[data-test="week-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-test="week-card"] button.week-row')) as HTMLElement[]
+      const read = (testId: string) => {
+        const row = rows.find((r) => r.dataset.test === testId)!
+        const raw = row.getAttribute('style') ?? ''
+        const img = raw.match(/background-image:[^;]+/)?.[0] ?? ''
+        return {
+          amount: row.querySelector('.amount')?.textContent ?? '',
+          fillPct: Number(raw.match(/--rank-fill:\s*([\d.]+)%/)?.[1] ?? NaN),
+          headPcts: [...img.slice(0, img.indexOf('transparent')).matchAll(/([\d.]+)%/g)].map((x) => Number(x[1])),
+          tailPct: Number(img.match(/transparent\s+([\d.]+)%/)?.[1] ?? NaN),
+        }
+      }
+      return { light: read('row-2026-10-05'), max: read('row-2026-10-12') }
+    })
+    // the seeded month: the 10/5 week holds 798円, the moved 10/12 week is
+    // the 1200円 max
+    expect(m.light.amount).toBe('798円')
+    expect(m.max.amount).toBe('1,200円')
+    // the light row's fill really sits below 100 (67%) with BOTH series
+    // stops inside it — every head stop <= the row's own fill, the last one
+    // closes exactly at it and the transparent tail opens there
+    expect(m.light.fillPct).toBeLessThan(100)
+    expect(m.light.fillPct).toBe(67)
+    expect(m.light.headPcts.length).toBeGreaterThanOrEqual(2)
+    for (const p of m.light.headPcts) expect(p).toBeLessThanOrEqual(m.light.fillPct)
+    expect(Math.max(...m.light.headPcts)).toBe(m.light.fillPct)
+    expect(m.light.tailPct).toBe(m.light.fillPct)
+    // the heavier week becomes the max (fill=100) and closes the same way
+    expect(m.max.fillPct).toBe(100)
+    for (const p of m.max.headPcts) expect(p).toBeLessThanOrEqual(m.max.fillPct)
+    expect(Math.max(...m.max.headPcts)).toBe(m.max.fillPct)
+    expect(m.max.tailPct).toBe(m.max.fillPct)
+  })
+
+  test('[covers:web-receipts.daily-bars-min-track][covers:web-home.week-card] the stacked daily bars and the week rows keep the 360px fit', async ({ page }) => {
+    logPageIssues(page, 'stacked-fit')
+    await installApiStub(page)
+    for (const path of ['/', '/receipts?month=2026-10']) {
+      await page.goto(path)
+      await expect(page.locator('.topbar')).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      const m = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth,
+      }))
+      expect(m.sw, path).toBeLessThanOrEqual(m.cw)
+    }
   })
 })
 

@@ -782,6 +782,23 @@ pub async fn summarize(
             };
             let trend =
                 monthly_section(conn, ledger_id, &six, &filt, "trend", "直近6か月の推移").await?;
+            // TASK-116 (design: tmp/tasks/tm-116/design_breakdown-expansion.md
+            // §3-3-1): the stacked-composition matrix for the widget's bar_v,
+            // through `_meta` (spec §3-4 / §10). The SAME domain fn the REST
+            // trend endpoint calls (axis=category, amount, months, the applied
+            // filters, top-5), over the trend section's own sub-range so the
+            // matrix buckets match the section rows month for month.
+            let matrix = analysis_trend(
+                conn,
+                ledger_id,
+                Axis::Category,
+                Metric::Amount,
+                &six,
+                Granularity::Month,
+                &filters,
+                5,
+            )
+            .await?;
             // daily cumulative for the widget (_meta only)
             let sql = format!(
                 "SELECT f.purchased_on, SUM(f.amount_incl) FROM v_item_facts f
@@ -801,7 +818,11 @@ pub async fn summarize(
                     json!({ "date": d, "value": acc })
                 })
                 .collect();
-            meta = json!({ "daily_cumulative": cumulative });
+            // the overview keeps daily_cumulative next to the matrix
+            meta = json!({
+                "daily_cumulative": cumulative,
+                "trend_matrix": serde_json::to_value(&matrix).unwrap_or(Value::Null),
+            });
             vec![cats, stores, trend]
         }
         "by_category" => {
@@ -862,6 +883,21 @@ pub async fn summarize(
             .await?,
         ],
         "monthly_trend" => {
+            // TASK-116: the matrix covers the requested range itself (the
+            // section rows' own months); trend_matrix is always non-empty, so
+            // this report now ships `_meta` where it previously had none
+            let matrix = analysis_trend(
+                conn,
+                ledger_id,
+                Axis::Category,
+                Metric::Amount,
+                range,
+                Granularity::Month,
+                &filters,
+                5,
+            )
+            .await?;
+            meta = json!({ "trend_matrix": serde_json::to_value(&matrix).unwrap_or(Value::Null) });
             vec![monthly_section(conn, ledger_id, range, &filt, "trend", "月別合計").await?]
         }
         "item_price_history" => {

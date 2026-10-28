@@ -3,7 +3,8 @@
 // Labels are text nodes and are truncated in JS (spec §11-6).
 import { computed } from 'vue'
 import { formatYen, truncateLabel } from '@/shared/format'
-import { type ChartDatum, niceMax, seriesColor } from './types'
+import { seriesColor } from '@/shared/lib/seriesColor'
+import { type ChartDatum, niceMax, seriesColorAt } from './types'
 
 const props = withDefaults(defineProps<{ data: ChartDatum[]; labelChars?: number }>(), {
   labelChars: 9,
@@ -16,6 +17,10 @@ const ROW = 30
 const BAR_W = W - LABEL_W - VALUE_W
 
 const max = computed(() => niceMax(Math.max(0, ...props.data.map((d) => d.value))))
+// TASK-116: the row color is the KEY-based shared mapping (the same color the
+// web ranking rows and the bar_v segments paint); keyless data falls back to
+// the index slot — never the shared mapping's number path
+const colorOf = (d: ChartDatum, i: number): string => (d.key === undefined ? seriesColorAt(i) : seriesColor(d.key))
 const rows = computed(() =>
   props.data.map((d, i) => ({
     label: truncateLabel(d.label, props.labelChars),
@@ -23,7 +28,7 @@ const rows = computed(() =>
     value: d.value,
     width: (Math.max(0, d.value) / max.value) * BAR_W,
     y: i * ROW,
-    color: seriesColor(i),
+    color: colorOf(d, i),
     valueText: formatYen(d.value),
   })),
 )

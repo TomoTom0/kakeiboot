@@ -364,12 +364,20 @@ describe('ReceiptsPage (dashboard)', () => {
   // web-common.zone-layout）, and the payments rows carry the swatch + series
   // color（支払方法は名称 string の共通写像. web-common.series-color-assignment）.
   it('[covers:web-receipts.dashboard] 期間の合計・件数・平均・日別・支払方法と日付ごとの一覧、品名で絞り込み', async () => {
+    // TASK-116 (design §3-2): the trend fetch lifts limit 1 -> 5 so the daily
+    // bars can stack their series (the call count stays three)
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const { wrapper, router } = await mountApp('/receipts')
     const summary = wrapper.find('[data-test="summary"]').text()
     expect(summary).toContain('948円')
     expect(summary).toContain('レシート 3件')
     expect(summary).toContain('1件あたり 316円')
     expect(wrapper.findAll('[data-test="daily"] .daily-col')).toHaveLength(31)
+    expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+      axis: 'category',
+      granularity: 'day',
+      limit: 5,
+    }))
     expect(wrapper.find('[data-test="payments"]').text()).toContain('現金')
     expect(wrapper.find('[data-test="receipts"]').text()).toContain('10月10日（土）')
     // TASK-105: the three sections are zones with visible headings, riding
@@ -515,15 +523,47 @@ describe('ReceiptsPage (dashboard)', () => {
   // inside .zone-head（文言・選択ロジックは不変 — the `h2` selector below
   // keeps working; the visible form's expectations live on
   // web-common.zone-headings-visible 側）。
-  it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）', async () => {
+  // TASK-105 (landed): the daily section's h2 is a visible h2.zone-title
+  // inside .zone-head（文言・選択ロジックは不変 — the `h2` selector below
+  // keeps working; the visible form's expectations live on
+  // web-common.zone-headings-visible 側）。
+  // TASK-116 (design §3-2): the bars stack their series — recorded buckets
+  // carry .daily-seg children painted with the seriesColor tokens, zero
+  // buckets keep the height-0% .daily-bar element with no segments.
+  it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）・棒は系列の積み上げ', async () => {
     const title = (w: W) => w.find('[data-test="daily"] h2').text()
     const cols = (w: W) => w.findAll('[data-test="daily"] .daily-col')
+    const bars = (w: W) => w.findAll('[data-test="daily"] .daily-bar')
     const axis = (w: W) => w.find('[data-test="daily"] .axis-ends').findAll('span').map((s) => s.text())
     // a month period keeps its daily bars (the browser-measured 31-column rule)
     const month = await mountApp('/receipts?month=2026-10')
     expect(title(month.wrapper)).toBe('日別の支出')
     expect(cols(month.wrapper)).toHaveLength(31)
     expect(axis(month.wrapper)).toEqual(['10月1日（木）', '10月31日（土）'])
+    // every bucket keeps its .daily-bar element; the three recorded days
+    // (10/5, 10/8, 10/10) alone carry segments
+    expect(bars(month.wrapper)).toHaveLength(31)
+    const segBars = bars(month.wrapper).filter((b) => b.findAll('.daily-seg').length > 0)
+    expect(segBars).toHaveLength(3)
+    const segStyle = (w: W, colTitle: string) =>
+      w
+        .findAll('[data-test="daily"] .daily-col')
+        .find((c) => (c.attributes('title') ?? '').startsWith(colTitle))!
+        .find('.daily-seg')
+        .attributes('style') ?? ''
+    // 10/5 (おにぎり 150円 食費) and 10/10 (牛乳+パン 400円 食費) paint the
+    // 食費 token, 10/8 (洗剤 398円 日用品) the 日用品 token — the same
+    // seriesColor tokens the ranking rows use
+    expect(segStyle(month.wrapper, '10月5日')).toContain('var(--series-1)')
+    expect(segStyle(month.wrapper, '10月8日')).toContain('var(--series-4)')
+    expect(segStyle(month.wrapper, '10月10日')).toContain('var(--series-1)')
+    // zero days keep the element at height 0% with no segments
+    const zeroBar = month.wrapper
+      .findAll('[data-test="daily"] .daily-col')
+      .find((c) => (c.attributes('title') ?? '').startsWith('10月1日'))!
+      .find('.daily-bar')
+    expect(zeroBar.attributes('style')).toContain('height: 0%')
+    expect(zeroBar.findAll('.daily-seg')).toHaveLength(0)
     cleanup()
     setDataApi(api)
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
@@ -535,6 +575,14 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(axis(week.wrapper)).toEqual(['7/27', '10/12'])
     const bar = cols(week.wrapper).at(10)
     expect(bar?.attributes('title')).toBe('10/5〜10/11 948円')
+    // the same stacked structure at week granularity: the 10/5 week holds
+    // both series (食費 550 + 日用品 398), every other bucket is bare
+    expect(week.wrapper.findAll('[data-test="daily"] .daily-seg')).toHaveLength(2)
+    const weekSegStyles = week.wrapper
+      .findAll('[data-test="daily"] .daily-seg')
+      .map((s) => s.attributes('style') ?? '')
+    expect(weekSegStyles.some((s) => s.includes('var(--series-1)'))).toBe(true)
+    expect(weekSegStyles.some((s) => s.includes('var(--series-4)'))).toBe(true)
     cleanup()
     setDataApi(api)
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
@@ -543,6 +591,8 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(title(long.wrapper)).toBe('月別の支出')
     expect(cols(long.wrapper)).toHaveLength(22)
     expect(axis(long.wrapper)).toEqual(['2025年1月', '2026年10月'])
+    // month granularity stacks the same way: only 2026-10 (948円) records
+    expect(long.wrapper.findAll('[data-test="daily"] .daily-seg')).toHaveLength(2)
   })
 
   it('[covers:web-receipts.period-identity-in-url] フィルタ適用後も URL に month= が残り再読込で月モード・支払方法の空テキスト統一', async () => {

@@ -41,7 +41,9 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       limit: 5,
     })
     // TASK-103: the month mode's fourth load — the selected month's week
-    // buckets (limit 1: the rows read bucket_totals, not the series).
+    // buckets. TASK-116 (design §3-1): the week rows carry the series
+    // breakdown now, so the fetch lifts limit 1 -> 5 (top-5 series + the
+    // bucket_totals the row amounts read).
     // TASK-115 §3-2 (design tmp/tasks/tm-115/design_trend-continuous-window.md):
     // the month window's initial commit prefetches its prev-adjacent window
     // (from=2025-11-01 — trend-window.test.ts expects the same prefetch), so
@@ -53,7 +55,7 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       granularity: 'week',
       from: '2026-10-01',
       to: '2026-10-31',
-      limit: 1,
+      limit: 5,
     })
     // the period header: the period label and the big total — no compare
     // selector, no diff values, no KPI card
@@ -226,6 +228,41 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       '10/26〜10/31',
     ])
     expect(rows.map((b) => b.find('.amount').text())).toEqual(['0円', '948円', '0円', '0円', '0円'])
+    // TASK-116 (design §3-1): the row's inline bar carries the series
+    // breakdown — the 948円 week (all three receipts) splits its gradient
+    // into the month's top series 食費 (id 1) and 日用品 (id 4), sharing the
+    // exact seriesColor tokens the breakdown ranking rows paint
+    const filled = zone().find('[data-test="row-2026-10-05"]')
+    const bg = filled.attributes('style') ?? ''
+    expect(bg).toContain('background-image')
+    expect(bg).toContain('var(--series-1)')
+    expect(bg).toContain('var(--series-4)')
+    const img = /background-image:\s*([^;]+)/.exec(bg)?.[1] ?? ''
+    expect(img).toContain('linear-gradient(to right')
+    expect(img).toContain('transparent')
+    // REVIEW-3 Low-1 (design §5-1): the color stops stay inside the row's
+    // OWN fill — the fill% rides the same inline style as --rank-fill, so
+    // the bound is that value (the head stops before the transparent tail
+    // sit at or below it and the last one closes exactly at it), not the
+    // loose 100 the single-week mock makes coincide with it by accident
+    const fill = Number(/--rank-fill:\s*(\d+(?:\.\d+)?)%/.exec(bg)?.[1] ?? NaN)
+    expect(Number.isNaN(fill)).toBe(false)
+    const head = img.slice(0, img.indexOf('transparent'))
+    const pcts = [...head.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => Number(m[1]))
+    expect(pcts.length).toBeGreaterThanOrEqual(2)
+    for (const p of pcts) expect(p).toBeLessThanOrEqual(fill)
+    expect(Math.max(...pcts)).toBe(fill)
+    // the breakdown ranking's row for the same key paints the identical
+    // token (same key = same color across the week bar and the legend rows)
+    const ranked = wrapper.findAll('[data-test="breakdown"] .ranked-row')
+    expect((ranked[0]!.attributes('style') ?? '')).toContain('--rank-color: var(--series-1)')
+    expect(ranked[0]!.find('.ranked-label').text()).toBe('食費')
+    // zero-total weeks draw no gradient at all (the meaningless 1% accent
+    // sliver is gone — no color stops on those rows)
+    for (const t of ['row-2026-09-28', 'row-2026-10-12', 'row-2026-10-19', 'row-2026-10-26']) {
+      const style = zone().find(`[data-test="${t}"]`).attributes('style') ?? ''
+      expect(style, t).not.toContain('var(--series-')
+    }
     // today (2026-10-15) highlights the row of the week holding it
     expect(zone().find('[data-test="row-2026-10-12"]').classes()).toContain('current')
     // a label filter rides the week fetch too (label_colors like the others)
@@ -237,7 +274,7 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       granularity: 'week',
       from: '2026-10-01',
       to: '2026-10-31',
-      limit: 1,
+      limit: 5,
       label_colors: ['red'],
     }))
     // a row press moves the shared period into that week's week mode and the
@@ -279,6 +316,59 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     await back.wrapper.find('[data-test="mode-month"]').trigger('click')
     await settle()
     expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(true)
+  })
+
+  // REVIEW-3 Low-1: the fill-bound stop check above only proves itself when
+  // a row's fill actually sits below 100 — the stock mock records a single
+  // week (that row IS the max, fill=100, where "stops <= fill" and
+  // "<= 100" coincide by accident). A second, heavier recorded week drops
+  // the 10/5 row's fill below 100 and its stops must still close inside it.
+  it('[covers:web-home.week-card] 週行gradientの停止はfill<100の行でもfill内に収まる: 記録2週で重い週がmaxのとき軽い週の全色停止が当該行のfill以下・最終停止とtransparent尾はfillで閉じる', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    // move receipt 103 (おにぎり・食費) into the 10/12 week and raise it to
+    // 1200円: the 10/5 week keeps both series (食費400 + 日用品398 = 798円)
+    // while the max moves to the 10/12 week — fill(10/5) =
+    // round(798/1200*100) = 67, a real sub-100 fill with TWO color stops
+    await api.updateReceipt(1, 103, {
+      revision: 1,
+      set: { purchased_on: '2026-10-13' },
+      upsert_items: [{ item_id: 1004, amount: 1200 }],
+    })
+    const { wrapper } = await mountApp('/')
+    const zone = () => wrapper.find('[data-test="week-card"]')
+    expect(zone().findAll('button.week-row').map((b) => b.find('.amount').text())).toEqual([
+      '0円', '798円', '1,200円', '0円', '0円',
+    ])
+    const stopsOf = (testId: string) => {
+      const bg = zone().find(`[data-test="${testId}"]`).attributes('style') ?? ''
+      const fill = Number(/--rank-fill:\s*(\d+(?:\.\d+)?)%/.exec(bg)?.[1] ?? NaN)
+      expect(Number.isNaN(fill), testId).toBe(false)
+      const img = /background-image:\s*([^;]+)/.exec(bg)?.[1] ?? ''
+      const head = img.slice(0, img.indexOf('transparent'))
+      const pcts = [...head.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => Number(m[1]))
+      const tail = Number(/transparent\s+(\d+(?:\.\d+)?)%/.exec(img)?.[1] ?? NaN)
+      return { bg, fill, pcts, tail }
+    }
+    // the sub-100 fill row: every color stop sits at or below the row's own
+    // fill, the last one closes exactly at it and the transparent tail
+    // opens there (the bar ends where the fill ends)
+    const light = stopsOf('row-2026-10-05')
+    expect(light.fill).toBe(67)
+    expect(light.fill).toBeLessThan(100)
+    expect(light.pcts.length).toBeGreaterThanOrEqual(2)
+    for (const p of light.pcts) expect(p, `stop ${p} > fill ${light.fill}`).toBeLessThanOrEqual(light.fill)
+    expect(Math.max(...light.pcts)).toBe(light.fill)
+    expect(light.tail).toBe(light.fill)
+    // the row keeps the month-total series order (食費 series-1 then 日用品
+    // series-4) — both stops live inside the sub-100 fill
+    expect(light.bg).toContain('var(--series-1)')
+    expect(light.bg).toContain('var(--series-4)')
+    // the heavier week becomes the max (fill=100) and closes the same way
+    const max = stopsOf('row-2026-10-12')
+    expect(max.fill).toBe(100)
+    for (const p of max.pcts) expect(p).toBeLessThanOrEqual(max.fill)
+    expect(Math.max(...max.pcts)).toBe(max.fill)
+    expect(max.tail).toBe(max.fill)
   })
 
   it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal][covers:web-browse.trend-y-axis][covers:web-browse.trend-note-removed] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは間引き・値ラベルは全棒', async () => {

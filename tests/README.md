@@ -60,7 +60,7 @@
 | `backend/tests/mcp_auth.rs` | 結合 | MCP Bearer 検証・ledger service（list/switch/whoami）・接続中のアプリ API |
 | `backend/tests/mcp_tools_account.rs` | 結合 | アカウント系 tool（whoami/list/switch・rename_ledger [TASK-20]）・resources 配信の安定 URI・旧 hash URI エイリアス（安定 URI 応答と同一 text/_meta・形式外は未知 URI） [TASK-106]・検索語上限 [TASK-73] |
 | `backend/tests/mcp_tools_catalog.rs` | 結合 | get_catalog・manage_category/manage_store・summarize_spending・filters 上限 [TASK-73] |
-| `backend/tests/mcp_tools_labels.rs` | 結合 | label_receipts と検索・集計の label_colors [TASK-17] |
+| `backend/tests/mcp_tools_labels.rs` | 結合 | label_receipts と検索・集計の label_colors [TASK-17]・summarize_spending の `_meta.trend_matrix`（monthly_overview・monthly_trend・filters 同条件） [TASK-116] |
 | `backend/tests/mcp_tools_drafts_batch.rs` | 結合 | 一括 tool（create/approve_receipt_drafts） [TASK-18]・障害注入 [TASK-25] |
 | `backend/tests/mcp_tools_draft_labels.rs` | 結合 | draft 段階ラベル（payload.label_colors 取込: schema 5色 enum・正規化と DraftView.labels タイトル結合・不正色の isError・承認時 receipt_labels 引き継ぎと audit 一元化） [TASK-21] |
 | `backend/tests/rate_limit.rs` | 結合 | アプリ内 rate limit の経路別 429 |
@@ -82,8 +82,8 @@
 | `frontend/tests/unit/widget/draftBatch.test.ts` | 単体 | draft_batch 画面（行状態・すべて登録・承認済み map） [TASK-18] |
 | `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示 [TASK-26] |
 | `frontend/tests/unit/widget/navigation.test.ts` | 単体 | view ルーティング・一覧→詳細・widgetState stack |
-| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（SVG グラフ・軸ラベル両端 [TASK-67] [TASK-68]・期間切替） |
-| `frontend/tests/unit/widget/host.test.ts` | 単体 | host adapter 選択・dark mode |
+| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（SVG グラフ・軸ラベル両端 [TASK-67] [TASK-68]・期間切替・bar_v 積み上げと `_meta.trend_matrix`・bar_h/bar_v 同key同色・matrix 無し/不一致 fallback・_meta 載せ替わり [TASK-116]） |
+| `frontend/tests/unit/widget/host.test.ts` | 単体 | host adapter 選択・dark mode（系列 palette --series-1..7/--series-rest の light/dark と --bb-series-* 廃止 [TASK-116]） |
 | `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記・画像 URL 検証・ISO 日付ラベル [TASK-68] |
 | `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget/shared の直接通信・不使用 API・HTML 挿入・絵文字の不在 |
 | `frontend/tests/unit/web/helpers.ts` | 補助 | fetch スタブ・memory history での mount・フィード用スクロール test double |
@@ -94,14 +94,14 @@
 | `frontend/tests/unit/web/vite-proxy.test.ts` | 単体 | Vite dev proxy 構成・dev spa fallback・strictPort [TASK-29] |
 | `frontend/tests/unit/web/auth-pages.test.ts` | 単体 | ルーター・ログイン・登録受付・同意（色 chip [TASK-20]・me 確定 [TASK-39]） |
 | `frontend/tests/unit/web/frame.test.ts` | 単体 | iframe 内の操作部品の非描画・favicon.svg の実色 |
-| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム再構築 [TASK-89]（期間ヘッダ〔TASK-93 で対比部を欠く形へ〕・積み上げ推移〔TASK-95 で金額1形固定・語tabなし〕・zone見出しsr-only+icon link [TASK-95]・内訳残余行・日棒のレシート遷移）・PeriodHeader/RankedList 部品単体・アプリ骨格（drawer 初期 closed [TASK-89]・メニュー・route.meta 化 [TASK-74]）・期間ヘッダ/週カードの trend 呼び出し回数は prefetch 込み期待 [TASK-115] |
+| `frontend/tests/unit/web/dashboard-shell.test.ts` | 単体 | ホーム再構築 [TASK-89]（期間ヘッダ〔TASK-93 で対比部を欠く形へ〕・積み上げ推移〔TASK-95 で金額1形固定・語tabなし〕・zone見出しsr-only+icon link [TASK-95]・内訳残余行・日棒のレシート遷移）・PeriodHeader/RankedList 部品単体・アプリ骨格（drawer 初期 closed [TASK-89]・メニュー・route.meta 化 [TASK-74]）・期間ヘッダ/週カードの trend 呼び出し回数は prefetch 込み期待 [TASK-115]・週行の系列分割 gradient（limit=5・0円週 bar なし・内訳行と同key同色） [TASK-116] |
 | `frontend/tests/unit/web/account-pages.test.ts` | 単体 | 設定（一般tab の家計簿名変更 [TASK-20]・既定 badge と⋯の「既定の家計簿にする」[TASK-13]・パスキー・共有/登録 dialog（FormDialog）と発行済み行・招待 ledger 選択 [TASK-46] [TASK-78]・4tab）・接続中のアプリ [TASK-20]・ラベル管理 [TASK-26] |
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
-| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]） |
+| `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]・日別/週別/月別棒の系列積み上げと limit=5 [TASK-116]） |
 | `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100] |
 | `frontend/tests/unit/web/trend-window.test.ts` | 単体 | トレンド窓移動 [TASK-104]（useTrendWindow composable: 窓計算〔month=trendQuery(5)・year=period.range 無後退〕・offset 操作・refresh 冪等ガード・ledger 未確定 fetch なし・stacked 組立集約・全0窓の過去側打ち切り・TrendWindow 前次button・窓移動は trend API のみ再fetch）・cacheヒット経路/prefetch/flush・slide連結とトリム〔prev=[新,旧]・next=[旧,新]〕・連打の即時トリム→再開始・focus変更の同tick trim [TASK-115] |
-| `frontend/tests/unit/web/series-color.test.ts` | 単体 | 系列色の決定的割当 seriesColor（number は (id-1) mod 7 循環 slot・null=--series-rest・string は FNV-1a % 7・label 軸は管理色固定表 red〜purple と範囲外 fallback・追加不変） [TASK-105] |
+| `frontend/tests/unit/web/series-color.test.ts` | 単体 | 系列色の決定的割当 seriesColor（number は (id-1) mod 7 循環 slot・null=--series-rest・string は FNV-1a % 7・label 軸は管理色固定表 red〜purple と範囲外 fallback・追加不変） [TASK-105]（TASK-116 で shared/lib 移設・期待値不変） |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
 | `frontend/tests/unit/web/catalog-store.test.ts` | 単体 | catalog store のキャッシュと破棄 [TASK-74] |
 | `frontend/tests/unit/web/receipt-feed.test.ts` | 単体 | レシート連続フィード（文脈・URL 同期・着地・優越判定 [TASK-77]・世代ガード [TASK-61]） |
@@ -124,7 +124,7 @@
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面（/axes 軸詳細を含む [TASK-89]）の png・metrics.json を幅別に出力 |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（asset へ配置） |
-| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウト実測（着地・補正・幅・軸・境界値・検索チップ） [TASK-19] [TASK-42] [TASK-44] [TASK-41] [TASK-77]・zone 見出し可視・セグメント/swatch 同色・2列/1列・zone--list 38rem・768px trend 収まり [TASK-105]・trend 窓 slide 連続実測（360px・旧bar要素再利用・dense gridline・reduced motion） [TASK-115] |
+| `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウト実測（着地・補正・幅・軸・境界値・検索チップ） [TASK-19] [TASK-42] [TASK-44] [TASK-41] [TASK-77]・zone 見出し可視・セグメント/swatch 同色・2列/1列・zone--list 38rem・768px trend 収まり [TASK-105]・trend 窓 slide 連続実測（360px・旧bar要素再利用・dense gridline・reduced motion） [TASK-115]・積み上げ棒の実測（daily セグメント幾何・実色・週行 gradient 停止・360px fit） [TASK-116] |
 | `frontend/tests/browser/verify-shell.spec.ts` | 実ブラウザ検証 | shell 系実測（名前併記・popover 補正・sheet 切替・drawer〔初期 closed・scrim 外タップ [TASK-89]〕・grant chip・表題中央寄せ） [TASK-60] [TASK-20] [TASK-69]・series token の dark 切替 [TASK-105] |
 | `frontend/tests/browser/verify-labels.spec.ts` | 実ブラウザ検証 | ラベル系実測（行幅・popover 収まり・チップ・コントラスト・picker の色 tap で閉じ） [TASK-60] [TASK-51] |
 | `frontend/tests/browser/verify-usage.spec.ts` | 実ブラウザ検証 | /usage/connect のコピー button icon 切替と URL box 高さ不変（reduced-motion 対応） [TASK-48] |

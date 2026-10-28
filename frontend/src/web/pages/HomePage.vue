@@ -24,6 +24,7 @@ import { useLedger } from '../composables/ledger'
 import { shortDate } from '../composables/period'
 import { bucketSpan, currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
+import { stackedOf } from '@/shared/lib/stackedBars'
 import { useTrendWindow } from '../composables/trendWindow'
 import { usePeriodStore } from '../stores/period'
 
@@ -62,8 +63,9 @@ async function load(id?: number): Promise<void> {
       api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 }),
       api.listReceipts(l, { from: period.range[0], to: period.range[1], limit: 5, ...labels }),
       // TASK-103: the month mode's week rows — the selected month only, week
-      // buckets; limit 1 keeps the one series we never read (bucket_totals is
-      // the whole point)
+      // buckets. TASK-116 (design §3-1): limit 5 brings the month's top
+      // series so the row's inline bar can stack its breakdown (the same
+      // top-5 + residual assembly the trend paints)
       ...(period.mode === 'month'
         ? [api.getAnalysisTrend(l, {
             axis: 'category',
@@ -72,7 +74,7 @@ async function load(id?: number): Promise<void> {
             from: period.range[0],
             to: period.range[1],
             ...labels,
-            limit: 1,
+            limit: 5,
           })]
         : []),
     ])
@@ -141,13 +143,17 @@ function onTrendSelect(key: string): void {
 }
 
 // --- the month mode's week rows (TASK-103) ----------------------------------------
+// TASK-116 (design §3-1): the row's inline bar carries the series breakdown —
+// stackedOf (shared) assembles each week's segments off the same fetch; the
+// month's top-5 series stay fixed across the weeks (whole-month ranking)
 const weeks = computed<WeekRow[]>(() => {
   const res = weekRes.value
   if (!res || period.mode !== 'month') return []
   const [from, to] = period.range
+  const stacked = stackedOf(res)
   return res.buckets.map((b, i) => {
     const [lo, hi] = bucketSpan(b, 'week', from, to)
-    return { key: b, label: `${shortDate(lo)}〜${shortDate(hi)}`, total: res.bucket_totals[i] ?? 0 }
+    return { key: b, label: `${shortDate(lo)}〜${shortDate(hi)}`, total: res.bucket_totals[i] ?? 0, segments: stacked[i]?.segments ?? [] }
   })
 })
 const weekCurrent = computed(() =>

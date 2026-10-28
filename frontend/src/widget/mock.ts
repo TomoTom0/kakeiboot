@@ -104,7 +104,9 @@ export function createMockHost(view?: string): WidgetHost {
         case 'summarize_spending': {
           const report = (args.report as ReportKind) ?? 'monthly_overview'
           const period = args.period as { preset?: string } | undefined
-          return ok(fx.statsEnvelope(report, period?.preset ?? '2026年10月'))
+          // TASK-116: monthly_overview / monthly_trend carry the stacked
+          // composition matrix in `_meta` for the bar_v widget chart
+          return ok(fx.statsEnvelope(report, period?.preset ?? '2026年10月'), fx.statsMeta(report))
         }
         case 'refresh_widget_images': {
           const refs = (args.refs as { kind: string; id: number }[]) ?? []

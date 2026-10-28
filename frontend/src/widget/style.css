@@ -14,12 +14,18 @@
   --bb-warn-bg: #fff4dc;
   --bb-danger: #c0362c;
   --bb-danger-bg: #fdecea;
-  --bb-series-1: #2463c7;
-  --bb-series-2: #1f9d8a;
-  --bb-series-3: #d9822b;
-  --bb-series-4: #8a5cd1;
-  --bb-series-5: #c94f7c;
-  --bb-series-6: #6b7d8f;
+  /* TASK-116 series palette: the SAME tokens and values as the web app
+     (frontend/src/web/styles.css) so the shared seriesColor mapping paints
+     one key one color on both surfaces. The old widget-only palette (six
+     colors, different values) is retired */
+  --series-1: #0072B2;
+  --series-2: #C98208;
+  --series-3: #332288;
+  --series-4: #CC79A7;
+  --series-5: #882255;
+  --series-6: #3E9BD0;
+  --series-7: #C24100;
+  --series-rest: #8f9a94;
   /* receipt label palette (TASK-17 / TASK-26), same hues as the web app.
      -bg / -fg pair for the name chips (4.5:1+); the solid color is the bare
      chip of an untitled label */
@@ -53,12 +59,15 @@
   --bb-warn-bg: #3a2f17;
   --bb-danger: #f2786d;
   --bb-danger-bg: #3d1f1d;
-  --bb-series-1: #6fa3f5;
-  --bb-series-2: #4cc7b2;
-  --bb-series-3: #f0a35c;
-  --bb-series-4: #b394ef;
-  --bb-series-5: #ec88ad;
-  --bb-series-6: #9aabbc;
+  /* TASK-116 series palette: the web app's dark values, same tokens */
+  --series-1: #56A8E8;
+  --series-2: #EDCA75;
+  --series-3: #7A6BE5;
+  --series-4: #D998C2;
+  --series-5: #C7689B;
+  --series-6: #82C8F0;
+  --series-7: #F07048;
+  --series-rest: #5f6b65;
   --label-red: #e58076;
   --label-yellow: #d3ae4c;
   --label-green: #64b97e;
@@ -332,11 +341,11 @@ body {
 }
 .bb-chart__line {
   fill: none;
-  stroke: var(--bb-series-1);
+  stroke: var(--series-1);
   stroke-width: 2;
 }
 .bb-chart__point {
-  fill: var(--bb-series-1);
+  fill: var(--series-1);
 }
 .bb-legend {
   list-style: none;

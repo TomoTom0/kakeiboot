@@ -1,7 +1,10 @@
 // The deterministic series color assignment (TASK-105, design: tmp/tasks/
-// tm-105/design_dashboard-visual.md §2): one pure function every screen
-// (trend segments, RankedList rows, the payments zone) reads its color from,
-// so the same key paints the same color everywhere.
+// tm-105/design_dashboard-visual.md §2), moved to shared/lib in TASK-116
+// (design: tmp/tasks/tm-116/design_breakdown-expansion.md §3-3-3) so the web
+// app and the widget read the SAME mapping: one pure function every screen
+// (trend segments, RankedList rows, the payments zone, the week-row gradient,
+// the daily-bar segments, the widget bar_v segments and bar_h rows) reads its
+// color from, so the same key paints the same color everywhere.
 //
 // The mapping is pure arithmetic on the key alone — the window, the period,
 // the screen and the visible top-N membership never enter — so an added key
@@ -14,8 +17,13 @@
 // compat path; every other key falls back to the common mappings.
 //
 // The return value is always a CSS custom property reference — the actual
-// colors live in styles.css (--series-1..7 / --series-rest, light and dark).
-import type { AnalysisAxis } from '../api/data'
+// colors live in the stylesheets (web styles.css / widget style.css, both
+// defining --series-1..7 / --series-rest for light and dark at the SAME
+// values).
+/** The breakdown axis union. Keep this IDENTICAL to the web AnalysisAxis
+ * (frontend/src/web/api/data/types.ts): a new axis there must extend this
+ * union too, or the shared mapping silently falls to the common path. */
+export type SeriesAxis = 'category' | 'store' | 'item' | 'label' | 'payment_method'
 
 /** series slot count (the palette size; design §3) */
 export const SERIES_SLOT_COUNT = 7
@@ -44,7 +52,7 @@ const LABEL_IDS_TABLE: Record<number, string> = {
   5: 'var(--label-purple)',
 }
 
-export function seriesColor(key: string | number | null, axis?: AnalysisAxis): string {
+export function seriesColor(key: string | number | null, axis?: SeriesAxis): string {
   if (key === null) return SERIES_REST
   if (axis === 'label') {
     if (typeof key === 'string') {

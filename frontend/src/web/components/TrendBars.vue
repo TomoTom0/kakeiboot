@@ -4,6 +4,11 @@ import { formatYen } from '../composables/format'
 import { axisMonthLabels, axisTickIndices, dayLabel, monthLabel, shiftDate, shortDate } from '../composables/period'
 import { bucketSpan, type TrendGranularity } from '../composables/trend'
 import { compactYen, niceMax } from '@/shared/components/charts/types'
+// TASK-116 (design §3-0): the stacked types moved to shared/lib (stackedOf's
+// contract); re-exported here so the existing importers (TrendWindow.vue,
+// trendWindow.ts, trend-window.test.ts) keep compiling unchanged
+import type { StackedBar, StackedSegment } from '@/shared/lib/stackedBars'
+export type { StackedBar, StackedSegment }
 
 // Bars keyed by month ("YYYY-MM"), week start ("YYYY-MM-DD") or day, picked
 // by the `granularity` prop. TASK-89: every bar is a button now — a day bar
@@ -32,17 +37,6 @@ import { compactYen, niceMax } from '@/shared/components/charts/types'
 // PER-WINDOW computation, so the concatenated graph keeps each window's
 // own thinning positions, year format and density — the trim changes
 // nothing about the labels.
-export interface StackedSegment {
-  label: string
-  value: number
-  color: string
-}
-export interface StackedBar {
-  key: string
-  title: string
-  total: number
-  segments: StackedSegment[]
-}
 
 const props = withDefaults(
   defineProps<{

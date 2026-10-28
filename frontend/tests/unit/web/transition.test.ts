@@ -233,7 +233,8 @@ describe('branch transition (login/logout shell swap)', () => {
     // home mounted exactly once — the leaving branch never fetched. One
     // Home load issues three analysis-path calls: the category breakdown
     // and the month-window trend since TASK-93, plus TASK-103's week fetch
-    // (getAnalysisTrend granularity:week limit:1), so exactly-once = 3
+    // (getAnalysisTrend granularity:week limit:5 since TASK-116), so
+    // exactly-once = 3
     await settle()
     expect(statsCalls()).toHaveLength(3)
   })
