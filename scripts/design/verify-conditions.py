@@ -22,8 +22,9 @@ import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# Test sources scanned for [covers:<id>] tags. Rust integration tests and frontend tests.
-TEST_GLOBS = ["backend/tests/*.rs", "backend/src/**/*.rs", "frontend/tests/**/*.ts"]
+# Test sources scanned for [covers:<id>] tags. Rust integration tests, frontend tests,
+# and the deploy ops unittest (scripts/deploy/, TASK-118).
+TEST_GLOBS = ["backend/tests/*.rs", "backend/src/**/*.rs", "frontend/tests/**/*.ts", "scripts/deploy/*.py"]
 ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$")
 TAG_RE = re.compile(r"\[covers:([A-Za-z0-9._-]+)\]")
 EXPECT_KEYS = ("expect_return", "expect_return_shape", "expect_throw", "expect_no_throw")

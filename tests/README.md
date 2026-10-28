@@ -10,6 +10,7 @@
 | `mise run test` | backend と frontend の全テスト |
 | `mise run backend:test` | `cargo test --workspace` |
 | `mise run frontend:test` | `vitest run`（frontend/） |
+| `mise run scripts:test` | `unittest discover`（scripts/deploy/。deploy運用操作scriptの単体test [TASK-118]） |
 | `mise run lint` | rustfmt check、clippy（`-D warnings`）、ESLint、vue-tsc |
 | `mise run frontend:browser` | 実ブラウザ検証・撮影（chromium headless・playwright。API は tests/browser/stub.ts の stub。`mise run verify` には組み込まず手動実行） |
 | `uv run --no-project python scripts/design/verify-conditions.py` | 条件書の機械検査（covers タグ対応・網羅・schema・source_lines 同期） |
@@ -122,6 +123,7 @@
 | `frontend/tests/unit/stores.test.ts` | 単体 | web / widget の Pinia store が独立していること |
 | `frontend/tests/unit/inline-widget-html.test.ts` | 単体 | widget 単一 HTML 化 build plugin（TASK-50: 偽 bundle で script/stylesheet の inline・modulepreload 除去・`</script` エスケープ・chunk の非放出・postcondition の error〔bundle に無い asset・CSS の url()/@import・残存 src/href〕・package.json build script と vite.widget.config.ts〔単一 entry + codeSplitting: false + emptyOutDir: false + inline plugin〕・web pass が web.html のみを input に持つことの文本検証） |
 | `frontend/tests/unit/eslint-rules.test.ts` | 単体 | ESLint 設定で `vue/no-v-html` がエラーになること |
+| `scripts/deploy/test_kakeiboot_ops.py` | 単体 | deploy運用操作script（kakeiboot_ops.py）の config読取（deploy.toml+local後勝ちmerge・validation）・transport別command構成（local=旧run配列と同一・ssh=host経由）・healthz port解決・exec引数透過・dry-run・healthz retry形状 [TASK-118] |
 | `frontend/tests/browser/capture.spec.ts` | 撮影 | 全画面（/axes 軸詳細を含む [TASK-89]）の png・metrics.json を幅別に出力 |
 | `frontend/tests/browser/capture.usage.spec.ts` | 撮影 | 使い方ページ用の login/consent 画像（asset へ配置） |
 | `frontend/tests/browser/verify.spec.ts` | 実ブラウザ検証 | 実レイアウト実測（着地・補正・幅・軸・境界値・検索チップ） [TASK-19] [TASK-42] [TASK-44] [TASK-41] [TASK-77]・zone 見出し可視・セグメント/swatch 同色・2列/1列・zone--list 38rem・768px trend 収まり [TASK-105]・trend 窓 slide 連続実測（360px・旧bar要素再利用・dense gridline・reduced motion） [TASK-115]・積み上げ棒の実測（daily セグメント幾何・実色・週行 gradient 停止・360px fit） [TASK-116] |
