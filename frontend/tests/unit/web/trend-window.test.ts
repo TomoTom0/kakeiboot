@@ -35,6 +35,7 @@
 // the composable / component revisions land.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import TrendWindow from '@/web/components/TrendWindow.vue'
 import type { StackedBar } from '@/web/components/TrendBars.vue'
@@ -908,6 +909,113 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     expect(w.find('[data-test="trend"]').classes()).not.toContain('is-sliding')
     expect(w.find('.trend-wrap').classes()).toContain('dense')
     expect(w.findAll('.bar-val').length).toBeLessThan(12)
+  })
+
+  /** one rAF hop — the slide's move is a three-hop chain (design §3-3);
+   * the interruption tests below step it frame by frame */
+  const raf = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+
+  /** narrows a found node's element to HTMLElement (the tests read inline
+   * styles off it; no `as` casts per the TypeScript rule) */
+  const asHtml = (el: Element): HTMLElement => {
+    if (!(el instanceof HTMLElement)) throw new Error('expected an HTMLElement')
+    return el
+  }
+
+  /** the pinned grid cell width the wrapper solved (repeat(N, Xpx) → X) —
+   * jsdom has no layout, so the pin itself is what the tests can read */
+  const trackCell = (el: HTMLElement): number =>
+    Number.parseFloat(el.style.gridTemplateColumns.match(/repeat\(\d+, ([\d.]+)px\)/)?.[1] ?? '0')
+
+  it('[covers:web-home.trend-window-slide] 再slide（連打差し替え）の測定: DOMが前回pinのままでもtrack幅は前回測定を再利用（2窓実測幅を1窓分で割らない）・trimでpinを外す（PR#2指摘1）', async () => {
+    const OLD = monthsBetween('2026-05-01', '2026-10-31')
+    const NEW1 = monthsBetween('2025-11-01', '2026-04-30')
+    const NEW2 = monthsBetween('2025-05-01', '2025-10-31')
+    const w = mount(TrendWindow, {
+      props: {
+        nav: true,
+        canPrev: true,
+        canNext: false,
+        windowKey: '2026-05-01..2026-10-31',
+        stacked: OLD.map(col),
+        granularity: 'month',
+        span: ['2026-05-01', '2026-10-31'] as [string, string],
+        current: null,
+      },
+    })
+    // jsdom has no layout: fake the reads the wrapper takes. The bars'
+    // offsetWidth follows the pinned inline width once a pin lands — exactly
+    // what a rapid re-press measures (the pinned 2-window grid is still on
+    // screen when the replacement slide arrives before the trim's cleanup)
+    const bars = asHtml(w.find('[data-test="trend"]').element)
+    const wrap = asHtml(w.find('.trend-wrap').element)
+    Object.defineProperty(bars, 'offsetWidth', {
+      configurable: true,
+      get: () => Number.parseFloat(bars.style.width) || 360,
+    })
+    Object.defineProperty(wrap, 'offsetWidth', { configurable: true, get: () => 360 })
+    // the first press (prev): the committed 6-bar window measures one cell —
+    // (360px − 5 gaps of 4px) / 6 — and the pin writes the 2-window width
+    const S1: SlideLike = { dir: 'prev', bars: [...NEW1, ...OLD].map(col), axisWindows: [NEW1, OLD] }
+    await w.setProps({ slide: S1, stacked: S1.bars, windowKey: '2025-11-01..2026-04-30' })
+    await nextTick()
+    const first = trackCell(bars)
+    expect(first).toBeCloseTo(56.666667, 4)
+    expect(bars.style.width, 'the pin writes the 2-window width (12 cells + 11 gaps)').toBe('724px')
+    // the rapid re-press: the replacement slide reaches the watcher before
+    // the trim's cleanup, so the DOM still wears the pin above — a fresh
+    // offsetWidth read there returns the 2-window 724px and would solve
+    // ~117px cells. The re-slide must reuse the recorded cell instead
+    const S2: SlideLike = { dir: 'prev', bars: [...NEW2, ...NEW1].map(col), axisWindows: [NEW2, NEW1] }
+    await w.setProps({ slide: S2, stacked: S2.bars, windowKey: '2025-05-01..2025-10-31' })
+    await nextTick()
+    expect(trackCell(bars), 'the re-slide reuses the recorded cell, not the pinned DOM width').toBeCloseTo(first, 10)
+    // the trim drops the pin entirely (the next slide re-measures — a
+    // resize between slides re-pins at the true geometry)
+    await w.setProps({ slide: undefined, stacked: NEW2.map(col) })
+    await nextTick()
+    expect(bars.style.gridTemplateColumns).toBe('')
+    expect(bars.style.width).toBe('')
+    w.unmount()
+  })
+
+  it('[covers:web-home.trend-window-slide] slide中断（focus変更trim）: 旧slideがqueueしたrAF chainはリセット後のchartへ古いtransformを再適用しない（PR#2指摘2）', async () => {
+    const OLD = monthsBetween('2026-05-01', '2026-10-31')
+    const NEW = monthsBetween('2025-11-01', '2026-04-30')
+    const w = mount(TrendWindow, {
+      props: {
+        nav: true,
+        canPrev: true,
+        canNext: false,
+        windowKey: '2026-05-01..2026-10-31',
+        stacked: OLD.map(col),
+        granularity: 'month',
+        span: ['2026-05-01', '2026-10-31'] as [string, string],
+        current: null,
+      },
+    })
+    const bars = asHtml(w.find('[data-test="trend"]').element)
+    // a next slide parks on translateX(0) and its queued hop repaints the
+    // target transform — with no layout jsdom solves boundary 0, so the
+    // stale re-apply would land as 'translateX(0px)' on a cleared '' style
+    const S: SlideLike = { dir: 'next', bars: [...OLD, ...NEW].map(col), axisWindows: [OLD, NEW] }
+    await w.setProps({ slide: S, stacked: S.bars, windowKey: '2025-11-01..2026-04-30' })
+    await nextTick()
+    expect(bars.style.transform, 'the next slide parks on the old window').toBe('translateX(0px)')
+    // step the move's three rAF hops: after two the target transform is
+    // queued but not applied yet
+    await raf()
+    await raf()
+    expect(bars.style.transform).toBe('translateX(0px)')
+    // a focus change trims on this very tick: the reset clears the
+    // transform, and the queued hop must not repaint it afterwards
+    await w.setProps({ slide: undefined, stacked: NEW.map(col) })
+    await nextTick()
+    expect(bars.style.transform).toBe('')
+    await raf()
+    await raf()
+    expect(bars.style.transform, 'the interrupted slide never re-applies its target').toBe('')
+    w.unmount()
   })
 })
 

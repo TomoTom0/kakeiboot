@@ -55,6 +55,19 @@ const noAnim = ref(false)
 let watchdog = 0
 let reported = false
 let attached: HTMLElement | null = null
+/** every slide start, trim and unmount bumps this (PR#2 review): each
+ *  queued callback (the nextTick pin/park and the move's three rAF hops)
+ *  captures the generation it was queued under and stops once it goes stale
+ *  — an interrupted slide's queued frames must never paint their target
+ *  transform onto the reset or replaced chart */
+let generation = 0
+/** the current pin's own measurements (PR#2 review): a re-press while a
+ *  slide still runs replaces the slide before the trim's cleanup reaches
+ *  the DOM, so the fresh measure would read the still-pinned 2-window grid
+ *  and solve a double-width cell. While the pin is on the DOM the slide
+ *  reuses the recorded cell instead; the trim drops it (the next slide
+ *  re-measures, so a resize between slides re-pins at the true geometry) */
+let pinned: { one: number; gap: number; wrapWidth: number } | null = null
 
 const wrapEl = (): HTMLElement | null => root.value?.querySelector('.trend-wrap') ?? null
 const barsEl = (): HTMLElement | null => root.value?.querySelector('.bars') ?? null
@@ -147,13 +160,25 @@ function setTransform(x: number): void {
 // .no-anim class is long off the DOM before the target transform lands
 // under .is-sliding. The trim (slide=null) clears the transform and the
 // pins in the same motionless step.
+//
+// PR#2 review hardening: (1) a re-press while a slide still runs replaces
+// the slide in the same tick, so this watcher never sees the intermediate
+// trim and the DOM still wears the previous pin — the recorded cell (not a
+// fresh offsetWidth read, which would measure the pinned 2-window grid)
+// keeps the re-slide at the committed geometry; (2) every queued callback
+// re-checks the generation it was queued under, so a slide interrupted by a
+// trim, a replacement or the unmount leaves no queued frame behind.
 watch(
   () => props.slide,
   (slide) => {
+    generation++
+    const gen = generation
     clearWatchdog()
     noAnim.value = true
     if (!slide) {
+      pinned = null
       void nextTick(() => {
+        if (gen !== generation) return
         for (const el of [barsEl(), axisEl()]) {
           if (!el) continue
           el.style.transform = ''
@@ -166,6 +191,7 @@ watch(
           wrap.style.minWidth = ''
         }
         requestAnimationFrame(() => {
+          if (gen !== generation) return
           noAnim.value = false
         })
       })
@@ -173,14 +199,19 @@ watch(
     }
     const n = Math.floor(slide.bars.length / 2)
     const barsNow = barsEl()
-    const gap = gapPx(barsNow)
-    const width = barsNow?.offsetWidth ?? 0
-    const wrapWidth = wrapEl()?.offsetWidth ?? 0
+    // the previous pin still on the DOM (a same-tick replacement slid past
+    // the trim's cleanup): reuse its recorded measurements
+    const reuse = pinned !== null && barsNow !== null && barsNow.style.gridTemplateColumns !== '' ? pinned : null
+    const gap = reuse?.gap ?? gapPx(barsNow)
+    const wrapWidth = reuse?.wrapWidth ?? wrapEl()?.offsetWidth ?? 0
+    const width = reuse === null ? (barsNow?.offsetWidth ?? 0) : 0
     // one track cell = (measured width - the N-1 gaps) / N; a non-positive
     // measurement (no layout in jsdom) keeps the minmax resolution
-    const one = width > 0 && n > 0 ? (width - (n - 1) * gap) / n : 0
+    const one = reuse?.one ?? (width > 0 && n > 0 ? (width - (n - 1) * gap) / n : 0)
+    if (reuse === null && one > 0) pinned = { one, gap, wrapWidth }
     const dir = slide.dir
     void nextTick(() => {
+      if (gen !== generation) return
       const bars = barsEl()
       if (!bars) return
       reported = false
@@ -188,9 +219,12 @@ watch(
       const shift = boundary(bars, n)
       setTransform(dir === 'prev' ? -shift : 0)
       requestAnimationFrame(() => {
+        if (gen !== generation) return
         requestAnimationFrame(() => {
+          if (gen !== generation) return
           noAnim.value = false
           requestAnimationFrame(() => {
+            if (gen !== generation) return
             setTransform(dir === 'prev' ? 0 : -shift)
             clearWatchdog()
             watchdog = window.setTimeout(report, 270)
@@ -210,6 +244,8 @@ watch(
   },
 )
 onBeforeUnmount(() => {
+  // invalidates the slide's queued rAF hops along with the watchdog
+  generation++
   attached?.removeEventListener('transitionend', onEnd)
   attached = null
   clearWatchdog()

@@ -628,6 +628,47 @@ test.describe('trend window (390x780)', () => {
     expect(after.valCount, 'the trimmed value-label count matches the new window ones mid-slide').toBe(during.valCount)
     expect(after.dense).toBe(false)
     expect(after.scrollWidth!, 'still no phantom scroll after the trim').toBeLessThanOrEqual(after.clientWidth!)
+
+    // rapid re-press (PR#2 review): the second press lands while the first
+    // slide still runs — the replacement slide measures with the previous
+    // pin still on the DOM, and the cell must stay the committed one (a
+    // fresh offsetWidth read there would measure the pinned 2-window grid
+    // and double the cell width). The mock records live in the initial
+    // window only, so every prev destination is all-zero (canPrev false,
+    // the button disabled): start from the initial window, page back with
+    // prev, then re-press NEXT while that slide still runs — canNext is
+    // offset>0, so the rapid press is reachable and the cached initial
+    // window replaces the slide in the same tick
+    await page.locator('[data-test="trend-next"]').click()
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
+    await page.waitForLoadState('networkidle') // the 2025-11 window is cached again: the prev press slides at once
+    await page.locator('[data-test="trend-prev"]').click()
+    await page.waitForFunction(() => document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
+    await page.locator('[data-test="trend-next"]').click()
+    const readRapid = () =>
+      page.evaluate(() => {
+        const bars = document.querySelector('.trend-window .bars') as HTMLElement
+        const bar = document.querySelector('[data-test="bar-2026-05"]') as HTMLElement | null
+        return { pinned: bars.style.gridTemplateColumns !== '', width: bar ? bar.getBoundingClientRect().width : 0 }
+      })
+    await expect
+      .poll(
+        async () => {
+          const s = await readRapid()
+          return s.pinned && s.width > 0
+        },
+        { timeout: 3_000 },
+      )
+      .toBe(true)
+    const rapid = await readRapid()
+    expect(rapid.width, 'the re-slide keeps the committed cell width').toBeCloseTo(before.barWidth!, 1)
+    // the interrupted slide settles back into the initial window
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
+    await expect
+      .poll(() =>
+        page.evaluate(() => !document.querySelector('.trend-window .bars')?.classList.contains('is-sliding')),
+      )
+      .toBe(true)
   })
 
   // TASK-115 gridline measurement (design §5-2 新規測定 / REVIEW-2 R3): in
