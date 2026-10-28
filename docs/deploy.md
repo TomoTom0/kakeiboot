@@ -1,12 +1,12 @@
 # stg・prod 運用環境（kakeiboot）
 
-作業repo（`/home/tomo/work/app/tool/budget-book`）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・admin CLI・service操作）は作業repoのmiseタスク（mise.toml）から行う。実serverは運用dir上の systemd user service が担い、admin CLIはタスクの `dir` 指定で運用dir上で実行する（運用dirはgit repoではない）。
+作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・admin CLI・service操作）は作業repoのmiseタスク（mise.toml）から行う。実serverは運用dir上の systemd user service が担い、admin CLIはタスクの `dir` 指定で運用dir上で実行する（運用dirはgit repoではない）。
 
 ## 構成
 
 | 項目 | stg | prod |
 |---|---|---|
-| 運用dir | `/srv/opt/tomo/run/app/tool/kakeiboot/stg` | `/srv/opt/tomo/run/app/tool/kakeiboot/prod` |
+| 運用dir | `<deploy_root>/stg` | `<deploy_root>/prod` |
 | config | `configs/stg` | `configs/prod` |
 | listen port | 40282 | 40283 |
 | systemd unit | `kakeiboot-stg.service`（active） | `kakeiboot-prod.service`（active・enabled） |
@@ -15,7 +15,7 @@
 運用dirの構成:
 
 ```
-/srv/opt/tomo/run/app/tool/kakeiboot/<env>/
+<deploy_root>/<env>/
   budget-book                        # backend binary（作業repo target/debug/budget-book・debug build）
   bin/kakeiboot-backup.sh            # backup構成script（作業repo scripts/backup/ のコピー。deployのrsyncで配布）
   configs/<env>/{app,auth,mcp}.toml  # 作業repo configs/<env>/ のコピー
@@ -28,6 +28,49 @@
 - unit file: `~/.config/systemd/user/kakeiboot-{stg,prod}.service`。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
 - backup用unit file: `~/.config/systemd/user/kakeiboot-backup@.{service,timer}`（template 1組で stg/prod 両用。repo正本は `scripts/systemd/`。`ExecStart` = `<運用dir>/bin/kakeiboot-backup.sh <env>`）。user configのためdeploy対象外（導入手順は「backupの導入・検証」節）
 - `Environment=` の設定は不要（port・path等は configs/<env>/*.toml が正本。`RUST_LOG` を設定すれば `[log] filter` を上書きできる）
+
+## deploy先の設定（configs/deploy.toml）
+
+deploy先（運用dir root）の実path値の正本は `configs/deploy.toml`。mise.toml・本doc・CLAUDE.mdは実pathを書かず、この節の `<deploy_root>` 表記とmise template（mise.toml内 `{{vars.deploy_root}}`）で参照する。
+
+**`<deploy_root>` 表記規則**: 本doc内の `<deploy_root>` は `configs/deploy.toml` の `deploy_root` 値を指すplaceholder（既存の `<env>`・`<date>`・`<port>` と同一流儀）。手順中の `<deploy_root>` は実行時に同fileの値へ読み替える。
+
+key仕様（フラットkeyのみ。nest tableはmiseがparse error）:
+
+| key | 型 | required | 意味 |
+|---|---|---|---|
+| `deploy_root` | string（絶対path） | 必須 | 運用dir root。stg/prod運用dir・backup dirはすべてこの値へのsuffix合成で表す。末尾に `/` を付けない（正規形。合成は常に `/` 連結） |
+| `runtime_host` | string（host名） | 省略可（記載推奨） | 運用機のhost名。現時点のmiseタスクでの使用箇所はなし（docs表記・将来のssh経由操作のための置き場所）。未記録でもmiseのrender・タスク実行に影響しない |
+
+合成規則（`<deploy_root>` へのsuffix一覧。mise.toml・本doc共通の唯一規則）:
+
+| 用途 | 合成文字列 |
+|---|---|
+| stg運用dir | `<deploy_root>/stg` |
+| prod運用dir | `<deploy_root>/prod` |
+| binary配布先 | `<deploy_root>/<env>/budget-book` |
+| bin dir（mkdir -p宛先） | `<deploy_root>/<env>/bin` |
+| backup script配布先 | `<deploy_root>/<env>/bin/kakeiboot-backup.sh` |
+| config配布先 | `<deploy_root>/<env>/configs/<env>/` |
+| frontend配布先 | `<deploy_root>/<env>/frontend/dist/` |
+| backup root | `<deploy_root>/backups/<env>` |
+| backup世代dir | `<deploy_root>/backups/<env>/<date>` |
+| backup images mirror | `<deploy_root>/backups/<env>/images/` |
+| last_success marker | `<deploy_root>/backups/<env>/last_success` |
+
+mise.tomlは `[vars] _.file = ["configs/deploy.toml", "configs/deploy.local.toml"]` でこのfile群を読み、タスクrun配列・dir属性内の `{{vars.deploy_root}}` を展開する。
+
+### local override（configs/deploy.local.toml）
+
+作業機など `deploy_root` が運用機と異なるdeviceでは、`configs/deploy.local.toml`（git管理外）に上書きしたいkeyのみを書く:
+
+```toml
+deploy_root = "<この機械の運用dir root>"
+```
+
+- 同じkeyを書くと配列の後勝ちで `configs/deploy.toml` の値を上書きする。fileが存在しなければerror無くskipされる（deploy.tomlのみの環境とlocal併用環境が同一mise.tomlで動く）
+- `.gitignore` の `configs/*.local.toml` 対象。commitしない
+- local側に存在しないdirを指す場合、`stg:deploy` のrsyncは途中階層を作らないため失敗する。配布先の `<deploy_root>/<env>` 親dirを事前に作成する
 
 ## 運用操作（miseタスク）
 
@@ -103,7 +146,7 @@ scriptの処理（この順序で固定）:
 
 backup先と構成:
 
-- backup先root: `/srv/opt/tomo/run/app/tool/kakeiboot/backups/<env>/`（運用dirの外・同一disk。運用dir再作成・誤操作の影響を受けない最後の砒）
+- backup先root: `<deploy_root>/backups/<env>/`（運用dirの外・同一disk。運用dir再作成・誤操作の影響を受けない最後の砒）
 - `backups/<env>/<date>/db.sqlite`: 日次世代dir（UTC日付。同日再実行は同dirへ上書き＝冪等）
 - `backups/<env>/images/`: append-only単一ミラー（世代ローテーションなし。orphan cleanupで実運用dirから消えた画像も残るが無害）
 - 対象外: configs（git管理・deployでrsync）・frontend/dist（build成果物）・binary
@@ -129,10 +172,10 @@ backup先と構成:
 
 ### backupの導入・検証
 
-stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpackage install不要・`/srv` 配下の操作はこの手順経由）:
+stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpackage install不要・運用dir配下（`<deploy_root>`）の操作はこの手順経由）:
 
 1. `mise run stg:deploy`（binary〔`admin backup` 入〕と `bin/kakeiboot-backup.sh` を配布）
-2. backup先dir作成: `mkdir -p /srv/opt/tomo/run/app/tool/kakeiboot/backups/{stg,prod}`（script側でも `$DEST` を作るが、明示手順として残す）
+2. backup先dir作成: `mkdir -p <deploy_root>/backups/{stg,prod}`（`<deploy_root>` は configs/deploy.toml の `deploy_root` 値に読み替えて実行。`{stg,prod}` はshellのbrace expansion。script側でも `$DEST` を作るが、明示手順として残す）
 3. unit配置: `cp scripts/systemd/kakeiboot-backup@.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload`
 4. timer有効化: `systemctl --user enable --now kakeiboot-backup@stg.timer`
 5. 初回実行と確認: `mise run stg:backup` を実行し、(1) journalに各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在 (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）

@@ -1056,25 +1056,24 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.25rem;
-  overflow: hidden; /* clip the slide's ±100% enter drifts (TASK-108) */
+  overflow: hidden; /* clip the concatenated slide's travel past the pinned wrap (TASK-115) */
 }
 .trend-window > .hscroll { min-width: 0; } /* keep the middle column shrinkable */
 .trend-nav { width: 44px; height: 44px; }
-/* the trend window's page-turn slide (TASK-108): the page transitions'
-   grammar (220ms cubic-bezier(.2,.7,.2,1), enter from a full width, leave
-   drifting 30% + fade) minus the absolute positioning — mode="out-in" never
-   shows both windows, so the leaving chart keeps its flow height. prev
-   (into the past) enters from the left; next (back to now) from the right */
-.trend-slide-back-enter-from { transform: translateX(-100%); }
-.trend-slide-back-leave-to { transform: translateX(30%); opacity: 0; }
-.trend-slide-forward-enter-from { transform: translateX(100%); }
-.trend-slide-forward-leave-to { transform: translateX(-30%); opacity: 0; }
-.trend-slide-back-enter-active,
-.trend-slide-back-leave-active,
-.trend-slide-forward-enter-active,
-.trend-slide-forward-leave-active {
-  transition: transform 220ms cubic-bezier(.2, .7, .2, 1), opacity 220ms;
-}
+/* the trend window's continuous slide (TASK-115): the old and new windows
+   concatenate into ONE graph and .bars + .axis-labels carry the same
+   translateX under one class (the bars row's transitionend is the single
+   report source; the wrapper parks/resets the transform under .no-anim so
+   those steps never animate). The 220ms easing keeps TASK-108's grammar */
+.bars.is-sliding,
+.axis-labels.is-sliding { transition: transform 220ms cubic-bezier(.2, .7, .2, 1); }
+.bars.no-anim,
+.axis-labels.no-anim { transition: none; }
+/* the concatenated pair is twice the wrap wide: the wrap clips at the
+   committed window's pinned width (its is-sliding rule) and the scroll
+   port hides — the 2-window overflow never feeds a phantom scrollbar */
+.trend-wrap.is-sliding { overflow: hidden; }
+.trend-window .hscroll.is-sliding { overflow: hidden; }
 /* the window-move loading: the same fade as .view-stack.loading, zone-scoped */
 .zone.is-loading { opacity: 0.6; }
 
@@ -1130,7 +1129,10 @@ h3.zone-title { font-size: 0.85rem; }
   letter-spacing: -0.01em;
 }
 
-/* the stacked bars: segments stack bottom-up inside the column */
+/* the stacked bars: segments stack bottom-up inside the column. TASK-115:
+   the trim rescales the columns to the new window's niceMax — the height
+   change eases into it (segments are % heights inside, they follow for
+   free; the inline height never animates a first insertion) */
 .bar-stack {
   display: flex;
   flex-direction: column-reverse;
@@ -1138,6 +1140,7 @@ h3.zone-title { font-size: 0.85rem; }
   max-width: 34px;
   border-radius: 4px 4px 2px 2px;
   overflow: hidden;
+  transition: height 220ms cubic-bezier(.2, .7, .2, 1);
 }
 /* TASK-105: value-0 segments are omitted upstream, so every rendered segment
    is >0 — min-height keeps the tiny ones visible and the 1px surface border
@@ -2084,16 +2087,12 @@ a.sub-row:hover { background: var(--bb-hover); }
   .slide-forward-leave-to,
   .slide-back-enter-from,
   .slide-back-leave-to { transform: none; }
-  /* the trend window's page-turn slide is off as well (TASK-108): the swap
-     becomes an instant replace, the 220ms fade included */
-  .trend-slide-back-enter-active,
-  .trend-slide-back-leave-active,
-  .trend-slide-forward-enter-active,
-  .trend-slide-forward-leave-active { transition: none; }
-  .trend-slide-back-enter-from,
-  .trend-slide-back-leave-to,
-  .trend-slide-forward-enter-from,
-  .trend-slide-forward-leave-to { transform: none; }
+  /* the trend window's continuous slide is off as well (TASK-115): the JS
+     side never assembles one under reduced motion — these rules are the
+     second guard (an instant swap, the height rescale included) */
+  .bars.is-sliding,
+  .axis-labels.is-sliding { transition: none; }
+  .bar-stack { transition: none; }
   .msg, .skeleton .sk { animation: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */

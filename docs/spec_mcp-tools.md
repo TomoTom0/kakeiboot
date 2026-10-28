@@ -1004,7 +1004,7 @@ backend/src/
 
 （各ディレクトリの mod.rs は省略。`request_recovery` の tool 実装（tools/recovery.rs）は spec_auth §5-2 の実装ゲート中で未実装）
 
-- widget HTML はビルド成果物を release では `include_str!`、dev では起動時読込とする。resource URI は内容に依らず固定する（§11-1）。
+- widget HTML はビルド成果物（`frontend/dist/widget.html`）を起動時に fs 読込する（dev/release 共通。`include_str!` は不使用）。resource URI は内容に依らず固定する（§11-1）。
 
 ## 13. プロンプトインジェクション対策
 

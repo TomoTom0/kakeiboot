@@ -41,8 +41,12 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       limit: 5,
     })
     // TASK-103: the month mode's fourth load — the selected month's week
-    // buckets (limit 1: the rows read bucket_totals, not the series)
-    expect(trendSpy).toHaveBeenCalledTimes(2)
+    // buckets (limit 1: the rows read bucket_totals, not the series).
+    // TASK-115 §3-2 (design tmp/tasks/tm-115/design_trend-continuous-window.md):
+    // the month window's initial commit prefetches its prev-adjacent window
+    // (from=2025-11-01 — trend-window.test.ts expects the same prefetch), so
+    // the trend endpoint sees three calls: display, prefetch, week
+    expect(trendSpy).toHaveBeenCalledTimes(3)
     expect(trendSpy).toHaveBeenCalledWith(1, {
       axis: 'category',
       metric: 'amount',
@@ -244,15 +248,25 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(store.mode).toBe('week')
     expect(store.week).toBe('2026-10-05')
     expect(zone().exists()).toBe(false)
-    // week / year / range modes never mount the zone and stay at the single
-    // trend call (day or month granularity — no week-bucket fetch)
-    for (const path of ['/?week=2026-10-05', '/?year=2026', '/?from=2026-10-03&to=2026-10-15']) {
+    // week / year / range modes never mount the zone and never run the
+    // week-bucket fetch (day or month granularity only). TASK-115 §3-2
+    // (design tmp/tasks/tm-115/design_trend-continuous-window.md): a
+    // month/year commit prefetches its prev-adjacent window, so only the
+    // year mount holds a second call (from=2025-01-01 — trend-window.test.ts
+    // expects the same prefetch); the inactive week/range windows' adjacent
+    // key equals their own display key, so no prefetch issues for them
+    const trendCallsByPath: [string, number][] = [
+      ['/?week=2026-10-05', 1],
+      ['/?year=2026', 2],
+      ['/?from=2026-10-03&to=2026-10-15', 1],
+    ]
+    for (const [path, calls] of trendCallsByPath) {
       cleanup()
       mockFetch({ 'GET /api/auth/me': { body: ME } })
       const other = vi.spyOn(api, 'getAnalysisTrend')
       const m = await mountApp(path)
       expect(m.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
-      expect(other).toHaveBeenCalledTimes(1)
+      expect(other).toHaveBeenCalledTimes(calls)
     }
     // a range spanning exactly the month draws the zone again once the month
     // tab returns (the mode change must re-run the load)
