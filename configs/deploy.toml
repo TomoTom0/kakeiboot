@@ -1,0 +1,8 @@
+# deploy先の正本（mise.toml [vars] _.file から読取）。実pathはこのfileにのみ置く
+# （mise.toml・docs・CLAUDE.mdは {{vars.deploy_root}} / key参照で書く）。
+# フラットkeyのみ（nest tableはmiseがparse error）。末尾スラッシュなし。
+# device差分は configs/deploy.local.toml で上書き（後勝ち・gitignore管理・commitしない）。
+deploy_root = "/srv/opt/tomo/run/app/tool/kakeiboot"
+# 運用機（stg/prod runtime dir の実在host・2026-10-28 user提示）。
+# 現時点のmiseタスクでの使用箇所はなし（docs表記・将来のssh経由操作のための置き場所）。
+runtime_host = "gt430"

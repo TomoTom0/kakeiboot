@@ -121,9 +121,13 @@ describe('web/api/data', () => {
       'POST /api/ledgers/import': { body: outcome },
     })
     const api = createDataApi()
-    // export: POST, no request body, the answer is the file itself (Blob)
+    // export: POST, no request body, the answer is the file itself (Blob).
+    // The mocked Response is Node's (undici), whose blob() builds a
+    // node:buffer Blob — a different realm from this environment's global
+    // (jsdom) `Blob`, so assert the Blob surface instead of instanceof.
     const blob = await api.exportLedger(3)
-    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('application/json')
+    expect(JSON.parse(await blob.text())).toEqual({ format: 'kakeiboot-ledger-export', version: 1 })
     expect(f.calls[0]!.method).toBe('POST')
     expect(f.calls[0]!.path).toBe('/api/ledgers/3/export')
     expect(f.calls[0]!.body).toBeUndefined()

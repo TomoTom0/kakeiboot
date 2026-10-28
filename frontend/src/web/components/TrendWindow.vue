@@ -4,41 +4,223 @@
 // chevron + aria-label, resized to the 44px shared tap-target floor). A
 // dedicated wrapper (the UI rule: one visual component per expression) —
 // TrendBars stays a pure pass-through and never knows the window moves.
-// TASK-108: the swap of the committed window slides — windowKey gates the
-// bars' v-if (null until the first response) and keys the out-in transition;
-// transitionName ('' / trend-slide-back|forward) is computed in the
-// composable from the direction record + the first-paint guard.
+// TASK-115 (design: tmp/tasks/tm-115/design_trend-continuous-window.md
+// §3-3): the Transition/:key out-in swap is gone — the window move keeps
+// ONE graph on screen. The composable's slide state concatenates the old
+// and new windows; this wrapper measures the committed track BEFORE the
+// concatenated props land, pins the concatenated grid to the measured
+// per-bar width (bars never shrink mid-slide), parks .bars/.axis-labels on
+// the old window without a transition and then translates them as one
+// viewport (the initial transform lands under .no-anim, the 220ms move
+// under .is-sliding). The .bars row's transitionend reports the slide done
+// (finish-slide; the page trims through the composable) with a 270ms
+// watchdog backing the event, and the trim resets the transform and the
+// pinned widths in one motionless step.
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 import TrendBars, { type StackedBar } from './TrendBars.vue'
+import type { SlideState } from '../composables/trendWindow'
 import type { TrendGranularity } from '../composables/trend'
 
 // props: nav (month/year only — false hides the pair) / canPrev / canNext /
-// windowKey + transitionName (the TASK-108 slide pair) plus TrendBars'
-// pass-through (stacked / granularity / span / current — this `span` is the
-// bars' own display range, not the composable's page-turn step)
-withDefaults(
+// windowKey (the v-if gate — null until the first response) / slide (the
+// composable's concatenation, non-null while the viewport should move)
+// plus TrendBars' pass-through (stacked / granularity / span / current —
+// this `span` is the bars' own display range, not the composable's
+// page-turn step)
+const props = withDefaults(
   defineProps<{
     nav: boolean
     canPrev: boolean
     canNext: boolean
     /** the committed window's identity — null until the first response:
-     *  the v-if gate and the transition key (TASK-108 §1-4) */
+     *  the v-if gate (TASK-108 §1-4) */
     windowKey: string | null
-    /** the transition name ('' = instant paint / trend-slide-back|forward) —
-     *  the composable computes it from direction + slideReady (§1-4) */
-    transitionName: string
+    /** the slide state (TASK-115 §3-1) — non-null while the concatenated
+     *  pair translates; null (or absent) trims instantly */
+    slide?: SlideState | null
     stacked: StackedBar[]
     granularity?: TrendGranularity
     span?: [string, string] | null
     current?: string | null
   }>(),
-  { granularity: 'month', span: null, current: null },
+  { slide: null, granularity: 'month', span: null, current: null },
 )
-const emit = defineEmits<{ prev: []; next: []; select: [key: string] }>()
+const emit = defineEmits<{ prev: []; next: []; select: [key: string]; 'finish-slide': [] }>()
+
+const root = ref<HTMLElement | null>(null)
+/** true while the transform parks on its initial value or resets — the
+ *  .no-anim class keeps those steps transitionless */
+const noAnim = ref(false)
+let watchdog = 0
+let reported = false
+let attached: HTMLElement | null = null
+
+const wrapEl = (): HTMLElement | null => root.value?.querySelector('.trend-wrap') ?? null
+const barsEl = (): HTMLElement | null => root.value?.querySelector('.bars') ?? null
+const axisEl = (): HTMLElement | null => root.value?.querySelector('.axis-labels') ?? null
+
+/** the slide's report: idempotent (the transitionend and the watchdog can
+ *  race) — the page trims through the composable's finishSlide */
+function report(): void {
+  if (reported) return
+  reported = true
+  clearWatchdog()
+  emit('finish-slide')
+}
+function clearWatchdog(): void {
+  if (watchdog !== 0) {
+    clearTimeout(watchdog)
+    watchdog = 0
+  }
+}
+
+/** the .bars row is the transform's single source (design §3-3): only its
+ *  transitionend (propertyName=transform) finishes the move — the
+ *  .axis-labels row rides the same value and never reports */
+function onEnd(e: TransitionEvent): void {
+  if (e.propertyName !== 'transform') return
+  if (!(e.target instanceof HTMLElement) || !e.target.classList.contains('bars')) return
+  report()
+}
+
+function attach(): void {
+  const bars = barsEl()
+  if (bars === attached) return
+  attached?.removeEventListener('transitionend', onEnd)
+  attached = bars
+  bars?.addEventListener('transitionend', onEnd)
+}
+
+/** the bars' gap in px (0.25rem everywhere — read from the DOM, 4 as the
+ *  no-layout fallback) */
+function gapPx(el: HTMLElement | null): number {
+  if (!el || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return 4
+  const v = Number.parseFloat(window.getComputedStyle(el).columnGap || window.getComputedStyle(el).gap)
+  return Number.isFinite(v) ? v : 4
+}
+
+/** pin the concatenated track (design §3-3): the committed window's
+ *  measured width fixes one track cell and the wrap's width, so the 2N-bar
+ *  grid never re-solves its minmax tracks (bars do not shrink) and the
+ *  2-window overflow stays clipped inside the wrap (no phantom scroll) */
+function pinTrack(n: number, one: number, gap: number, wrapWidth: number): void {
+  const cols = `repeat(${2 * n}, ${one}px)`
+  const width = `${2 * n * one + (2 * n - 1) * gap}px`
+  for (const el of [barsEl(), axisEl()]) {
+    if (!el) continue
+    el.style.gridTemplateColumns = cols
+    el.style.width = width
+  }
+  // the wrap pin completes the .bars/.axis-labels pin above: the
+  // stylesheet's .trend-wrap{width:fit-content} would ride the now 2N-wide
+  // pinned .bars and stretch the wrap itself (.plot / gridline) to the
+  // concatenated width — the measured one-window width keeps it put, with
+  // .is-sliding{overflow:hidden} clipping the overflow
+  const wrap = wrapEl()
+  if (wrap && wrapWidth > 0) {
+    wrap.style.width = `${wrapWidth}px`
+    wrap.style.minWidth = `${wrapWidth}px`
+  }
+}
+
+/** the concatenated array's index N (the boundary, either direction's
+ *  right-window head) — the exact one-window travel in measured px */
+function boundary(bars: HTMLElement, n: number): number {
+  const bar = bars.children[n] as HTMLElement | undefined
+  return bar ? bar.offsetLeft : 0
+}
+
+function setTransform(x: number): void {
+  const t = `translateX(${x}px)`
+  const bars = barsEl()
+  const axis = axisEl()
+  if (bars) bars.style.transform = t
+  if (axis) axis.style.transform = t
+}
+
+// The slide lifecycle. The watch fires (flush 'pre') BEFORE the
+// concatenated props reach the DOM: the committed window's track is still
+// laid out there — measure it. After nextTick (the concatenation is on
+// screen) pin the track, park the viewport on the old window (noAnim keeps
+// the initial transform transitionless) and then move: two rAFs, so the
+// .no-anim class is long off the DOM before the target transform lands
+// under .is-sliding. The trim (slide=null) clears the transform and the
+// pins in the same motionless step.
+watch(
+  () => props.slide,
+  (slide) => {
+    clearWatchdog()
+    noAnim.value = true
+    if (!slide) {
+      void nextTick(() => {
+        for (const el of [barsEl(), axisEl()]) {
+          if (!el) continue
+          el.style.transform = ''
+          el.style.gridTemplateColumns = ''
+          el.style.width = ''
+        }
+        const wrap = wrapEl()
+        if (wrap) {
+          wrap.style.width = ''
+          wrap.style.minWidth = ''
+        }
+        requestAnimationFrame(() => {
+          noAnim.value = false
+        })
+      })
+      return
+    }
+    const n = Math.floor(slide.bars.length / 2)
+    const barsNow = barsEl()
+    const gap = gapPx(barsNow)
+    const width = barsNow?.offsetWidth ?? 0
+    const wrapWidth = wrapEl()?.offsetWidth ?? 0
+    // one track cell = (measured width - the N-1 gaps) / N; a non-positive
+    // measurement (no layout in jsdom) keeps the minmax resolution
+    const one = width > 0 && n > 0 ? (width - (n - 1) * gap) / n : 0
+    const dir = slide.dir
+    void nextTick(() => {
+      const bars = barsEl()
+      if (!bars) return
+      reported = false
+      if (one > 0) pinTrack(n, one, gap, wrapWidth)
+      const shift = boundary(bars, n)
+      setTransform(dir === 'prev' ? -shift : 0)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          noAnim.value = false
+          requestAnimationFrame(() => {
+            setTransform(dir === 'prev' ? 0 : -shift)
+            clearWatchdog()
+            watchdog = window.setTimeout(report, 270)
+          })
+        })
+      })
+    })
+  },
+)
+
+onMounted(attach)
+// TrendBars appears once the first windowKey commits — bind the listener then
+watch(
+  () => props.windowKey,
+  () => {
+    void nextTick(attach)
+  },
+)
+onBeforeUnmount(() => {
+  attached?.removeEventListener('transitionend', onEnd)
+  attached = null
+  clearWatchdog()
+})
 </script>
 
 <template>
-  <div class="trend-window">
+  <div
+    ref="root"
+    class="trend-window"
+  >
     <button
       v-if="nav"
       class="icon-btn trend-nav"
@@ -51,20 +233,17 @@ const emit = defineEmits<{ prev: []; next: []; select: [key: string] }>()
     >
       <AppIcon name="chevron-left" />
     </button>
-    <Transition
-      :name="transitionName"
-      mode="out-in"
-    >
-      <TrendBars
-        v-if="windowKey"
-        :key="windowKey"
-        :stacked="stacked"
-        :granularity="granularity"
-        :span="span"
-        :current="current"
-        @select="emit('select', $event)"
-      />
-    </Transition>
+    <TrendBars
+      v-if="windowKey"
+      :stacked="stacked"
+      :granularity="granularity"
+      :span="span"
+      :current="current"
+      :axis-windows="slide ? slide.axisWindows : null"
+      :sliding="slide != null"
+      :no-anim="noAnim"
+      @select="emit('select', $event)"
+    />
     <button
       v-if="nav"
       class="icon-btn trend-nav"

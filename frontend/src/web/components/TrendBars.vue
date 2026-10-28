@@ -21,6 +21,17 @@ import { compactYen, niceMax } from '@/shared/components/charts/types'
 // TASK-95: the card is the stacked money view only — `stacked` is required
 // (top segments + the parent-built grey rest segment; the parent shapes
 // the data, this component only draws) and the numbers are always formatYen.
+//
+// TASK-115 (design: tmp/tasks/tm-115/design_trend-continuous-window.md
+// §3-3): the window move translates .bars and .axis-labels as ONE viewport
+// over the concatenated old+new pair. This component is the transform's
+// receiving end: `sliding` carries the .is-sliding class (the 220ms
+// transform transition + the wrap/scroll clipping) and `noAnim` parks or
+// resets the transform without a move; `axisWindows` (the per-window bucket
+// keys) switches the axis/val-label thinning and the dense flag to a
+// PER-WINDOW computation, so the concatenated graph keeps each window's
+// own thinning positions, year format and density — the trim changes
+// nothing about the labels.
 export interface StackedSegment {
   label: string
   value: number
@@ -40,8 +51,18 @@ const props = withDefaults(
     span?: [string, string] | null
     /** the stacked columns (TASK-95: required — this view is stacked-only) */
     stacked: StackedBar[]
+    /** the sliding windows' bucket keys (TASK-115): null computes the axis
+     *  over the whole key list (the committed window), an array computes
+     *  per window and concatenates — each window keeps the thinning and the
+     *  year format its trimmed single window will have */
+    axisWindows?: string[][] | null
+    /** the viewport move is on: .bars/.axis-labels translate under one
+     *  class and the wrap clips the concatenated overflow */
+    sliding?: boolean
+    /** the transform parks/resets without the 220ms transition */
+    noAnim?: boolean
   }>(),
-  { current: null, granularity: 'month', span: null },
+  { current: null, granularity: 'month', span: null, axisWindows: null, sliding: false, noAnim: false },
 )
 const emit = defineEmits<{ select: [key: string] }>()
 
@@ -104,14 +125,28 @@ const bars = computed<BarView[]>(() => {
 /** the y-axis ticks: upper bound, half, zero (top to bottom). */
 const yTicks = computed(() => [1, 0.5, 0].map((t) => compactYen(t * nice.value)))
 
-/** the thinned axis ticks: month mode uses axisMonthLabels' items (the
- *  year-boundary format rule), day/week thin via axisTickIndices + shortDate.
- *  null when there are no bars (the axis row stays hidden). */
-const axis = computed<{ key: string; label: string }[] | null>(() => {
-  const keys = bars.value.map((b) => b.key)
-  if (props.granularity === 'month') return axisMonthLabels(keys)?.items ?? null
-  if (keys.length === 0) return null
+/** one window's axis labels as a pure function (TASK-115 §3-3): month uses
+ *  axisMonthLabels' items (the window's own year-boundary format rule),
+ *  day/week thin via axisTickIndices + shortDate — the same computation the
+ *  window gets alone once the slide trims */
+function windowAxis(g: TrendGranularity, keys: string[]): { key: string; label: string }[] {
+  if (g === 'month') return axisMonthLabels(keys)?.items ?? []
   return axisTickIndices(keys.length).map((i) => ({ key: keys[i]!, label: shortDate(keys[i]!) }))
+}
+
+/** the thinned axis ticks: per window while sliding (axisWindows — each
+ *  window thins on its own, concatenated), over the whole key list
+ *  otherwise. null when there are no bars (the axis row stays hidden). */
+const axis = computed<{ key: string; label: string }[] | null>(() => {
+  const windows = props.axisWindows?.filter((w) => w.length > 0)
+  if (windows && windows.length > 0) {
+    const items = windows.flatMap((w) => windowAxis(props.granularity, w))
+    return items.length > 0 ? items : null
+  }
+  const keys = bars.value.map((b) => b.key)
+  if (keys.length === 0) return null
+  const items = windowAxis(props.granularity, keys)
+  return items.length > 0 ? items : null
 })
 
 /** one span per bar (grid alignment keeps every span under its bar); only
@@ -122,29 +157,55 @@ const axisTicks = computed(() => {
   return bars.value.map((b) => ({ key: b.key, label: shown.get(b.key) ?? '' }))
 })
 
-/** the thinned positions shared by the axis labels and the dense .bar-val. */
-const tickIdx = computed(() => new Set(axisTickIndices(bars.value.length)))
+/** the thinned positions shared by the axis labels and the dense .bar-val —
+ *  per window while sliding (each window thins on its own, offset into the
+ *  concatenated array), whole-array otherwise */
+const tickIdx = computed(() => {
+  const windows = props.axisWindows?.filter((w) => w.length > 0)
+  if (windows && windows.length > 0) {
+    const set = new Set<number>()
+    let base = 0
+    for (const w of windows) {
+      for (const i of axisTickIndices(w.length)) set.add(base + i)
+      base += w.length
+    }
+    return set
+  }
+  return new Set(axisTickIndices(bars.value.length))
+})
+
+/** the COMMIT window's bar count (TASK-115 §3-3, REVIEW-2 R1): while
+ *  sliding, axisWindows[0].length — a 6+6 month concatenation must not
+ *  turn dense (the trim would flicker the value labels and the end-tick
+ *  rules back on) */
+const commitCount = computed(() => {
+  const first = props.axisWindows?.find((w) => w.length > 0)
+  return first ? first.length : bars.value.length
+})
 
 /** dense month windows (> 6 bars: year mode, long ranges) fix the wrap to
  *  the container width and equally split the tracks — and thin the value
  *  labels to the tick positions so neighbors cannot overlap. */
-const dense = computed(() => props.granularity === 'month' && bars.value.length > 6)
+const dense = computed(() => props.granularity === 'month' && commitCount.value > 6)
 
 // TASK-104: the window's chevron pair takes 96px of the zone width, so the
 // 6-bar month window's track minimum (with the bars gap) must keep the wrap
 // inside the middle column at the 360px floor; wider viewports stretch 1fr
 const track = computed(() =>
-  props.granularity === 'month' ? (bars.value.length <= 6 ? 'minmax(1.25rem, 1fr)' : 'minmax(0, 1fr)') : 'minmax(0.25rem, 1fr)',
+  props.granularity === 'month' ? (commitCount.value <= 6 ? 'minmax(1.25rem, 1fr)' : 'minmax(0, 1fr)') : 'minmax(0.25rem, 1fr)',
 )
 
 const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.length || 1}, ${track.value})` }))
 </script>
 
 <template>
-  <div class="hscroll">
+  <div
+    class="hscroll"
+    :class="{ 'is-sliding': sliding }"
+  >
     <div
       class="trend-wrap"
-      :class="{ dense }"
+      :class="{ dense, 'is-sliding': sliding }"
     >
       <div
         class="y-axis muted"
@@ -165,6 +226,7 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
         />
         <div
           class="bars"
+          :class="{ 'is-sliding': sliding, 'no-anim': noAnim }"
           :style="trackStyle"
           data-test="trend"
         >
@@ -209,6 +271,7 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
       <div
         v-if="axis"
         class="axis-labels muted small"
+        :class="{ 'is-sliding': sliding, 'no-anim': noAnim }"
         data-test="trend-axis"
         :style="trackStyle"
       >

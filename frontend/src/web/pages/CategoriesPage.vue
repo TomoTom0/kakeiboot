@@ -203,10 +203,11 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
               :can-prev="win.canPrev.value"
               :can-next="win.canNext.value"
               :window-key="win.windowKey.value"
-              :transition-name="win.transitionName.value"
+              :slide="win.slide.value"
               @prev="win.prev"
               @next="win.next"
               @select="onTrendSelect"
+              @finish-slide="win.finishSlide"
             />
           </section>
         </div>

@@ -74,8 +74,14 @@ describe('web/api/http requestBlob', () => {
   it('[covers:web-settings.data-export-import] 成功時は応答本文を Blob で返す', async () => {
     const f = mockFetch({ 'POST /api/ledgers/3/export': { body: { format: 'kakeiboot-ledger-export' } } })
     const blob = await requestBlob('POST', '/api/ledgers/3/export')
-    expect(blob).toBeInstanceOf(Blob)
-    expect(JSON.parse(await blob.text())).toEqual({ format: 'kakeiboot-ledger-export' })
+    // mockFetch's Response is Node's (undici), whose blob() builds a
+    // node:buffer Blob — a different realm from this environment's global
+    // (jsdom) `Blob`, so strict instanceof cannot hold. Assert the Blob
+    // surface the export flow consumes (type / size / text) instead.
+    expect(blob.type).toBe('application/json')
+    const raw = await blob.text()
+    expect(blob.size).toBe(raw.length)
+    expect(JSON.parse(raw)).toEqual({ format: 'kakeiboot-ledger-export' })
     expect(f.calls[0]!.body).toBeUndefined()
   })
 
@@ -88,7 +94,10 @@ describe('web/api/http requestBlob', () => {
     })
     const onReauthRequired = vi.fn(async () => {})
     configureHttp({ onReauthRequired })
-    await expect(requestBlob('POST', '/api/ledgers/3/export')).resolves.toBeInstanceOf(Blob)
+    // same cross-realm note as above: verify the retried response's body
+    // via the Blob surface, not instanceof
+    const blob = await requestBlob('POST', '/api/ledgers/3/export')
+    expect(JSON.parse(await blob.text())).toEqual({ format: 'x' })
     expect(onReauthRequired).toHaveBeenCalledTimes(1)
     expect(f.fn).toHaveBeenCalledTimes(2)
   })

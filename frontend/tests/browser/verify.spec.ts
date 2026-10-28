@@ -350,7 +350,7 @@ test.describe('trend window (390x780)', () => {
       ),
     )
 
-  test('[covers:web-home.trend-window] prevで棒key群が窓幅（6か月）ページ送り（前窓と重複なし・focus不変・analysis/recent/weekは再fetchなし）・nextで復帰・時期チップと棒押下で初期窓へ', async ({ page }) => {
+  test('[covers:web-home.trend-window] prevで棒key群が窓幅（6か月）ページ送り（前窓と重複なし・focus不変・analysis/recent/weekは再fetchなし・cacheヒットで表示fetchなし・次の隣接窓prefetchのみ）・nextで復帰・時期チップと棒押下で初期窓へ', async ({ page }) => {
     logPageIssues(page, 'trend-window')
     await installApiStub(page)
     // every ledger API call the page turn must (analysis/trend, month) and
@@ -381,18 +381,21 @@ test.describe('trend window (390x780)', () => {
     // consecutive prev pages neither overlap nor leave a gap
     expect(SLID.filter((k) => INIT.includes(k)), 'pages never overlap').toEqual([])
     expect(SLID.at(-1), 'the slid page hugs the initial page').toBe(`bar-${prevMonth(INIT[0]!.slice(4))}`)
-    // prev: the page turns by the window's own width and only the trend
-    // endpoint re-runs
-    await page.locator('[data-test="trend-prev"]').click()
-    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID)
     const analysisGets = () => calls.filter((c) => c.path === 'analysis')
     const receiptGets = () => calls.filter((c) => c.path === 'receipts')
     const trendMonth = () => calls.filter((c) => c.path === 'analysis/trend' && c.granularity === 'month')
     const trendWeek = () => calls.filter((c) => c.path === 'analysis/trend' && c.granularity === 'week')
+    // TASK-115: the initial commit prefetched the adjacent page (2025-11),
+    // so the press below is a cache hit — no display fetch for the paged-to
+    // window, its one request stays the prefetch itself
+    expect(trendMonth().filter((c) => c.from === '2025-11-01')).toHaveLength(1)
+    await page.locator('[data-test="trend-prev"]').click()
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID)
     expect(analysisGets(), 'the breakdown never re-runs').toHaveLength(1)
     expect(receiptGets(), 'recent neither').toHaveLength(1)
     expect(trendWeek(), 'the TASK-103 week fetch stays in load()').toHaveLength(1)
-    expect(trendMonth().at(-1)!.from).toBe('2025-11-01')
+    expect(trendMonth().filter((c) => c.from === '2025-11-01'), 'the prefetched page is not re-fetched').toHaveLength(1)
+    expect(trendMonth().filter((c) => c.from === '2025-05-01'), 'the next adjacent prefetch').toHaveLength(1)
     // next returns to the initial window in one press and disables again
     await expect(page.locator('[data-test="trend-next"]')).toBeEnabled()
     await page.locator('[data-test="trend-next"]').click()
@@ -418,87 +421,108 @@ test.describe('trend window (390x780)', () => {
       .toEqual(['bar-2025-07', 'bar-2025-08', 'bar-2025-09', 'bar-2025-10', 'bar-2025-11', 'bar-2025-12'])
   })
 
-  // TASK-108 slide grammar (design §5-2 / §6-3): the direction classes, the
-  // non-firing cases (first insertion, same-window refetch) and the
-  // reduced-motion instant swap — the numbers of the motion itself stay in
-  // the unit layer's contract.
-  test('[covers:web-home.trend-window-slide] 窓交代はdirection別slide class（prev=back・next=forward）・初回挿入と同窓再fetchは不発火・reducedMotionでは即時差し替え', async ({ page }) => {
+  // TASK-115 continuous slide (design §5-2 / §6): the window move keeps ONE
+  // graph on screen — the concatenated old+new pair slides via transform and
+  // trims on transitionend. The measured facts: the is-sliding pair on .bars
+  // and .axis-labels, intermediate transform values (a real move, not an
+  // instant swap), the old and new bars coexisting with the old bars still
+  // on screen (the user's "the graph never vanishes"), the trimmed end
+  // state, the non-firing cases and the reduced-motion instant swap. The
+  // 220ms/easing numbers stay unconditioned (excluded).
+  test('[covers:web-home.trend-window-slide] 窓移動は旧窓+新窓の連続スライド（旧bar非消滅・transform中間値・is-sliding同時付与）・トリムで新窓のみ・同窓再fetchと初回挿入は不発火・reducedMotionでは即時差し替え', async ({ page }) => {
     logPageIssues(page, 'trend-slide')
     await installApiStub(page)
     await page.goto('/')
     await expect(page.locator('.trend-window')).toBeVisible()
-    // an rAF sampler under .trend-window: records every trend-slide-* class
-    // sighting, so even a single-frame class (the reduced-motion instant
-    // swap) is provably absent when it must not fire
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
+    await page.waitForLoadState('networkidle') // the adjacent prefetch is cached: the press slides at once
+    // an rAF sampler under .trend-window: while .bars carries is-sliding it
+    // records every computed transform, the old/new bar coexistence and the
+    // old bars' on-screen visibility — the continuity proof (§10: sampled
+    // from the frame loop, before and during the 220ms move)
     await page.evaluate(() => {
-      const w = window as unknown as { __slideSeen: string[]; __slideRun: boolean }
-      w.__slideSeen = []
+      const w = window as unknown as {
+        __slideRun: boolean
+        __slide: { sliding: boolean; labels: boolean; transforms: string[]; coexist: boolean; oldVisible: boolean }
+      }
       w.__slideRun = true
+      w.__slide = { sliding: false, labels: false, transforms: [], coexist: false, oldVisible: false }
       const tick = () => {
         if (!w.__slideRun) return
-        for (const el of document.querySelectorAll('.trend-window [class*="trend-slide-"]'))
-          for (const c of el.classList) if (c.startsWith('trend-slide')) w.__slideSeen.push(c)
+        const s = w.__slide
+        const bars = document.querySelector('.trend-window .bars')
+        if (bars instanceof HTMLElement && bars.classList.contains('is-sliding')) {
+          s.sliding = true
+          s.transforms.push(getComputedStyle(bars).transform)
+          const labels = document.querySelector('.trend-window .axis-labels')
+          if (labels?.classList.contains('is-sliding')) s.labels = true
+          const oldBar = document.querySelector('[data-test="bar-2026-05"]')
+          const newBar = document.querySelector('[data-test="bar-2025-11"]')
+          if (oldBar && newBar) {
+            s.coexist = true
+            const r = oldBar.getBoundingClientRect()
+            if (r.right > 0 && r.left < window.innerWidth) s.oldVisible = true
+          }
+        }
         requestAnimationFrame(tick)
       }
       requestAnimationFrame(tick)
     })
-    const slideSeen = () => page.evaluate(() => (window as unknown as { __slideSeen: string[] }).__slideSeen)
-    const noSlideClass = () =>
-      page.evaluate(() => document.querySelectorAll('.trend-window [class*="trend-slide-"]').length === 0)
-    // the initial load (the very first v-if insertion) paints instantly: no
-    // trend-slide class may ever appear on it
-    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
-    expect(await slideSeen(), 'the first insertion never slides').toEqual([])
+    type SlideSample = { sliding: boolean; labels: boolean; transforms: string[]; coexist: boolean; oldVisible: boolean }
+    const slideSample = () => page.evaluate(() => (window as unknown as { __slide: SlideSample }).__slide)
+    const resetSample = () =>
+      page.evaluate(() => {
+        const w = window as unknown as { __slide: SlideSample }
+        w.__slide = { sliding: false, labels: false, transforms: [], coexist: false, oldVisible: false }
+      })
+    const noSliding = () =>
+      page.evaluate(() => !document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
 
-    // a one-shot gate over the stub's month-granularity trend responses, so
-    // the swap starts only when this test releases it (§10: the class
-    // observation begins before the response can land)
-    const gateMonthTrend = async (): Promise<() => void> => {
-      let release!: () => void
-      const gate = new Promise<void>((r) => (release = r))
-      await page.route(
-        (url) => url.pathname.endsWith('/analysis/trend'),
-        async (route) => {
-          if (new URL(route.request().url()).searchParams.get('granularity') !== 'month') return route.fallback()
-          await gate
-          return route.fallback()
-        },
-      )
-      return release
-    }
+    // the initial load (the very first v-if insertion) painted instantly —
+    // the sampler never saw a slide before the first press
+    expect((await slideSample()).sliding, 'the first insertion never slides').toBe(false)
 
-    // prev (into the past): the new chart enters from the left — the leaving
-    // or entering chart root carries the trend-slide-back pair (§3-1)
-    const releasePrev = await gateMonthTrend()
+    // prev (into the past): the prefetched page slides the moment the button
+    // fires — one graph, both windows flowing, nothing vanishing
     await page.locator('[data-test="trend-prev"]').click()
-    const backClass = page.waitForFunction(
-      () => document.querySelector('.trend-window [class*="trend-slide-back-"]') !== null,
-      { timeout: 5_000 },
-    )
-    releasePrev()
-    await backClass
-    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID)
-    await expect.poll(noSlideClass, { timeout: 3_000 }).toBe(true) // let the 220ms out-in pair finish
+    await page.waitForFunction(() => document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID) // the 220ms move + trim
+    await expect.poll(noSliding, { timeout: 3_000 }).toBe(true)
+    const prevSample = await slideSample()
+    expect(prevSample.sliding, '.bars carries is-sliding through the move').toBe(true)
+    expect(prevSample.labels, '.axis-labels slides in lockstep with .bars').toBe(true)
+    // a real translation: the sampled matrices hold the initial, at least one
+    // intermediate and the target value
+    expect(new Set(prevSample.transforms).size, 'transform passes through intermediate values').toBeGreaterThanOrEqual(3)
+    expect(prevSample.coexist, 'the old and new bars coexist in the DOM').toBe(true)
+    expect(prevSample.oldVisible, 'the old window stays on screen mid-move (no blank stage)').toBe(true)
+    // the trimmed end state: the new page alone, transform reset, no class
+    const afterPrev = await page.evaluate(() => {
+      const bars = document.querySelector('.trend-window .bars') as HTMLElement
+      return {
+        transform: getComputedStyle(bars).transform,
+        count: document.querySelectorAll('[data-test="trend"] [data-test^="bar-"]').length,
+      }
+    })
+    expect(afterPrev.transform).toBe('none')
+    expect(afterPrev.count).toBe(6)
 
-    // next (back to now): the mirrored trend-slide-forward pair
-    const releaseNext = await gateMonthTrend()
+    // next (back to now): the mirrored direction — the pair slides again
+    resetSample()
     await page.locator('[data-test="trend-next"]').click()
-    const forwardClass = page.waitForFunction(
-      () => document.querySelector('.trend-window [class*="trend-slide-forward-"]') !== null,
-      { timeout: 5_000 },
-    )
-    releaseNext()
-    await forwardClass
+    await page.waitForFunction(() => document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
     await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
-    await expect.poll(noSlideClass, { timeout: 3_000 }).toBe(true)
+    await expect.poll(noSliding, { timeout: 3_000 }).toBe(true)
+    const nextSample = await slideSample()
+    expect(nextSample.sliding).toBe(true)
+    expect(nextSample.transforms.length, 'the mirrored move samples real frames').toBeGreaterThanOrEqual(3)
+    expect(nextSample.coexist).toBe(true)
 
     // a same-window refetch (a label filter added) keeps the committed
-    // windowKey: no class may appear — observed from the initial window
+    // windowKey: no slide may appear — observed from the initial window
     // (offset=0); at offset>0 a label switch is a focus change that
     // legitimately re-inits the window (§5-2 premise)
-    await page.evaluate(() => {
-      ;(window as unknown as { __slideSeen: string[] }).__slideSeen = []
-    })
+    resetSample()
     const labelled = page.waitForResponse((r) => {
       const u = new URL(r.url())
       return /\/analysis\/trend$/.test(u.pathname) && u.searchParams.has('label_colors')
@@ -506,31 +530,140 @@ test.describe('trend window (390x780)', () => {
     await page.locator('[data-test="filter-search"]').click()
     await page.locator('[data-test="label-filter-red"]').click()
     await labelled
-    // an out-in pair, had one fired, runs 220+220ms — wait past that before
-    // declaring the absence
-    await page.waitForTimeout(500)
-    expect(await slideSeen(), 'a recolour of the same window never slides').toEqual([])
+    await page.waitForTimeout(500) // past a whole slide, had one fired
+    const refetchSample = await slideSample()
+    expect(refetchSample.sliding, 'a recolour of the same window never slides').toBe(false)
+    expect(refetchSample.transforms).toEqual([])
+    expect(await barKeys(page)).toEqual(INIT)
     await page.keyboard.press('Escape') // close the dialog
 
-    // reduced motion: the same press swaps instantly — the class still lands
-    // (Vue adds it) but the CSS turns it into a no-op; the class AND the
-    // computed style are read in ONE evaluation so the single-frame class
-    // lifetime cannot race the poll (§10: transform none is the main fact)
+    // reduced motion: the very same press skips the slide entirely — no
+    // is-sliding frame ever, no transform, the new page at once (the JS skip
+    // is the contract; the CSS no-op is its belt-and-braces)
+    resetSample()
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    const releaseReduced = await gateMonthTrend()
     await page.locator('[data-test="trend-prev"]').click()
-    const instant = page.waitForFunction(
-      () => {
-        const el = document.querySelector('.trend-window [class*="trend-slide-back-"]')
-        if (!el) return false
-        const cs = getComputedStyle(el)
-        return cs.transitionDuration === '0s' && cs.transform === 'none'
-      },
-      { timeout: 5_000 },
-    )
-    releaseReduced()
-    await instant
     await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID)
+    await page.waitForTimeout(300)
+    const reducedSample = await slideSample()
+    expect(reducedSample.sliding, 'reduced motion never starts a slide').toBe(false)
+    const reducedStyle = await page.evaluate(() => {
+      const bars = document.querySelector('.trend-window .bars') as HTMLElement
+      return { transform: getComputedStyle(bars).transform, duration: getComputedStyle(bars).transitionDuration }
+    })
+    expect(reducedStyle.transform).toBe('none')
+    expect(['0s', ''].includes(reducedStyle.duration)).toBe(true)
+  })
+
+  // TASK-115 measurements at the 360px floor (design §5-2 新規測定): the
+  // track stays the width it had before the slide (no bar shrinking when
+  // the concatenated pair arrives), no phantom scrollbar appears for the
+  // 2-window overflow, the old bars keep their DOM identity (keyed v-for
+  // reuse), and the dense flag / value-label count / axis labels are
+  // computed per window so the trim changes nothing about them.
+  test('[covers:web-home.trend-window-slide] 360pxスライド実測: bar幅はスライド前後と等しい（track固定）・phantom scrollなし・旧bar要素は再利用（keyed v-for）・dense化せず.bar-valと軸ラベルはトリム前後で不変', async ({ page }) => {
+    // test.use() is describe-scope only in playwright — this one test drops
+    // the describe's 390px to the 360px floor at runtime, before any load
+    await page.setViewportSize({ width: 360, height: 780 })
+    logPageIssues(page, 'trend-slide-measure')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(INIT)
+    await page.waitForLoadState('networkidle')
+    const SLID_KEYS = SLID.map((k) => k.slice(4))
+    // the marker is written on the FIRST read only (before the press): the
+    // later reads just look it up, so during.oldBarMarked being true proves
+    // the very element marked earlier is still there (keyed prepend reuse) —
+    // not that some bar-2026-05 exists at read time
+    const read = (keys: string[], mark: boolean) =>
+      page.evaluate(
+        (arg) => {
+          const hscroll = document.querySelector('[data-test="trend-card"] .hscroll') as HTMLElement | null
+          const wrap = document.querySelector('.trend-window .trend-wrap') as HTMLElement
+          const oldBar = document.querySelector('[data-test="bar-2026-05"]') as (HTMLElement & { __marker?: boolean }) | null
+          if (oldBar && arg.mark) oldBar.__marker = true
+          const valCount = Array.from(document.querySelectorAll('.trend-window .bar-col'))
+            .filter(
+              (b) =>
+                arg.keys.includes(b.getAttribute('data-test')!.slice(4)) &&
+                (b.querySelector('.bar-val') as HTMLElement | null)?.textContent !== '',
+            )
+            .length
+          return {
+            barWidth: oldBar ? oldBar.getBoundingClientRect().width : null,
+            scrollWidth: hscroll ? hscroll.scrollWidth : null,
+            clientWidth: hscroll ? hscroll.clientWidth : null,
+            dense: wrap.classList.contains('dense'),
+            oldBarMarked: oldBar?.__marker === true,
+            newBarExists: document.querySelector('[data-test="bar-2025-11"]') !== null,
+            valCount,
+            labels: Array.from(document.querySelectorAll('.trend-window .axis-labels span')).map((el) => el.textContent),
+          }
+        },
+        { keys, mark },
+      )
+    const before = await read(SLID_KEYS, true)
+    expect(before.dense, 'a 6-bar month window is never dense').toBe(false)
+    expect(before.barWidth).not.toBeNull()
+    // prev: read the concatenated graph mid-slide
+    await page.locator('[data-test="trend-prev"]').click()
+    const during = await page
+      .waitForFunction(() => document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
+      .then(() => read(SLID_KEYS, false))
+    expect(during.newBarExists, 'the new window arrived while the old one stays').toBe(true)
+    expect(during.oldBarMarked, 'the old bar keeps its DOM element (keyed prepend reuse)').toBe(true)
+    expect(during.barWidth!, 'the track is pinned — bar width unchanged mid-slide').toBeCloseTo(before.barWidth!, 1)
+    expect(during.scrollWidth!, 'no phantom scroll for the 2-window overflow').toBeLessThanOrEqual(during.clientWidth!)
+    expect(during.dense, 'a 6+6 month concatenation never turns dense (REVIEW-2 R1)').toBe(false)
+    const duringNewLabels = during.labels.slice(0, 6)
+    await expect.poll(() => barKeys(page), { timeout: 3_000 }).toEqual(SLID)
+    await expect
+      .poll(() => page.evaluate(() => !document.querySelector('.trend-window .bars')?.classList.contains('is-sliding')))
+      .toBe(true)
+    const after = await read(SLID_KEYS, false)
+    expect(after.labels, 'the trimmed labels are exactly the new window ones seen mid-slide (per-window axis)').toEqual(
+      duringNewLabels,
+    )
+    expect(after.valCount, 'the trimmed value-label count matches the new window ones mid-slide').toBe(during.valCount)
+    expect(after.dense).toBe(false)
+    expect(after.scrollWidth!, 'still no phantom scroll after the trim').toBeLessThanOrEqual(after.clientWidth!)
+  })
+
+  // TASK-115 gridline measurement (design §5-2 新規測定 / REVIEW-2 R3): in
+  // the dense year chart the horizontal gridlines must span the whole plot
+  // while the concatenated pair slides — the lines are a fixed layer under
+  // the moving bars, so the far side never runs out of guides.
+  test('[covers:web-home.trend-window-slide] dense（year）スライド中もgridlineは表示域全幅（終端側1窓分の欠けなし）', async ({ page }) => {
+    // same as above: the 360px floor at runtime (test.use is describe-scope)
+    await page.setViewportSize({ width: 360, height: 780 })
+    logPageIssues(page, 'trend-gridline')
+    await installApiStub(page)
+    await page.goto('/?year=2026')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await expect
+      .poll(() => barKeys(page), { timeout: 3_000 })
+      .toEqual(Array.from({ length: 12 }, (_, i) => `bar-2026-${String(i + 1).padStart(2, '0')}`))
+    await page.waitForLoadState('networkidle')
+    await page.locator('[data-test="trend-prev"]').click()
+    await page.waitForFunction(() => document.querySelector('.trend-window .bars')?.classList.contains('is-sliding'))
+    const during = await page.evaluate(() => {
+      const plot = document.querySelector('.trend-window .plot') as HTMLElement
+      const lines = Array.from(document.querySelectorAll('.trend-window .gridline')) as HTMLElement[]
+      const pr = plot.getBoundingClientRect()
+      return {
+        count: lines.length,
+        full: lines.every((l) => {
+          const r = l.getBoundingClientRect()
+          return r.left <= pr.left + 1 && r.right >= pr.right - 1
+        }),
+      }
+    })
+    expect(during.count).toBeGreaterThanOrEqual(2)
+    expect(during.full, 'every gridline spans the plot width mid-slide').toBe(true)
+    await expect
+      .poll(() => barKeys(page), { timeout: 3_000 })
+      .toEqual(Array.from({ length: 12 }, (_, i) => `bar-2025-${String(i + 1).padStart(2, '0')}`))
   })
 })
 
