@@ -92,23 +92,19 @@ transport = "local"
 - 実行経路は `configs/deploy.toml` の `transport` に従う。`"ssh"` では全操作（rsync配布・mkdir・systemctl・healthz・file読取・binary実行）を `runtime_host` へのssh経由で実行する（rsyncは `-e "ssh -o BatchMode=yes -o ConnectTimeout=10"` + 宛先 `host:` 接頭、他は `ssh -o BatchMode=yes -o ConnectTimeout=10 <host> -- <command>` 形式。remote commandの引数はquote保持で組み立てる）。`"local"` では作業機上で直接実行する（local検証環境。`configs/deploy.local.toml` で上書きする運用）
 - healthz確認のportは `configs/<env>/app.toml` `[server] port` をscript起動時に読む（mise.toml・scriptへの直書きなし。listenは `hosts = ["::"]` だがhealthzは運用機上のlocalhost宛）
 - 各コマンドは実行前に `$ <command>` 形式で表示され、非零exitなら即停止して `error: <command> exited <code>` を出す（deploy失敗時は実行済みstep一覧も出力し、binary配布済み・restart前、等の状態が分かる）。command自体またはcwd（local実行時の運用dir）が存在しない場合もtracebackにならず `error: <command>: command or working directory not found` でexit 127（command-not-found code）で停止する
-- dry-run（実行予定の表示のみ・転送なし・exit 0）はscriptを直接実行する:
+- dry-run（実行予定の表示のみ・転送なし・exit 0）は全タスクで `mise run <task> -- --dry-run` 形式で使える（exec・serviceのdry-runでは実行予定の表示のみでbudget-book・systemctlは実行しない）:
 
 ```sh
-uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env stg --dry-run
-uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status --env stg --dry-run
+mise run stg:deploy -- --dry-run
+mise run stg:backup-status -- --dry-run
+mise run exec-stg -- --dry-run admin user list
+mise run stg:service -- --dry-run status
 ```
 
-miseのflagはタスク名の前に置くこと。タスク名の後ろに置いたflagはタスクrun末尾への引数appendとして渡され、タスクがそのまま実行される（mise 2026.6.6実測の共通挙動）。現行タスクでは `mise run stg:deploy --dry-run` の `--dry-run` も結果的にscriptへ渡りscriptのdry-runとして機能するが、これはmiseの引数append挙動への依存のため、dry-runは上記の直接実行形式を使う
+`--` はmise自身のflagとタスクへの引数の区切りとして1個だけ使う。`--` を挟まない `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈される
 
-exec・serviceにも `--dry-run` がある（実行予定の表示のみ・budget-book・systemctlは実行しない）。この場合の置き位置は必ず `--` より前（`--` より後ろに置いた `--dry-run` はargparse REMAINDERの仕様で `--` 以降の引数への透過扱いになり、dry-runとして効かないまま実行される）:
-
-```sh
-uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env stg --dry-run -- admin user list
-uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env stg --dry-run -- status
-```
-
-mise経由の `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈されるため、exec・serviceのdry-runも上記のscript直接実行形式を使う
+- deploy・backup・backup-statusタスクでは `--` 以降のargsがコマンド末尾へ渡り `--dry-run` がscriptのdry-run flagになる（`mise run stg:deploy -- --dry-run` → `deploy --env stg --dry-run`）
+- exec・serviceタスクでは `--` 以降のargsが `${usage_args}` / `${usage_verb}` の位置へ展開される。タスクrun文字列に `--` を含めないため、`mise run exec-stg -- --dry-run admin user list` はscriptへ `exec --env stg --dry-run admin user list` として渡り、先頭の `--dry-run` がscriptのdry-run flagとして解釈され `admin user list` がbudget-bookへの引数になる（scriptを直接実行する場合は `--dry-run` を `--` より前に置く。`--` より後ろに置いた `--dry-run` はargparse REMAINDERの仕様で透過扱いになり、dry-runとして効かないまま実行される）
 
 ### deploy（`stg:deploy` / `prod:deploy`）
 

@@ -28,6 +28,7 @@ from kakeiboot_ops import (
     build_backup_status_commands,
     build_deploy_commands,
     build_exec_command,
+    build_parser,
     healthz_command,
     load_config,
     main,
@@ -334,6 +335,38 @@ class TestExecPassthrough(unittest.TestCase):
             f"cd {DEPLOY_ROOT}/prod && "
             "./budget-book admin token issue --note '家族 用' --config-dir configs/prod",
         )
+
+    # [covers:deploy-ops.exec-args-passthrough]
+    # [covers:deploy-ops.dry-run-plan]
+    def test_dry_run_coexists_with_args_without_separator(self) -> None:
+        # mise task run strings carry no "--" (TASK-118 follow-up):
+        # `mise run exec-stg -- --dry-run admin user list` reaches the script
+        # as `exec --env stg --dry-run admin user list`, where the leading
+        # --dry-run is consumed as the script's flag and the rest is the
+        # remainder passed through to budget-book.
+        args = build_parser().parse_args(
+            ["exec", "--env", "stg", "--dry-run", "admin", "user", "list"]
+        )
+        self.assertTrue(args.dry_run)
+        self.assertEqual(passthrough_args(args.args), ["admin", "user", "list"])
+
+    # [covers:deploy-ops.dry-run-plan]
+    def test_service_dry_run_coexists_with_verbs_without_separator(self) -> None:
+        # same shape for `mise run stg:service -- --dry-run status`
+        args = build_parser().parse_args(["service", "--env", "stg", "--dry-run", "status"])
+        self.assertTrue(args.dry_run)
+        self.assertEqual(passthrough_args(args.verbs), ["status"])
+
+    # [covers:deploy-ops.exec-args-passthrough]
+    def test_separator_form_passes_dry_run_through(self) -> None:
+        # legacy direct-invocation form with "--" keeps parsing, but a
+        # --dry-run placed after "--" falls into REMAINDER and is passed
+        # through to budget-book instead of enabling dry-run.
+        args = build_parser().parse_args(
+            ["exec", "--env", "stg", "--", "--dry-run", "admin", "user", "list"]
+        )
+        self.assertFalse(args.dry_run)
+        self.assertEqual(passthrough_args(args.args), ["--dry-run", "admin", "user", "list"])
 
 
 # [covers:deploy-ops.dry-run-plan] --dry-run prints the plan and executes nothing

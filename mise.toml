@@ -109,22 +109,22 @@ run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env p
 [tasks."exec-stg"]
 description = "stg運用dirでbudget-bookの任意subcommand（mise run exec-stg -- admin user list）"
 usage = "arg \"<args...>\""
-run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env stg -- ${usage_args}"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env stg ${usage_args}"
 
 [tasks."exec-prod"]
 description = "prod運用dirでbudget-bookの任意subcommand（mise run exec-prod -- admin token issue --kind setup --note ...）"
 usage = "arg \"<args...>\""
-run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env prod -- ${usage_args}"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env prod ${usage_args}"
 
 [tasks."stg:service"]
 description = "kakeiboot-stgのsystemd user service操作（mise run stg:service -- status）"
 usage = "arg \"<verb...>\""
-run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env stg -- ${usage_verb}"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env stg ${usage_verb}"
 
 [tasks."prod:service"]
 description = "kakeiboot-prodのsystemd user service操作（mise run prod:service -- is-active）"
 usage = "arg \"<verb...>\""
-run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod -- ${usage_verb}"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod ${usage_verb}"
 
 # backup (TASK-83): daily systemd user timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
 # （deployで配布）。詳細は docs/deploy.md。
