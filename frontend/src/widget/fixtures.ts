@@ -319,6 +319,16 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
       value: [41000, 45000, 39000, 50000, 48000, 52000][i] ?? 0,
     })),
   }
+  // TASK-116: `line` has no emitter among the real reports (the backend ships
+  // the monthly trend as bar_v), so the LineChart renderer coverage rides this
+  // test-only section under its own id — never returned by the backend.
+  const trendLine = {
+    id: 'monthly_trend_line',
+    title: '月次推移',
+    dims: ['month' as const],
+    chart: 'line' as const,
+    rows: trend.rows,
+  }
   switch (report) {
     case 'monthly_overview':
       return {
@@ -336,6 +346,7 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
             ],
           },
           trend,
+          trendLine,
         ],
       }
     case 'by_category':
@@ -358,7 +369,7 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
         ],
       }
     case 'monthly_trend':
-      return { ...base, sections: [{ ...trend, chart: 'line' }] }
+      return { ...base, sections: [trend] }
     case 'by_payment_method':
       return {
         ...base,
@@ -393,4 +404,45 @@ export function statsEnvelope(report: ReportKind = 'monthly_overview', label = '
         ],
       }
   }
+}
+
+/** The stacked-composition matrix `_meta.trend_matrix` (TASK-116, spec §10:
+ * chart-drawing extras ride `_meta`; same shape as the web REST
+ * GET /analysis/trend result). The series keys share by_category's row keys
+ * (1=食費, 2=日用品) so the bar_h rows and the bar_v segments paint the same
+ * key the same color. 日用品 has a value-0 month (2026-07) for the omitted
+ * zero-segment rule. */
+export type TrendMatrixFixture = {
+  axis: 'category'
+  metric: 'amount'
+  granularity: 'month'
+  period: { from: string; to: string; label: string }
+  buckets: string[]
+  series: { key: number; label: string; values: number[]; total: number }[]
+  bucket_totals: number[]
+  truncated_rows: number
+}
+
+export function trendMatrix(): TrendMatrixFixture {
+  return {
+    axis: 'category',
+    metric: 'amount',
+    granularity: 'month',
+    period: { from: '2026-05-01', to: '2026-10-31', label: '2026年5月〜2026年10月' },
+    buckets: ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'],
+    series: [
+      { key: 1, label: '食費', values: [30000, 33000, 29000, 36000, 35000, 38000], total: 199000 },
+      { key: 2, label: '日用品', values: [8000, 9000, 0, 10000, 9000, 10000], total: 46000 },
+    ],
+    bucket_totals: [41000, 45000, 39000, 50000, 48000, 52000],
+    truncated_rows: 0,
+  }
+}
+
+/** `_meta` of summarize_spending (TASK-116): monthly_overview and monthly_trend
+ * carry trend_matrix (monthly_overview keeps daily_cumulative's slot free —
+ * the mock carries only the matrix); the other reports ship no meta. */
+export function statsMeta(report: ReportKind = 'monthly_overview'): WidgetMeta {
+  if (report !== 'monthly_overview' && report !== 'monthly_trend') return {}
+  return { trend_matrix: trendMatrix() }
 }

@@ -1,9 +1,6 @@
 # Task runner for budget-book. `mise tasks` lists all tasks.
 # Settings (ports, paths, timeouts) live in configs/*.toml, not here.
 
-[vars]
-_.file = ["configs/deploy.toml", "configs/deploy.local.toml"]
-
 [tasks."frontend:install"]
 description = "Install frontend dependencies (frozen lockfile)"
 dir = "{{config_root}}/frontend"
@@ -51,9 +48,13 @@ run = [
   "cp test-results/browser/capture/390/consent.png src/web/assets/usage/consent.png",
 ]
 
+[tasks."scripts:test"]
+description = "Run the scripts/ unit tests (deploy ops, unittest)"
+run = "uv run --no-project python -m unittest discover -s scripts/deploy -p 'test_*.py'"
+
 [tasks.test]
 description = "Run all tests"
-depends = ["backend:test", "frontend:test"]
+depends = ["backend:test", "frontend:test", "scripts:test"]
 
 [tasks."backend:lint"]
 description = "rustfmt check and clippy (warnings are errors)"
@@ -90,82 +91,56 @@ run = "pnpm dev --strictPort"
 description = "Run backend and frontend dev servers in parallel"
 depends = ["dev:backend", "dev:frontend"]
 
-# stg/prod operations against the runtime dirs ({{vars.deploy_root}}/<env>; see configs/deploy.toml).
-# The work repo only runs dev; see docs/deploy.md.
+# stg/prod operations: thin wrappers over scripts/deploy/kakeiboot_ops.py (TASK-118).
+# The runtime dir root and the execution transport (local vs ssh to the runtime
+# host) come from configs/deploy.toml; see docs/deploy.md. The work repo only
+# runs dev otherwise.
 
 [tasks."stg:deploy"]
-description = "stgへdeploy（build → rsync binary/backup script/configs/stg/frontend/dist → kakeiboot-stg再起動 → healthz確認）"
+description = "stgへdeploy（build → 配布 → kakeiboot-stg再起動 → healthz確認。処理本体は scripts/deploy/kakeiboot_ops.py）"
 depends = ["build"]
-run = [
-  "rsync -a target/debug/budget-book {{vars.deploy_root}}/stg/budget-book",
-  "mkdir -p {{vars.deploy_root}}/stg/bin",
-  "rsync -a scripts/backup/kakeiboot-backup.sh {{vars.deploy_root}}/stg/bin/kakeiboot-backup.sh",
-  "rsync -a --delete configs/stg/ {{vars.deploy_root}}/stg/configs/stg/",
-  "rsync -a --delete frontend/dist/ {{vars.deploy_root}}/stg/frontend/dist/",
-  "systemctl --user restart kakeiboot-stg",
-  "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; sleep 1; done; exit 1'",
-]
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env stg"
 
 [tasks."prod:deploy"]
-description = "prodへdeploy（build → rsync binary/backup script/configs/prod/frontend/dist → kakeiboot-prod再起動 → healthz確認）"
+description = "prodへdeploy（build → 配布 → kakeiboot-prod再起動 → healthz確認。処理本体は scripts/deploy/kakeiboot_ops.py）"
 depends = ["build"]
-run = [
-  "rsync -a target/debug/budget-book {{vars.deploy_root}}/prod/budget-book",
-  "mkdir -p {{vars.deploy_root}}/prod/bin",
-  "rsync -a scripts/backup/kakeiboot-backup.sh {{vars.deploy_root}}/prod/bin/kakeiboot-backup.sh",
-  "rsync -a --delete configs/prod/ {{vars.deploy_root}}/prod/configs/prod/",
-  "rsync -a --delete frontend/dist/ {{vars.deploy_root}}/prod/frontend/dist/",
-  "systemctl --user restart kakeiboot-prod",
-  "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40283/healthz && exit 0; sleep 1; done; exit 1'",
-]
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env prod"
 
 [tasks."exec-stg"]
 description = "stg運用dirでbudget-bookの任意subcommand（mise run exec-stg -- admin user list）"
-dir = "{{vars.deploy_root}}/stg"
 usage = "arg \"<args...>\""
-run = "./budget-book ${usage_args} --config-dir configs/stg"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env stg ${usage_args}"
 
 [tasks."exec-prod"]
 description = "prod運用dirでbudget-bookの任意subcommand（mise run exec-prod -- admin token issue --kind setup --note ...）"
-dir = "{{vars.deploy_root}}/prod"
 usage = "arg \"<args...>\""
-run = "./budget-book ${usage_args} --config-dir configs/prod"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env prod ${usage_args}"
 
 [tasks."stg:service"]
 description = "kakeiboot-stgのsystemd user service操作（mise run stg:service -- status）"
 usage = "arg \"<verb...>\""
-run = "systemctl --user ${usage_verb} kakeiboot-stg"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env stg ${usage_verb}"
 
 [tasks."prod:service"]
 description = "kakeiboot-prodのsystemd user service操作（mise run prod:service -- is-active）"
 usage = "arg \"<verb...>\""
-run = "systemctl --user ${usage_verb} kakeiboot-prod"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod ${usage_verb}"
 
 # backup (TASK-83): daily systemd user timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
 # （deployで配布）。詳細は docs/deploy.md。
 
 [tasks."stg:backup"]
 description = "stg backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
-run = "systemctl --user start kakeiboot-backup@stg.service"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup --env stg"
 
 [tasks."prod:backup"]
 description = "prod backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
-run = "systemctl --user start kakeiboot-backup@prod.service"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup --env prod"
 
 [tasks."stg:backup-status"]
 description = "stg backup状態確認（last_success・世代dir一覧・timer・前回実行結果）"
-run = [
-  "sh -c 'echo \"last_success: $(cat {{vars.deploy_root}}/backups/stg/last_success 2>/dev/null || echo none)\"'",
-  "sh -c 'ls -1 {{vars.deploy_root}}/backups/stg 2>/dev/null || true'",
-  "systemctl --user list-timers kakeiboot-backup@stg.timer --no-pager",
-  "systemctl --user show kakeiboot-backup@stg.service -p Result -p ExecMainStatus --no-pager",
-]
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status --env stg"
 
 [tasks."prod:backup-status"]
 description = "prod backup状態確認（last_success・世代dir一覧・timer・前回実行結果）"
-run = [
-  "sh -c 'echo \"last_success: $(cat {{vars.deploy_root}}/backups/prod/last_success 2>/dev/null || echo none)\"'",
-  "sh -c 'ls -1 {{vars.deploy_root}}/backups/prod 2>/dev/null || true'",
-  "systemctl --user list-timers kakeiboot-backup@prod.timer --no-pager",
-  "systemctl --user show kakeiboot-backup@prod.service -p Result -p ExecMainStatus --no-pager",
-]
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status --env prod"

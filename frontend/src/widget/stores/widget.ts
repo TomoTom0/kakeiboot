@@ -13,6 +13,7 @@ import type {
   WidgetMeta,
   WidgetView,
 } from '@/shared/types'
+import { isStackableTrendResult, type StackableTrendResult } from '@/shared/lib/stackedBars'
 import type { DisplayMode, ToolCallResult, WidgetHost, WidgetState } from '../host'
 import { createNullHost } from '../host'
 
@@ -78,6 +79,15 @@ export const useWidgetStore = defineStore('widget', () => {
   const view = computed<WidgetView | null>(() => screen.value?.envelope.view ?? null)
   const envelope = computed(() => screen.value?.envelope ?? null)
   const draft = computed(() => (screen.value?.envelope.view === 'draft' ? screen.value.envelope.draft : null))
+  /** TASK-116: `_meta.trend_matrix` of the CURRENT screen (null when the
+   *  response ships none) — the stats view stacks its bar_v bars off it. It
+   *  rides the call-result normalization: every new screen swaps the meta
+   *  along with the envelope (a meta-less response clears it). */
+  const trendMatrix = computed<StackableTrendResult | null>(() => {
+    const m = screen.value?.meta
+    if (!m) return null
+    return isStackableTrendResult(m['trend_matrix']) ? m['trend_matrix'] : null
+  })
   const canGoBack = computed(() => history.value.length > 0)
   /** Approve button is shown only for pending drafts that this widget has not approved (spec §11-2). */
   const showApproveButton = computed(() => {
@@ -386,6 +396,7 @@ export const useWidgetStore = defineStore('widget', () => {
     view,
     envelope,
     draft,
+    trendMatrix,
     canGoBack,
     showApproveButton,
     approveDisabled,

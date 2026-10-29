@@ -467,3 +467,156 @@ async fn summarize_spending_label_filter_and_echo() {
     .await;
     assert_eq!(r["isError"], json!(true));
 }
+
+// [covers:mcp-stats.trend-matrix-meta] TASK-116 (design tmp/tasks/tm-116/
+// design_breakdown-expansion.md §3-3-1): monthly_overview and monthly_trend
+// ship the stacked-composition matrix through `_meta` (the widget-only
+// channel, spec §3-4 / §10) — the same shape as the web REST
+// GET /analysis/trend result. The sections body and the input schema stay
+// untouched; monthly_overview keeps daily_cumulative alongside.
+#[tokio::test]
+async fn summarize_spending_trend_matrix_meta() {
+    let (router, pool, token, owner, _viewer) = setup().await;
+    // amounts via items so the matrix reflects the fixtures; every item is
+    // unattributed, so the category axis holds a single 未分類 series
+    for (id, amount) in [(101i64, 300), (102, 80), (103, 180)] {
+        sqlx::query(
+            "INSERT INTO receipt_items (receipt_id, ledger_id, line_no, name, name_norm,
+                 amount, amount_incl, created_at, updated_at)
+             VALUES (?, ?, 1, 'x', 'x', ?, ?, 0, 0)",
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(amount)
+        .bind(amount)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    insert_label(&pool, owner, 101, "red").await;
+    insert_label(&pool, owner, 103, "red").await;
+
+    // monthly_overview: the matrix rides the same last-6-months sub-range as
+    // the trend section, zero-filled ascending, same order and length as the
+    // section rows
+    let r = call(
+        &router,
+        &token,
+        1,
+        "summarize_spending",
+        json!({
+            "report": "monthly_overview",
+            "period": { "month": "2026-10" }
+        }),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(false));
+    let sc = &r["structuredContent"];
+    let tm = &r["_meta"]["trend_matrix"];
+    assert_eq!(
+        tm["axis"], "category",
+        "the same axis value as the REST trend"
+    );
+    assert_eq!(tm["metric"], "amount");
+    assert_eq!(tm["granularity"], "month");
+    let trend = sc["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == json!("trend"))
+        .unwrap();
+    let row_keys: Vec<&str> = trend["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["keys"][0].as_str().unwrap())
+        .collect();
+    let buckets: Vec<&str> = tm["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        buckets,
+        vec![
+            "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"
+        ]
+    );
+    assert_eq!(
+        buckets, row_keys,
+        "same order and length as the section rows"
+    );
+    // the whole spend is unattributed: one 未分類 series and no「その他」series
+    // (the residual is derived frontend-side from bucket_totals - series)
+    let series = tm["series"].as_array().unwrap();
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0]["key"], serde_json::Value::Null);
+    assert_eq!(series[0]["label"], "未分類");
+    assert_eq!(series[0]["values"], json!([0, 0, 0, 0, 0, 560]));
+    assert_eq!(series[0]["total"], 560);
+    assert_eq!(tm["bucket_totals"], json!([0, 0, 0, 0, 0, 560]));
+    assert_eq!(tm["truncated_rows"], 0);
+    // monthly_overview keeps its daily_cumulative alongside the matrix
+    assert!(
+        !r["_meta"]["daily_cumulative"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "daily_cumulative survives next to trend_matrix"
+    );
+
+    // monthly_trend: the matrix covers the requested range itself (10 months
+    // here); _meta exists now that the matrix is always non-empty
+    let r = call(
+        &router,
+        &token,
+        2,
+        "summarize_spending",
+        json!({
+            "report": "monthly_trend",
+            "period": { "from": "2026-01-01", "to": "2026-10-31" }
+        }),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(false));
+    let tm = &r["_meta"]["trend_matrix"];
+    let buckets: Vec<&str> = tm["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert_eq!(buckets.first(), Some(&"2026-01"));
+    assert_eq!(buckets.last(), Some(&"2026-10"));
+    assert_eq!(buckets.len(), 10, "the whole requested range, zero-filled");
+    let totals = tm["bucket_totals"].as_array().unwrap();
+    assert_eq!(totals[9], json!(560));
+    assert_eq!(
+        tm["series"].as_array().unwrap()[0]["values"]
+            .as_array()
+            .unwrap()[9],
+        json!(560)
+    );
+
+    // the label filter narrows the matrix under the same condition as the
+    // totals (red = receipts 101 + 103 = 480)
+    let r = call(
+        &router,
+        &token,
+        3,
+        "summarize_spending",
+        json!({
+            "report": "monthly_overview",
+            "period": { "month": "2026-10" },
+            "filters": { "label_colors": ["red"] }
+        }),
+    )
+    .await;
+    assert_eq!(r["isError"], json!(false));
+    let tm = &r["_meta"]["trend_matrix"];
+    let series = tm["series"].as_array().unwrap();
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0]["values"], json!([0, 0, 0, 0, 0, 480]));
+    assert_eq!(tm["bucket_totals"], json!([0, 0, 0, 0, 0, 480]));
+}

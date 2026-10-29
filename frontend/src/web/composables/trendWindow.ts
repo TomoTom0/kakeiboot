@@ -20,7 +20,10 @@ import type { StackedBar } from '../components/TrendBars.vue'
 import { errorMessage } from './format'
 import { monthEnd, shiftMonth } from './period'
 import { trendGranularity, type TrendGranularity } from './trend'
-import { SERIES_REST, seriesColor } from '../lib/seriesColor'
+// TASK-116 (design §3-0): the assembly moved to shared/lib as the pure
+// stackedOf the four stack sites share (trend window / week rows / Receipts
+// daily / widget monthly); this composable delegates and keeps its contract
+import { stackedOf } from '@/shared/lib/stackedBars'
 import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
@@ -147,30 +150,10 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
 
   /** the stacked assembly as a pure function of a result (§3-1): top-5
    *  series + the residual「ほか」(seriesColor mapping, value-0 segments
-   *  omitted) — the slide concatenation and the committed window share it */
-  function stackedOf(res: AnalysisTrendResult): StackedBar[] {
-    const axis = opts.axis()
-    const top = res.series.slice(0, 5)
-    return res.buckets.map((b, i) => {
-      const rest = Math.max((res.bucket_totals[i] ?? 0) - top.reduce((a, s) => a + (s.values[i] ?? 0), 0), 0)
-      return {
-        key: b,
-        title: b,
-        total: res.bucket_totals[i] ?? 0,
-        segments: [
-          // TASK-105: the segment color is the deterministic seriesColor of
-          // the series key (the same color the ranked rows paint), the
-          // residual「ほか」the fixed rest tone. Value-0 series segments are
-          // omitted from the assembly — with the 1px segment borders a 0
-          // height element would stack a stray line
-          ...top
-            .filter((s) => (s.values[i] ?? 0) > 0)
-            .map((s) => ({ label: s.label, value: s.values[i] ?? 0, color: seriesColor(s.key, axis) })),
-          ...(rest > 0 ? [{ label: 'ほか', value: rest, color: SERIES_REST }] : []),
-        ],
-      }
-    })
-  }
+   *  omitted) — the slide concatenation and the committed window share it.
+   *  TASK-116: the body lives in shared/lib stackedOf (res.axis keys the
+   *  color mapping — always this composable's own axis, the query echoes
+   *  it) */
 
   const stacked = computed<StackedBar[]>(() => {
     if (slide.value) return slide.value.bars

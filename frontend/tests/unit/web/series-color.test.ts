@@ -1,13 +1,15 @@
 // TASK-105 (design: tmp/tasks/tm-105/design_dashboard-visual.md §2): the
 // deterministic series color assignment of the breakdown axes. Written
-// test-first: frontend/src/web/lib/seriesColor.ts does not exist yet, so this
-// file is red (an import-resolution failure) until the implementation lands.
-// The mapping must be pure arithmetic on the key — window / period / screen /
-// top-N membership never enter — so an added key can never recolor an
+// test-first: frontend/src/web/lib/seriesColor.ts did not exist yet when this
+// landed. The mapping must be pure arithmetic on the key — window / period /
+// screen / top-N membership never enter — so an added key can never recolor an
 // existing one, and every screen (trend segments, RankedList rows, the
 // payments zone) reads the same color off the same key.
+// TASK-116 (design: tmp/tasks/tm-116/design_breakdown-expansion.md §3-3-3):
+// the function moved to shared/lib so the widget reads the same mapping —
+// only the import path changed, the expectations are unchanged.
 import { describe, expect, it } from 'vitest'
-import { SERIES_REST, SERIES_SLOT_COUNT, seriesColor } from '@/web/lib/seriesColor'
+import { SERIES_REST, SERIES_SLOT_COUNT, seriesColor } from '@/shared/lib/seriesColor'
 
 describe('seriesColor (lib, TASK-105)', () => {
   it('[covers:web-common.series-color-assignment] 定数: slot数7・restは--series-rest参照・戻り値はCSS変数参照のみ（関数は色値を持たない）', () => {

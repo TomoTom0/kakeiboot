@@ -1,6 +1,6 @@
 # stg・prod 運用環境（kakeiboot）
 
-作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・admin CLI・service操作）は作業repoのmiseタスク（mise.toml）から行う。実serverは運用dir上の systemd user service が担い、admin CLIはタスクの `dir` 指定で運用dir上で実行する（運用dirはgit repoではない）。
+作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd user service が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
 
 ## 構成
 
@@ -8,7 +8,7 @@
 |---|---|---|
 | 運用dir | `<deploy_root>/stg` | `<deploy_root>/prod` |
 | config | `configs/stg` | `configs/prod` |
-| listen port | 40282 | 40283 |
+| listen port | `configs/<env>/app.toml` `[server] port`（正本。現在 stg=40282・prod=40283） | 同左 |
 | systemd unit | `kakeiboot-stg.service`（active） | `kakeiboot-prod.service`（active・enabled） |
 | 外部公開 | cf-tunnel（`https://kakeiboot-stg.scioj.com`） | prod開始時に設定 |
 
@@ -31,18 +31,19 @@
 
 ## deploy先の設定（configs/deploy.toml）
 
-deploy先（運用dir root）の実path値の正本は `configs/deploy.toml`。mise.toml・本doc・CLAUDE.mdは実pathを書かず、この節の `<deploy_root>` 表記とmise template（mise.toml内 `{{vars.deploy_root}}`）で参照する。
+deploy先（運用dir root）の実path値と実行経路の正本は `configs/deploy.toml`。mise.toml・本doc・CLAUDE.mdは実pathを書かず、この節の `<deploy_root>` 表記で参照する。miseタスクはscript呼び出しのみで `{{vars.deploy_root}}` templateを使用しない（configの読取・合成はscriptが担う）。
 
 **`<deploy_root>` 表記規則**: 本doc内の `<deploy_root>` は `configs/deploy.toml` の `deploy_root` 値を指すplaceholder（既存の `<env>`・`<date>`・`<port>` と同一流儀）。手順中の `<deploy_root>` は実行時に同fileの値へ読み替える。
 
-key仕様（フラットkeyのみ。nest tableはmiseがparse error）:
+key仕様（フラットkeyのみ。未知keyはscriptがerror〔backend configと同一流儀のtypo検出〕。TOMLのparse errorも同一形式の `error: <file>: invalid TOML: ...`（exit 2）で報告され、tracebackにはならない）:
 
 | key | 型 | required | 意味 |
 |---|---|---|---|
 | `deploy_root` | string（絶対path） | 必須 | 運用dir root。stg/prod運用dir・backup dirはすべてこの値へのsuffix合成で表す。末尾に `/` を付けない（正規形。合成は常に `/` 連結） |
-| `runtime_host` | string（host名） | 省略可（記載推奨） | 運用機のhost名。現時点のmiseタスクでの使用箇所はなし（docs表記・将来のssh経由操作のための置き場所）。未記録でもmiseのrender・タスク実行に影響しない |
+| `transport` | string | 必須 | 全運用操作の実行経路。`"ssh"` = `runtime_host` へのssh経由 / `"local"` = 作業機上で直接実行。省略はerror（silent defaultで `/srv/opt` 不在の中途失敗より起動時の明示errorを優先） |
+| `runtime_host` | string（host alias） | `transport="ssh"`時必須 | ssh接続先のhost alias（`~/.ssh/config` のentry名。user・port・IdentityFileはssh configが正本で、scriptは `BatchMode=yes`・`ConnectTimeout=10` のみ固定付与）。`transport="local"`時は使用しない（運用機の記録として記載可・読み飛ばし） |
 
-合成規則（`<deploy_root>` へのsuffix一覧。mise.toml・本doc共通の唯一規則）:
+合成規則（`<deploy_root>` へのsuffix一覧。script・本doc共通の唯一規則）:
 
 | 用途 | 合成文字列 |
 |---|---|
@@ -58,23 +59,25 @@ key仕様（フラットkeyのみ。nest tableはmiseがparse error）:
 | backup images mirror | `<deploy_root>/backups/<env>/images/` |
 | last_success marker | `<deploy_root>/backups/<env>/last_success` |
 
-mise.tomlは `[vars] _.file = ["configs/deploy.toml", "configs/deploy.local.toml"]` でこのfile群を読み、タスクrun配列・dir属性内の `{{vars.deploy_root}}` を展開する。
+`scripts/deploy/kakeiboot_ops.py` が `configs/deploy.toml`（と `configs/deploy.local.toml`）を読み、`transport` に従って全操作の実行経路を切り替える。mise.tomlはdeploy.tomlを読まない。
 
 ### local override（configs/deploy.local.toml）
 
-作業機など `deploy_root` が運用機と異なるdeviceでは、`configs/deploy.local.toml`（git管理外）に上書きしたいkeyのみを書く:
+作業機など運用機と異なる設定にするdeviceでは、`configs/deploy.local.toml`（git管理外）に上書きしたいkeyのみを書く:
 
 ```toml
-deploy_root = "<この機械の運用dir root>"
+# 例: この機械上のdirへlocal実行する検証環境
+transport = "local"
+# deploy_root = "<この機械の運用dir root>"  # 変更が必要な場合のみ
 ```
 
-- 同じkeyを書くと配列の後勝ちで `configs/deploy.toml` の値を上書きする。fileが存在しなければerror無くskipされる（deploy.tomlのみの環境とlocal併用環境が同一mise.tomlで動く）
+- 同じkeyを書くと後勝ちで `configs/deploy.toml` の値を上書きする（file単位の浅いmerge）。fileが存在しなければerror無くskipされる（deploy.tomlのみの環境とlocal併用環境が同一構成で動く）
 - `.gitignore` の `configs/*.local.toml` 対象。commitしない
-- local側に存在しないdirを指す場合、`stg:deploy` のrsyncは途中階層を作らないため失敗する。配布先の `<deploy_root>/<env>` 親dirを事前に作成する
+- local側に存在しないdirを指す場合、deployのrsyncは途中階層を作らないため失敗する。配布先の `<deploy_root>/<env>` 親dirを事前に作成する
 
-## 運用操作（miseタスク）
+## 運用操作（miseタスク・scripts/deploy/kakeiboot_ops.py）
 
-作業repoのどこからでも実行できる（運用dirへのcd不要）:
+作業repoのどこからでも実行できる（運用dirへのcd不要・gt430へのlogin不要）:
 
 | 操作 | コマンド |
 |---|---|
@@ -84,16 +87,33 @@ deploy_root = "<この機械の運用dir root>"
 | backup手動実行 | `mise run stg:backup` / `mise run prod:backup`（timerと同一のoneshot unit。完了まで待つ） |
 | backup状態確認 | `mise run stg:backup-status` / `mise run prod:backup-status`（last_success・世代dir一覧・timer・前回実行結果。**週1回**確認する） |
 
-miseのflagはタスク名の前に置くこと。タスク名の後ろに置いたflag（例: `mise run stg:deploy --dry-run`）はタスクへの引数扱いになり、タスクがそのまま実行される（mise共通の挙動）。
+処理本体は `scripts/deploy/kakeiboot_ops.py`（miseタスクはthin wrapper）:
+
+- 実行経路は `configs/deploy.toml` の `transport` に従う。`"ssh"` では全操作（rsync配布・mkdir・systemctl・healthz・file読取・binary実行）を `runtime_host` へのssh経由で実行する（rsyncは `-e "ssh -o BatchMode=yes -o ConnectTimeout=10"` + 宛先 `host:` 接頭、他は `ssh -o BatchMode=yes -o ConnectTimeout=10 <host> -- <command>` 形式。remote commandの引数はquote保持で組み立てる）。`"local"` では作業機上で直接実行する（local検証環境。`configs/deploy.local.toml` で上書きする運用）
+- healthz確認のportは `configs/<env>/app.toml` `[server] port` をscript起動時に読む（mise.toml・scriptへの直書きなし。listenは `hosts = ["::"]` だがhealthzは運用機上のlocalhost宛）
+- 各コマンドは実行前に `$ <command>` 形式で表示され、非零exitなら即停止して `error: <command> exited <code>` を出す（deploy失敗時は実行済みstep一覧も出力し、binary配布済み・restart前、等の状態が分かる）。command自体またはcwd（local実行時の運用dir）が存在しない場合もtracebackにならず `error: <command>: command or working directory not found` でexit 127（command-not-found code）で停止する
+- dry-run（実行予定の表示のみ・転送なし・exit 0）は全タスクで `mise run <task> -- --dry-run` 形式で使える（exec・serviceのdry-runでは実行予定の表示のみでbudget-book・systemctlは実行しない）:
+
+```sh
+mise run stg:deploy -- --dry-run
+mise run stg:backup-status -- --dry-run
+mise run exec-stg -- --dry-run admin user list
+mise run stg:service -- --dry-run status
+```
+
+`--` はmise自身のflagとタスクへの引数の区切りとして1個だけ使う。`--` を挟まない `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈される
+
+- deploy・backup・backup-statusタスクでは `--` 以降のargsがコマンド末尾へ渡り `--dry-run` がscriptのdry-run flagになる（`mise run stg:deploy -- --dry-run` → `deploy --env stg --dry-run`）
+- exec・serviceタスクでは `--` 以降のargsが `${usage_args}` / `${usage_verb}` の位置へ展開される。タスクrun文字列に `--` を含めないため、`mise run exec-stg -- --dry-run admin user list` はscriptへ `exec --env stg --dry-run admin user list` として渡り、先頭の `--dry-run` がscriptのdry-run flagとして解釈され `admin user list` がbudget-bookへの引数になる（scriptを直接実行する場合は `--dry-run` を `--` より前に置く。`--` より後ろに置いた `--dry-run` はargparse REMAINDERの仕様で透過扱いになり、dry-runとして効かないまま実行される）
 
 ### deploy（`stg:deploy` / `prod:deploy`）
 
-作業repoの dev にコミット済みの状態から、以下を一括実行する:
+作業repoの dev にコミット済みの状態から、miseタスク（build ののち script）が以下を一括実行する:
 
-1. build（`build` タスク: backend binary と `frontend/dist/`）
-2. 配布 5行（rsync 4行 + `bin/` 作成。対象・除外は下記）
+1. build（mise `build` タスク: backend binary と `frontend/dist/`）
+2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
 3. `systemctl --user restart kakeiboot-<env>`
-4. `curl -fsS http://localhost:<port>/healthz`（stg=40282・prod=40283）で起動確認
+4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` は `configs/<env>/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
 
 rsyncの対象と除外:
 
@@ -103,7 +123,7 @@ rsyncの対象と除外:
 
 ### 運用 CLI（`exec-stg` / `exec-prod`）
 
-運用dir上で `./budget-book admin <args> --config-dir configs/<env>` を実行する。subcommand・flagは `--` 以降にそのまま渡す。passkey紛失時の再登録URL発行（token plaintextは1回だけ表示・監査対象外）:
+運用dir上で `./budget-book admin <args> --config-dir configs/<env>` を実行する。scriptが運用dirへcdする（localは実行dir指定・sshは `cd <deploy_root>/<env> && ...` のremote実行。旧タスクの `dir` 属性から移行）。subcommand・flagは `--` 以降にそのまま渡す（空白・記号入り引数はquote保持）。passkey紛失時の再登録URL発行（token plaintextは1回だけ表示・監査対象外）:
 
 ```sh
 mise run exec-prod -- admin token issue --kind setup --note "家族用"
@@ -172,13 +192,13 @@ backup先と構成:
 
 ### backupの導入・検証
 
-stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpackage install不要・運用dir配下（`<deploy_root>`）の操作はこの手順経由）:
+stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpackage install不要・運用機上の操作はすべてssh実行形。`<deploy_root>` は configs/deploy.toml の `deploy_root` 値に読み替える）:
 
-1. `mise run stg:deploy`（binary〔`admin backup` 入〕と `bin/kakeiboot-backup.sh` を配布）
-2. backup先dir作成: `mkdir -p <deploy_root>/backups/{stg,prod}`（`<deploy_root>` は configs/deploy.toml の `deploy_root` 値に読み替えて実行。`{stg,prod}` はshellのbrace expansion。script側でも `$DEST` を作るが、明示手順として残す）
-3. unit配置: `cp scripts/systemd/kakeiboot-backup@.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload`
-4. timer有効化: `systemctl --user enable --now kakeiboot-backup@stg.timer`
-5. 初回実行と確認: `mise run stg:backup` を実行し、(1) journalに各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在 (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）
+1. `mise run stg:deploy`（binary〔`admin backup` 入〕と `bin/kakeiboot-backup.sh` を配布。ssh経由）
+2. backup先dir作成（運用機上）: `ssh gt430 'mkdir -p <deploy_root>/backups/{stg,prod}'`（`{stg,prod}` はremote shellのbrace expansion。script側でも `$DEST` を作るが、明示手順として残す）
+3. unit配置（user config dirはdeploy配布対象外のため手動）: `scp scripts/systemd/kakeiboot-backup@.service scripts/systemd/kakeiboot-backup@.timer gt430:.config/systemd/user/ && ssh gt430 systemctl --user daemon-reload`
+4. timer有効化: `ssh gt430 systemctl --user enable --now kakeiboot-backup@stg.timer`（ssh非対話実行で `systemctl --user` がXDG_RUNTIME_DIR不在により失敗する環境では `ssh gt430 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user ...'` の形式を使う）
+5. 初回実行と確認: `mise run stg:backup` を実行し、(1) journal（`ssh gt430 journalctl --user -u kakeiboot-backup@stg`）に各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在（`mise run stg:backup-status`） (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）
 
 なおweb設定画面のデータtabの書き出し・取り込み（`spec_mcp-tools.md` §12）は**利用者向けのデータ持ち出し・復帰**であり、運用backup（認証系・全ledgerを含む全体像・世代管理）の代替にはならない。
 

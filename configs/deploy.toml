@@ -1,8 +1,14 @@
-# deploy先の正本（mise.toml [vars] _.file から読取）。実pathはこのfileにのみ置く
-# （mise.toml・docs・CLAUDE.mdは {{vars.deploy_root}} / key参照で書く）。
-# フラットkeyのみ（nest tableはmiseがparse error）。末尾スラッシュなし。
+# deploy先の正本（scripts/deploy/kakeiboot_ops.py が読取・miseタスクはscript呼び出しのみ）。
+# 実pathはこのfileにのみ置く（mise.toml・docs・CLAUDE.mdは <deploy_root> 表記 / key参照で書く）。
+# フラットkeyのみ・未知keyはscriptがerror（typo検出）。末尾スラッシュなし。
 # device差分は configs/deploy.local.toml で上書き（後勝ち・gitignore管理・commitしない）。
 deploy_root = "/srv/opt/tomo/run/app/tool/kakeiboot"
 # 運用機（stg/prod runtime dir の実在host・2026-10-28 user提示）。
-# 現時点のmiseタスクでの使用箇所はなし（docs表記・将来のssh経由操作のための置き場所）。
+# transport = "ssh" のときのssh接続先host alias（~/.ssh/configのentry名。
+# user・port・IdentityFileはssh configが正本・scriptは指定しない）。
+# transport = "local" のときは使用しない（運用機の記録として記載可）。
 runtime_host = "gt430"
+# 全運用操作の実行経路。"ssh" = runtime_hostへのssh経由（BatchMode・ConnectTimeout固定付与）
+# / "local" = 作業機上で直接実行（local検証環境・deploy.local.tomlで上書きする運用）。
+# 省略はerror（silent defaultで中途失敗する事故より起動時の明示errorを優先）。
+transport = "ssh"

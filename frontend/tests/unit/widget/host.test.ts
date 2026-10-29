@@ -79,9 +79,22 @@ describe('theme', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/widget/style.css'), 'utf8')
     for (const theme of ['light', 'dark']) {
       const block = css.split(`[data-theme='${theme}']`)[1]?.split('}')[0] ?? ''
-      for (const v of ['--bb-bg', '--bb-fg', '--bb-muted', '--bb-accent', '--bb-warn', '--bb-danger', '--bb-series-1']) {
+      // TASK-116: the series palette joins the web tokens (--series-1..7 +
+      // --series-rest, both themes) and the old --bb-series-* is gone
+      const vars = [
+        '--bb-bg',
+        '--bb-fg',
+        '--bb-muted',
+        '--bb-accent',
+        '--bb-warn',
+        '--bb-danger',
+        ...Array.from({ length: 7 }, (_, i) => `--series-${i + 1}`),
+        '--series-rest',
+      ]
+      for (const v of vars) {
         expect(block, `${theme} ${v}`).toContain(`${v}:`)
       }
     }
+    expect(css, 'the old widget palette is retired (definitions and references)').not.toMatch(/--bb-series-/)
   })
 })

@@ -1489,7 +1489,21 @@ a.sub-row:hover { background: var(--bb-hover); }
 .daily-bars { display: grid; align-items: end; gap: 2px; height: 110px; }
 .daily-col { display: flex; align-items: flex-end; height: 100%; border-radius: 3px; }
 .daily-col:hover { background: var(--bb-hover); }
-.daily-bar { display: block; width: 100%; border-radius: 3px 3px 1px 1px; background: var(--bb-accent); }
+/* TASK-116 (design §3-2): the daily/weekly/monthly bar became a stacked
+   container — the same segment grammar as the trend's .bar-stack (bottom =
+   first series under column-reverse, min-height 2px on >0 segments, 1px
+   surface border between neighbors), sized for this compact card: no y axis
+   or value labels. When the min heights overshoot a short bar, overflow
+   hidden clips from the TOP so the top-ranked series survives at the base */
+.daily-bar {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  border-radius: 3px 3px 1px 1px;
+  overflow: hidden;
+}
+.daily-seg { display: block; width: 100%; min-height: 2px; }
+.daily-seg + .daily-seg { border-top: 1px solid var(--bb-surface); }
 
 .day-group + .day-group { margin-top: 0.75rem; }
 /* the day-group heading rides a 28px line (TASK-75 §6-4) over the one-line
