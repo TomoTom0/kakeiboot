@@ -7,6 +7,7 @@
 // axis; this file pins the thinning and format rules on the helpers.
 import { describe, expect, it } from 'vitest'
 import { axisMonthLabels, axisTickIndices, shiftMonth } from '@/web/composables/period'
+import { compactYen } from '@/shared/components/charts/types'
 
 const months = (start: string, n: number): string[] =>
   Array.from({ length: n }, (_, i) => shiftMonth(start, i))
@@ -95,5 +96,28 @@ describe('axisMonthLabels', () => {
         { key: '2026-12', label: '12月' },
       ],
     })
+  })
+})
+
+// TASK-122 (PR#3 review): the 千 band rounds at the hundred-yen step so the
+// axis keeps one decimal — the same precision the 万 band has. Moving the
+// / 10 inside Math.round collapsed 1,500 to "2千" and mislabeled the
+// niceMax 5,000 midpoint tick ("3千" instead of "2.5千").
+describe('compactYen', () => {
+  it('[covers:web-browse.trend-y-axis] 千帯は百円単位の丸めで小数1桁を保持（1500→1.5千・2500→2.5千）', () => {
+    expect(compactYen(1500)).toBe('1.5千')
+    expect(compactYen(2500)).toBe('2.5千')
+    // the niceMax(5000) window renders [5千, 2.5千, 0]
+    expect(compactYen(5000)).toBe('5千')
+    // hundred-yen rounding: 1,504 -> 15.04 -> round -> 1.5千
+    expect(compactYen(1504)).toBe('1.5千')
+    expect(compactYen(1490)).toBe('1.5千')
+  })
+
+  it('[covers:web-browse.trend-y-axis] 帯境界: 1000→1千・万帯は小数1桁・千未満はそのまま・0→0', () => {
+    expect(compactYen(1000)).toBe('1千')
+    expect(compactYen(948)).toBe('948')
+    expect(compactYen(12000)).toBe('1.2万')
+    expect(compactYen(0)).toBe('0')
   })
 })

@@ -46,6 +46,6 @@ export function niceMax(max: number): number {
 export function compactYen(v: number): string {
   const a = Math.abs(v)
   if (a >= 10000) return `${Math.round((v / 10000) * 10) / 10}万`
-  if (a >= 1000) return `${Math.round((v / 100) / 10)}千`
+  if (a >= 1000) return `${Math.round(v / 100) / 10}千`
   return String(v)
 }

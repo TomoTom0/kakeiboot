@@ -100,7 +100,7 @@
 | `frontend/tests/unit/web/usage-pages.test.ts` | 単体 | 使い方ページ群 [TASK-37] |
 | `frontend/tests/unit/web/data-pages.test.ts` | 単体 | カテゴリ・店管理 [TASK-40]・レシート（編集・削除・画像・明細リンク [TASK-74]・絞り込み [TASK-44] [TASK-76]）・XSS |
 | `frontend/tests/unit/web/view-pages.test.ts` | 単体 | 閲覧画面（カテゴリ/店一覧の期間ヘッダ+積み上げ推移〔TASK-95 で語tabなし〕+全量ランキング・5軸統一の /axes/* 軸詳細 [TASK-89]・旧詳細URLの / redirect・行1行化 [TASK-75]・絞り込み popover [TASK-76]・ラベル絞り込み [TASK-17] [TASK-44]・レシート一覧 [TASK-57]・日別/週別/月別棒の系列積み上げと limit=5 [TASK-116]） |
-| `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100] |
+| `frontend/tests/unit/web/trend-axis.test.ts` | 単体 | axisMonthLabels・axisTickIndices ヘルパ（軸ラベルの間引きと書式） [TASK-42] [TASK-100]・compactYen（千帯は百円step丸めで小数1桁保持〔1500→1.5千〕） [TASK-122] |
 | `frontend/tests/unit/web/trend-window.test.ts` | 単体 | トレンド窓移動 [TASK-104]（useTrendWindow composable: 窓計算〔month=trendQuery(5)・year=period.range 無後退〕・offset 操作・refresh 冪等ガード・ledger 未確定 fetch なし・stacked 組立集約・全0窓の過去側打ち切り・TrendWindow 前次button・窓移動は trend API のみ再fetch）・cacheヒット経路/prefetch/flush・slide連結とトリム〔prev=[新,旧]・next=[旧,新]〕・連打の即時トリム→再開始・focus変更の同tick trim [TASK-115] |
 | `frontend/tests/unit/web/series-color.test.ts` | 単体 | 系列色の決定的割当 seriesColor（number は (id-1) mod 7 循環 slot・null=--series-rest・string は FNV-1a % 7・label 軸は管理色固定表 red〜purple と範囲外 fallback・追加不変） [TASK-105]（TASK-116 で shared/lib 移設・期待値不変） |
 | `frontend/tests/unit/web/period-days.test.ts` | 単体 | periodDays ヘルパ（1日あたりの除数） [TASK-66] |
