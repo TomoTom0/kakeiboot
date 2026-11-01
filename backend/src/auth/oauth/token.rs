@@ -243,7 +243,7 @@ async fn code_exchange(
     };
 
     // (used_at, expires_at, client_id, redirect_uri, resource, code_challenge, scope, user_id, grant_id)
-    let row: Option<CodeRow> = sqlx::query_as(
+    let row: Option<CodeRow> = match sqlx::query_as(
         "SELECT used_at, expires_at, client_id, redirect_uri, resource, code_challenge, scope,
                 user_id, grant_id
          FROM oauth_auth_codes WHERE code_hash = ?",
@@ -251,7 +251,13 @@ async fn code_exchange(
     .bind(&code_hash)
     .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(None);
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "auth code lookup failed");
+            None
+        }
+    };
     let Some((
         used_at,
         expires_at,
@@ -324,12 +330,19 @@ async fn code_exchange(
         None => code_scope.clone(),
     };
     // user must still be enabled
-    let enabled: Option<i64> =
-        sqlx::query_scalar::<_, i64>("SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .unwrap_or(None);
+    let enabled: Option<i64> = match sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "auth code user lookup failed");
+            None
+        }
+    };
     if enabled.is_none() {
         consume_and_reject(tx, &code_hash, now).await;
         return Outcome::Rejected(OAuthError::invalid_grant());
