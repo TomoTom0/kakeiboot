@@ -1,23 +1,29 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { formatYen } from '@/shared/format'
+import { allocateStack, type AllocatedSegment } from '@/shared/lib/stackedBars'
+import BarSegs from './BarSegs.vue'
+import { type ChartDatum, compactYen, niceMax } from './types'
+
 // Vertical bars for monthly totals (spec §10 monthly_trend / overview 月次推移).
 //
 // TASK-116 (design: tmp/tasks/tm-116/design_breakdown-expansion.md §3-3-2):
 // a bar whose datum carries `segments` (the stacked composition off
 // `_meta.trend_matrix`, assembled by the shared stackedOf) draws as a
-// segment rect column — the bottom rect is the FIRST (top-ranked) series,
-// the same correspondence as the web .bar-stack's column-reverse base.
-// Value-0 segments are omitted upstream; a >0 segment keeps a 2-viewBox-unit
-// minimum height and neighbours sit exactly 1 unit apart (a background gap).
-// Each bar clips through its own rounded clipPath (rx=2), so a min-height
-// overshoot cuts from the TOP — the top-ranked series survives at the base.
-// The bar math itself never changes (height = value / niceMax, 3 y-ticks,
-// the first/last month labels, the per-bar year-month + amount title).
-// A segment-less bar (no matrix / a bucket-count mismatch) keeps the single
-// rect, now painted var(--series-1) — the unified palette's first series.
-import { computed } from 'vue'
-import { formatYen } from '@/shared/format'
-import { type ChartDatum, compactYen, niceMax } from './types'
-
+// segment column — the bottom shape is the FIRST (top-ranked) series, the
+// same correspondence as the web .bar-stack's column-reverse base.
+//
+// TASK-123 (design: tmp/tasks/tm-123/design_breakdown-visual.md v5 §4-4/
+// §4-5): the segment grammar is the outline stroke + the allocation rules
+// (the stroke-inclusive outer sizes tile the bar's height, the topmost
+// segment alone is the top-rounded cap path). TASK-129 (design §4-3): the
+// outline drawing itself moved into the ONE common renderer (BarSegs) with
+// BarHChart and ShareBar — this chart keeps the bar math, the axis and the
+// titles. The bar math never changes here (height = value / niceMax, 3
+// y-ticks, the first/last month labels, the per-bar year-month + amount
+// title; the report-level scale source switch is TASK-126's). A
+// segment-less bar (no matrix / a bucket-count mismatch) keeps the single
+// shape, painted var(--series-1), through the same renderer.
 const props = defineProps<{ data: ChartDatum[] }>()
 
 const W = 320
@@ -26,56 +32,43 @@ const LEFT = 36
 const BOTTOM = 20
 const TOP = 8
 const plotH = H - BOTTOM - TOP
-/** a >0 segment's minimum height (viewBox units) and the inter-segment gap */
-const SEG_MIN = 2
-const SEG_GAP = 1
-
-// unique per instance: the clip ids stay distinct when several charts mount
-const uid = `barv-${Math.random().toString(36).slice(2, 8)}`
 
 const max = computed(() => niceMax(Math.max(0, ...props.data.map((d) => d.value))))
 const slot = computed(() => (W - LEFT) / Math.max(1, props.data.length))
 
-interface SegView {
-  y: number
-  h: number
-  color: string
-  title: string
-}
 const bars = computed(() =>
   props.data.map((d, i) => {
     const h = (Math.max(0, d.value) / max.value) * plotH
     const x = LEFT + i * slot.value + slot.value * 0.15
     const w = slot.value * 0.7
-    const y = TOP + plotH - h
-    const segs: SegView[] = []
+    let segs: AllocatedSegment[] = []
+    let titles: string[] = []
     if (d.segments && d.segments.length > 0) {
       // the composition ratios close over the segment set itself (the
-      // stackedOf assembly: top-5 + residual = the bucket total) — the real
+      // stackedOf assembly: top-3 + residual = the bucket total) — the real
       // payloads carry rows and matrix under the same conditions, so this
       // equals the row value; a ratio read off d.value would instead break
       // wherever the two drift apart
-      const segTotal = d.segments.reduce((a, s) => a + Math.max(0, s.value), 0)
-      if (segTotal > 0) {
-        // stack from the bar's base upward: cursor walks the bottom edge
-        let cursor = TOP + plotH
-        for (const s of d.segments) {
-          if (s.value <= 0) continue
-          const sh = Math.max((s.value / segTotal) * h, SEG_MIN)
-          const sy = cursor - sh
-          const pct = Math.round((s.value / segTotal) * 100)
-          segs.push({ y: sy, h: sh, color: s.color, title: `${s.label} ${formatYen(s.value)}（${pct}%）` })
-          cursor = sy - SEG_GAP
-        }
+      const allocated = allocateStack(d.segments, h)
+      if (allocated.length > 0) {
+        const segTotal = allocated.reduce((a, s) => a + s.value, 0)
+        segs = allocated
+        titles = allocated.map((s) => `${s.label} ${formatYen(s.value)}（${segTotal > 0 ? Math.round((s.value / segTotal) * 100) : 0}%）`)
       }
+    }
+    if (segs.length === 0) {
+      // the fallback single bar: the SAME grammar through the renderer (the
+      // old standalone rx=2 rect is gone), full height, the first series
+      // color; its hover title rides the bar's own <title> below
+      segs = allocateStack([{ label: d.label, value: Math.max(0, d.value), color: 'var(--series-1)' }], h)
     }
     return {
       key: i,
       x,
       w,
-      y,
       h,
       segs,
+      titles,
       label: d.label,
       value: d.value,
       title: `${d.label}: ${formatYen(d.value)}`,
@@ -115,41 +108,14 @@ const ticks = computed(() => [0, 0.5, 1].map((t) => ({ y: TOP + plotH - t * plot
       :key="b.key"
     >
       <title>{{ b.title }}</title>
-      <!-- the per-bar rounded clip: segments and the fallback rect share it,
-           so an overshoot cuts from the top while the base stays rounded -->
-      <clipPath :id="`${uid}-${i}`">
-        <rect
-          :x="b.x"
-          :y="b.y"
-          :width="b.w"
-          :height="b.h"
-          rx="2"
-        />
-      </clipPath>
-      <template v-if="b.segs.length > 0">
-        <rect
-          v-for="(s, j) in b.segs"
-          :key="j"
-          class="bb-chart__bar"
-          :x="b.x"
-          :y="s.y"
-          :width="b.w"
-          :height="s.h"
-          :fill="s.color"
-          :data-value="b.value"
-          :clip-path="`url(#${uid}-${i})`"
-        ><title>{{ s.title }}</title></rect>
-      </template>
-      <rect
-        v-else
-        class="bb-chart__bar"
-        :x="b.x"
-        :y="b.y"
-        :width="b.w"
-        :height="b.h"
-        rx="2"
-        fill="var(--series-1)"
-        :data-value="b.value"
+      <BarSegs
+        :segs="b.segs"
+        :length="b.h"
+        dir="v"
+        :size="b.w"
+        :base="TOP + plotH"
+        :cross="b.x"
+        :titles="b.titles"
       />
       <text
         v-if="i === 0"

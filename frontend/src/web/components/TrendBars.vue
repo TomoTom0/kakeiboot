@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { formatYen } from '../composables/format'
 import { axisMonthLabels, axisTickIndices, dayLabel, monthLabel, shiftDate, shortDate } from '../composables/period'
 import { bucketSpan, type TrendGranularity } from '../composables/trend'
@@ -7,7 +7,7 @@ import { compactYen, niceMax } from '@/shared/components/charts/types'
 // TASK-116 (design §3-0): the stacked types moved to shared/lib (stackedOf's
 // contract); re-exported here so the existing importers (TrendWindow.vue,
 // trendWindow.ts, trend-window.test.ts) keep compiling unchanged
-import type { StackedBar, StackedSegment } from '@/shared/lib/stackedBars'
+import { allocateStack, type AllocatedSegment, type StackedBar, type StackedSegment } from '@/shared/lib/stackedBars'
 export type { StackedBar, StackedSegment }
 
 // Bars keyed by month ("YYYY-MM"), week start ("YYYY-MM-DD") or day, picked
@@ -69,15 +69,68 @@ interface BarView {
   key: string
   title: string
   value: number
+  /** the zero-bucket fallback .bar's % height (its 2% floor stays — the
+   *  empty placeholder is not a data bar) */
   height: number
+  /** the stack's own % height — the RAW value ratio, unrounded (TASK-123
+   *  §4-5: no min floor; the allocation always fits by construction) */
+  stackHeight: number
   current: boolean
-  segments: { label: string; value: number; color: string; height: number; pct: number | null }[]
+  segments: AllocatedSegmentView[]
+  /** the top segment's corner radius: the cap arithmetic min(2px, width/4)
+   *  (§4-3) off the measured bar width */
+  radius: number
+}
+
+interface AllocatedSegmentView {
+  label: string
+  value: number
+  color: string
+  /** the drawn height in px (allocateStack's size — the 1px outline
+   *  consumes inside it, border-box) */
+  size: number
+  /** the §4-5 rule-F flag: false drops the outline (fill only) */
+  outline: boolean
+  /** the visual TOP segment (DOM last under column-reverse) — the only one
+   *  that rounds (the data end; §4-3) */
+  top: boolean
+  // the hover title's share「名称 〜円（n%）」(TASK-105): null on a
+  // zero-total bar (no 0/0)
+  pct: number | null
 }
 
 /** the bar heights' denominator: a nice axis bound (1, 2, 5 x 10^n), so the
  *  y-ticks and the gridlines land on round numbers. niceMax(0) = 1 keeps an
  *  all-zero window drawable (the widget BarVChart behaves the same). */
 const nice = computed(() => niceMax(Math.max(...props.stacked.map((b) => b.total), 0)))
+
+// TASK-123 (design §4-5 rule E): the segment sizes are explicit px values
+// off the shared allocateStack, which needs the bar's real px length — the
+// bars track's content height (below the 1rem label headroom) and one bar's
+// width (min(2px, width/4) for the corner cap; the CSS max-width is 34px,
+// mirrored here). Measured at mount / on resize; jsdom keeps 0 and the
+// segments render at size 0 with their titles and colors until then.
+const barsEl = ref<HTMLElement | null>(null)
+const trackH = ref(0)
+const segW = ref(0)
+let ro: ResizeObserver | null = null
+function measure(): void {
+  const el = barsEl.value
+  const col = el?.querySelector('.bar-col') ?? null
+  if (!col) return
+  trackH.value = col.clientHeight - parseFloat(getComputedStyle(col).paddingTop || '0')
+  segW.value = Math.min(col.clientWidth, 34)
+}
+onMounted(() => {
+  measure()
+  if (typeof ResizeObserver === 'undefined') return
+  ro = new ResizeObserver(measure)
+  if (barsEl.value) ro.observe(barsEl.value)
+})
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  ro = null
+})
 
 const bars = computed<BarView[]>(() => {
   const raw = props.stacked.map((b) => {
@@ -95,23 +148,29 @@ const bars = computed<BarView[]>(() => {
   })
   return raw.map((b) => {
     const total = b.value
-    const height = Math.max(Math.round((b.value / nice.value) * 100), 2)
-    const segments = b.segments.map((s) => ({
-      label: s.label,
-      value: s.value,
-      color: s.color,
-      height: total > 0 ? Math.max((s.value / total) * 100, s.value > 0 ? 1 : 0) : 0,
-      // the hover title's share「名称 〜円（n%）」(TASK-105): null on a
-      // zero-total bar (no 0/0)
-      pct: total > 0 ? Math.round((s.value / total) * 100) : null,
-    }))
+    const ratio = nice.value > 0 ? total / nice.value : 0
+    // the stack's px length (raw ratio — the old 2% min floor is gone);
+    // allocateStack always closes the sizes over it exactly (§4-5 rule A)
+    const length = ratio * trackH.value
+    const allocated: AllocatedSegment[] = total > 0 ? allocateStack(b.segments, length) : []
+    const segTotal = allocated.reduce((a, s) => a + s.value, 0)
     return {
       key: b.key,
       title: b.title,
-      value: b.value,
-      height,
+      value: total,
+      height: Math.max(Math.round(ratio * 100), 2),
+      stackHeight: ratio * 100,
       current: b.key === props.current,
-      segments,
+      radius: Math.min(2, segW.value / 4),
+      segments: allocated.map((s, i) => ({
+        label: s.label,
+        value: s.value,
+        color: s.color,
+        size: s.size,
+        outline: s.outline,
+        top: i === allocated.length - 1,
+        pct: segTotal > 0 ? Math.round((s.value / segTotal) * 100) : null,
+      })),
     }
   })
 })
@@ -219,6 +278,7 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
           style="top: calc(50% + 0.5rem)"
         />
         <div
+          ref="barsEl"
           class="bars"
           :class="{ 'is-sliding': sliding, 'no-anim': noAnim }"
           :style="trackStyle"
@@ -240,17 +300,27 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
               v-if="!dense || tickIdx.has(i)"
               class="bar-val"
             >{{ valLabel(b.value) }}</span>
+            <!-- TASK-123: the segments carry explicit px heights off the
+                 shared allocateStack (the sizes close over the stack's own
+                 length exactly — no flex shrink, no clip), the full-perimeter
+                 1px outline (border-box inner consumption; rule F drops it
+                 inline) and the top segment's cap radius -->
             <span
               v-if="b.segments.length > 0"
               class="bar-stack"
-              :style="{ height: `${b.height}%` }"
+              :style="{ height: `${b.stackHeight}%` }"
               aria-hidden="true"
             >
               <span
                 v-for="(s, i2) in b.segments"
                 :key="i2"
                 class="bar-seg"
-                :style="{ height: `${s.height}%`, background: s.color }"
+                :style="{
+                  height: `${s.size}px`,
+                  background: s.color,
+                  ...(s.outline ? {} : { border: 'none' }),
+                  ...(s.top ? { borderRadius: `${b.radius}px ${b.radius}px 0 0` } : {}),
+                }"
                 :title="`${s.label} ${formatYen(s.value)}${s.pct !== null ? `（${s.pct}%）` : ''}`"
               />
             </span>

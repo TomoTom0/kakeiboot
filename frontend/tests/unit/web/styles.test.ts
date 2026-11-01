@@ -322,12 +322,14 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
 
 describe('ranked row single line (TASK-75 §6-4)', () => {
   // TASK-105 (web-layout.ranked-row-single-line revised, design §4-2): the
-  // grid gains the leading swatch track (12px minmax(0,1fr) auto auto 12px),
-  // the gradient's first stop becomes var(--rank-color, var(--bb-accent))
-  // （未設定行は accent へフォールバック）and the .ranked-swatch rule
-  // appears — the "dashboard visual (TASK-105)" block at the bottom of this
-  // file carries the swatch rule and the fallback as their own checks.
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列1行44px（dot・diff 列なし）・下端2pxの系列色 linear-gradient（accentフォールバック付き）・.meter 規則は無い', () => {
+  // grid gains the leading swatch track (12px minmax(0,1fr) auto auto 12px)
+  // and the .ranked-swatch rule appears. TASK-129 (design §4-2/§3-5 e1): the
+  // bottom 2px gradient is GONE — the row's proportional bar is a 6px DOM
+  // bar inside an absolutely-positioned bottom track (.ranked-bar-track,
+  // spanning the row's full width including the paddings the old
+  // background-origin: border-box used to cover). The bar grammar rules
+  // (.row-bar/.row-seg) live in the TASK-129 block below.
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列1行44px（dot・diff列なし）・下端は絶対配置trackで gradient 規則は廃止・.meter 規則は無い', () => {
     const rows = rulesFor('.ranked-row')
     expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
     expect(
@@ -338,23 +340,33 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
           decl(r.body, 'min-height') === '44px',
       ),
     ).toBe(true)
-    // the share bar rides the row's bottom edge as a 2px gradient (no meter);
-    // origin border-box spans the padding too so the bar reaches the row's
-    // rounded ends (review L1 — padding-box 100% stops short of the sides)
+    // TASK-129: the absolute track needs the row as its containing block
+    expect(rows.some((r) => decl(r.body, 'position') === 'relative')).toBe(true)
+    // the gradient era is fully gone: no background-image on the row, no
+    // --rank-fill token anywhere (the bar is a DOM element now)
+    for (const r of rows) {
+      expect(decl(r.body, 'background-image'), 'no ranked-row gradient').toBeUndefined()
+      expect(r.body, '.ranked-row must not reference --rank-fill').not.toContain('--rank-fill')
+    }
+    expect(css).not.toMatch(/--rank-fill/)
+    // the absolutely-positioned bottom track (full row width incl. padding)
+    const track = rulesFor('.ranked-bar-track')
+    expect(track.length, '.ranked-bar-track rules').toBeGreaterThan(0)
     expect(
-      rows.some(
+      track.some(
         (r) =>
-          /linear-gradient/.test(decl(r.body, 'background-image') ?? '') &&
-          decl(r.body, 'background-origin') === 'border-box' &&
-          decl(r.body, 'background-size') === '100% 2px' &&
-          decl(r.body, 'background-position') === 'bottom',
+          decl(r.body, 'position') === 'absolute' &&
+          decl(r.body, 'bottom') === '0' &&
+          decl(r.body, 'left') === '0' &&
+          decl(r.body, 'right') === '0' &&
+          decl(r.body, 'height') === '6px',
       ),
     ).toBe(true)
     // the compare/diff column is gone with TASK-93 (no .ranked-diff rule at
     // all); the standalone meter element is gone from the ranked list too
     expect(rulesFor('.ranked-diff')).toHaveLength(0)
     expect(css).not.toMatch(/\.meter/)
-    // the link hover keeps the gradient: background-color, never the shorthand
+    // the link hover keeps painting background-color, never the shorthand
     for (const r of rulesFor('a.ranked-row.is-link:hover')) {
       expect(decl(r.body, 'background'), 'hover background shorthand').toBeUndefined()
     }
@@ -415,10 +427,16 @@ describe('shell: sidebar overlay at every width (TASK-33 real-device review)', (
     // the fold mechanism is gone entirely
     expect(css).not.toMatch(/sidebar-collapsed/)
     // TASK-89: the scrim shows at every width (the desktop overlay closes
-    // on an outside tap too) — display:none at rest, block under .drawer-open
-    // at the top level, no 899px-only rule
-    expect(rulesFor('.scrim', top).some((r) => decl(r.body, 'display') === 'none')).toBe(true)
-    expect(rulesFor('.drawer-open .scrim', top).some((r) => decl(r.body, 'display') === 'block')).toBe(true)
+    // on an outside tap too); TASK-146 §3 #17 turned the display flip into
+    // an opacity fade — transparent + hit-through at rest, visible under
+    // .drawer-open at the top level, no 899px-only rule
+    expect(rulesFor('.scrim', top).some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
+    expect(rulesFor('.scrim', top).some((r) => /^opacity/.test(decl(r.body, 'transition') ?? 'x'))).toBe(true)
+    expect(rulesFor('.drawer-open .scrim', top).some((r) => decl(r.body, 'opacity') === '1')).toBe(true)
+    // the always-mounted scrim must stay inert at rest (and only react to
+    // pointer events while the drawer is open)
+    expect(rulesFor('.scrim', top).some((r) => decl(r.body, 'pointer-events') === 'none')).toBe(true)
+    expect(rulesFor('.drawer-open .scrim', top).some((r) => decl(r.body, 'pointer-events') === 'auto')).toBe(true)
     // reduced motion disables the slide
     const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
     expect(rulesFor('.sidebar', rm).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
@@ -716,7 +734,7 @@ describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)
     expect(css).not.toMatch(/--c-rest\b/)
   })
 
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)・行barのgradientは --rank-color フォールバック付き', () => {
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)', () => {
     const rows = rulesFor('.ranked-row')
     expect(
       rows.some(
@@ -729,12 +747,287 @@ describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)
     const sw = rulesFor('.ranked-swatch')
     expect(sw.length, '.ranked-swatch rules').toBeGreaterThan(0)
     expect(sw.some((r) => decl(r.body, 'border-radius') === '50%' && /var\(--rank-color\)/.test(decl(r.body, 'background') ?? ''))).toBe(true)
-    // the share-bar gradient keeps the accent fallback so rows without
-    // --rank-color (WeekRows) never lose their bar
+    // TASK-129: the share-bar gradient (and its accent fallback) is gone —
+    // the row's bar is a DOM .row-seg whose background comes from the
+    // component's --rank-color; the swatch rule above is the CSS-side
+    // consumer of the same token. No surface-scoped bar grammar overrides
+    // exist (the .row-bar/.row-seg rules are shared, checked below)
+    expect(rulesFor('.ranked-row .row-bar')).toHaveLength(0)
+    expect(rulesFor('.week-row .row-bar')).toHaveLength(0)
+  })
+})
+
+// --- TASK-123 stacked-breakdown visual (design: tmp/tasks/tm-123/
+// design_breakdown-visual.md v5 §4-2/§4-3/§4-4/§4-7): the palette values,
+// the --seg-outline token and the full-perimeter segment border, the corner
+// rules (no mid-stack rounding, top-only cap radius) and the week row's DOM
+// stacked bar. Written test-first against the not-yet-revised stylesheet. ---
+
+describe('stacked breakdown visual (TASK-123, static checks)', () => {
+  /** The joined declaration bodies of :root (light) and the dark override. */
+  const rootBodies = () => {
+    const light = rulesFor(':root', topLevel())
+      .map((r) => r.body)
+      .join('\n')
+    const darkMedia = blockAfter(/@media\s*\(prefers-color-scheme:\s*dark\)/)
+    const dark = rules(darkMedia ?? '')
+      .filter((r) => r.selectors.some((s) => s.startsWith(':root')))
+      .map((r) => r.body)
+      .join('\n')
+    return { light, dark }
+  }
+  /** A custom-property value out of a declaration body (lowercased). */
+  const token = (body: string, name: string): string | undefined =>
+    body
+      .match(new RegExp(`${name}\\s*:\\s*([^;]+)`, 'm'))?.[1]
+      ?.trim()
+      .toLowerCase()
+
+  // §4-2's validated candidate values — the permanent pin of the swapped
+  // palette (seriesColor only returns variable refs; these are the values
+  // the variables must resolve to, light and dark, web side)
+  it('[covers:web-common.series-palette-values] :root の --series-1..7 実値は TASK-123 §4-2 候補値（light/dark・rest は従来値のまま）', () => {
+    const { light, dark } = rootBodies()
+    expect(light, 'light :root block').not.toBe('')
+    expect(dark, 'dark :root block').not.toBe('')
+    for (const [slot, [lightHex, darkHex]] of [
+      ['#803a0d', '#934149'], // series-1
+      ['#c4b45d', '#c6824c'], // series-2
+      ['#506204', '#7c6c01'], // series-3
+      ['#44bead', '#279a7a'], // series-4
+      ['#0a6390', '#2f9ce1'], // series-5
+      ['#a591fd', '#5d64aa'], // series-6
+      ['#a02d5c', '#b57cb9'], // series-7
+    ].entries()) {
+      expect(token(light, `--series-${slot + 1}`), `light --series-${slot + 1}`).toBe(lightHex)
+      expect(token(dark, `--series-${slot + 1}`), `dark --series-${slot + 1}`).toBe(darkHex)
+    }
+    // the residual keeps the current rest tone (the retiring grey, §4-2)
+    expect(token(light, '--series-rest')).toBe('#8f9a94')
+    expect(token(dark, '--series-rest')).toBe('#5f6b65')
+  })
+
+  it('[covers:web-common.stack-segment-outline] --seg-outline（light 黒40% / dark 白40%）と .bar-seg/.daily-seg/.row-seg の全周 1px border・旧 border-top 境界線と min-height は廃止', () => {
+    const { light, dark } = rootBodies()
+    // §4-4 o3: the outline token is the half-transparent ink, one token for
+    // every fill (the compose darkens light fills / lightens dark fills)
+    expect(token(light, '--seg-outline')).toBe('rgb(0 0 0 / 0.4)')
+    expect(token(dark, '--seg-outline')).toBe('rgb(255 255 255 / 0.4)')
+    // every stack site's segments carry the full-perimeter 1px outline.
+    // TASK-129: the week row's .week-seg became the shared .row-seg (the
+    // ranked rows ride the same rule — one grammar, no per-site forks)
+    for (const sel of ['.bar-seg', '.daily-seg', '.row-seg']) {
+      expect(
+        rulesFor(sel).some((r) => decl(r.body, 'border') === '1px solid var(--seg-outline)'),
+        `${sel} border rule`,
+      ).toBe(true)
+    }
+    // the old separation means are gone: the 1px surface border-top between
+    // neighbors (web) and the min-height floors (the §4-5 allocation feeds
+    // explicit sizes instead — rule E)
+    expect(rulesFor('.bar-seg + .bar-seg')).toHaveLength(0)
+    expect(rulesFor('.daily-seg + .daily-seg')).toHaveLength(0)
+    for (const sel of ['.bar-seg', '.daily-seg']) {
+      expect(rulesFor(sel).some((r) => decl(r.body, 'min-height') !== undefined), `${sel} min-height`).toBe(false)
+    }
+  })
+
+  it('[covers:web-common.stack-corner-rules] .bar-seg:first-child の中段角丸規則は廃止・.bar-stack/.daily-bar は角もclipも持たず（角は最上段セグメントのJS計算cap radiusのみ）', () => {
+    // §2-1's main culprit: the :first-child radius rounded the VISUAL
+    // bottom segment's top corners (column-reverse), rounding mid-stack
+    expect(rulesFor('.bar-seg:first-child')).toHaveLength(0)
+    expect(css).not.toMatch(/\.bar-seg:first-child/)
+    // §4-3 (REVIEW-5 medium-2): the container carries NO radius and no
+    // clip — a static 2px container radius + overflow:hidden owned the
+    // painted outline below 8px widths (a 4px bar pinned back to the
+    // full-semicircle pill, defeating the JS cap), so the corner lives
+    // ONLY on the top segment's inline cap radius (min(2px, width/4)),
+    // whose border follows it. Rule D already removed the clip role (the
+    // allocation always fits), so no rule may set either property
+    for (const sel of ['.bar-stack', '.daily-bar']) {
+      const rs = rulesFor(sel)
+      expect(rs.length, `${sel} rules`).toBeGreaterThan(0)
+      for (const r of rs) {
+        expect(decl(r.body, 'border-radius') ?? '', `${sel} must not set border-radius`).toBe('')
+        expect(decl(r.body, 'overflow') ?? '', `${sel} must not set overflow`).toBe('')
+      }
+    }
+  })
+
+  it('[covers:web-home.week-row-stack-bar] 週行は gradient を持たず bar は共通 .row-bar（flex row・高さ6px）+ .row-seg（旧 .week-bar/.week-seg 規則は廃止）', () => {
+    // §4-7 + TASK-129: no rule may paint .week-row with a gradient (the
+    // composition lives in the shared .row-bar's segment elements)
+    for (const r of rulesFor('.week-row')) {
+      expect(r.body, `.week-row rule must not paint a gradient: ${r.selectors.join(',')}`).not.toMatch(/linear-gradient/)
+    }
+    expect(rulesFor('.week-row').some((r) => decl(r.body, 'background-image') !== undefined)).toBe(false)
+    // the ranked row is gradient-free too now (TASK-129): see the
+    // ranked-row block above — this block owns the shared bar grammar
+    // the DOM bar: a flex row of segments at the fixed readable height
+    // (TASK-129: 6px exactly — the ranked-row bar shares the component, so
+    // the TASK-123 "4..8px implementation freedom" collapses to one value)
+    const bar = rulesFor('.row-bar')
+    expect(bar.length, '.row-bar rules').toBeGreaterThan(0)
+    expect(bar.some((r) => decl(r.body, 'display') === 'flex')).toBe(true)
+    const heights = bar
+      .map((r) => Number(/^([\d.]+)px$/.exec(decl(r.body, 'height') ?? '')?.[1] ?? NaN))
+      .filter((n) => !Number.isNaN(n))
+    expect(heights.length, '.row-bar height declarations').toBeGreaterThan(0)
+    for (const h of heights) expect(h, 'the shared bar height is the 6px grammar').toBe(6)
+    // the segments: full height, the shared outline, and the data-end cap
+    const seg = rulesFor('.row-seg')
+    expect(seg.length, '.row-seg rules').toBeGreaterThan(0)
+    expect(seg.some((r) => decl(r.body, 'height') === '100%')).toBe(true)
+    expect(seg.some((r) => decl(r.body, 'flex') === 'none')).toBe(true)
+    // the old week-scoped classes are gone (extracted into the component)
+    expect(rulesFor('.week-bar')).toHaveLength(0)
+    expect(rulesFor('.week-seg')).toHaveLength(0)
+    expect(rulesFor('.week-seg:last-child')).toHaveLength(0)
+    // the week row keeps its own full-width track (the grid-row variant —
+    // the ranked row's absolute track is checked in the ranked-row block)
+    const track = rulesFor('.week-bar-track')
+    expect(track.length, '.week-bar-track rules').toBeGreaterThan(0)
+    expect(track.some((r) => decl(r.body, 'grid-column') === '1 / -1')).toBe(true)
+    expect(track.some((r) => decl(r.body, 'height') === '6px')).toBe(true)
+  })
+})
+
+// --- TASK-129 (design: tmp/tasks/tm-129/design_ranked-row-bar.md v3 §4-2/
+// §4-3): the row bars (ranked rows + week rows) ride ONE shared DOM bar
+// component — .row-bar/.row-seg defined once, the data-end cap on
+// :last-child, no per-surface grammar forks. Written test-first against the
+// gradient rows and the week-scoped classes. ---
+
+describe('shared row bar component (TASK-129, static checks)', () => {
+  it('[covers:web-common.row-bar-component] .row-seg:last-child のデータ端cap（0 1.5px 1.5px 0）・bar文法は1組のみで track は行種別（ranked=absolute / week=grid）', () => {
+    // the cap: the data end (right) alone rounds — min(2px, 6px/4) = 1.5px;
+    // the base (left) stays square
+    const cap = rulesFor('.row-seg:last-child')
+    expect(cap.length, '.row-seg:last-child cap rule').toBeGreaterThan(0)
+    expect(cap.some((r) => decl(r.body, 'border-radius') === '0 1.5px 1.5px 0')).toBe(true)
+    // no mid-bar rounding on the other segments and no other radius rule
+    for (const r of rulesFor('.row-seg')) {
+      const radius = decl(r.body, 'border-radius')
+      if (radius !== undefined) expect(r.selectors.join(','), 'only :last-child rounds').toContain(':last-child')
+    }
+    // the grammar rules exist exactly once per selector — no surface-scoped
+    // forks (.ranked-row .row-seg / .week-row .row-bar etc.)
+    for (const scoped of ['.ranked-row .row-bar', '.week-row .row-bar', '.ranked-row .row-seg', '.week-row .row-seg']) {
+      expect(rulesFor(scoped), `no surface-scoped bar grammar: ${scoped}`).toHaveLength(0)
+    }
+  })
+})
+
+// --- TASK-130 (design: tmp/tasks/tm-130/design_trend-bar-hover-current.md
+// v2 §2-1/§2-2/§5): the bar-color emphasis rules died with the stacked
+// expansion (.bar is the zero-bucket fallback only, so .bar-col:hover .bar /
+// .bar-col.current .bar lost their subject). The recovered grammar is the
+// COLUMN wash — hover paints the column with --bb-hover inside
+// @media (hover: hover) only (a touch sticky hover can never clobber the
+// current wash), current paints it with --bb-accent-soft at all times (the
+// column exists for 0円 buckets too, so the emphasis survives an empty
+// month) plus the label foreground emphasis, and the bar itself never
+// changes color. Written test-first against the not-yet-revised stylesheet. ---
+
+describe('trend bar column state emphasis (TASK-130, static checks)', () => {
+  it('[covers:web-browse.trend-bar-hover-current] 旧2規則（棒色変更）と .bar の transition は廃止・.bar-col は radius 6px + background-color 0.15s・hover wash（--bb-hover）は @media (hover: hover) 内のみで current 規則より後置・current wash（--bb-accent-soft）+ .bar-val 前景強調（600/var(--bb-fg)）', () => {
+    // the dead bar-color grammar is gone for good: the stacked columns are
+    // painted by the segments' inline series colors, so no rule may recolor
+    // .bar on hover/current — and .bar's orphaned background transition goes
+    // with it (its color never changes now)
+    expect(rulesFor('.bar-col:hover .bar')).toHaveLength(0)
+    expect(rulesFor('.bar-col.current .bar')).toHaveLength(0)
+    expect(css).not.toMatch(/\.bar-col:hover \.bar(?![\w-])/)
+    expect(css).not.toMatch(/\.bar-col\.current \.bar(?![\w-])/)
+    for (const r of rulesFor('.bar')) {
+      expect(decl(r.body, 'transition'), '.bar must not animate its background').toBeUndefined()
+    }
+    // the column is the wash surface: the focus outline's 6px radius and the
+    // row-hover-grade 0.15s background fade, always on .bar-col itself
+    const cols = rulesFor('.bar-col')
+    expect(cols.some((r) => decl(r.body, 'border-radius') === '6px')).toBe(true)
+    expect(cols.some((r) => decl(r.body, 'transition') === 'background-color 0.15s')).toBe(true)
+    // hover wash exists ONLY inside the hover-capability guard — no
+    // top-level .bar-col:hover rule (touch must not keep a sticky wash over
+    // the current column)
+    const hoverMedia = blockAfter(/@media\s*\(\s*hover:\s*hover\s*\)/)
+    expect(hoverMedia, '@media (hover: hover) block').toBeDefined()
     expect(
-      rows.some((r) =>
-        /var\(--rank-color,\s*var\(--bb-accent\)\)/.test(decl(r.body, 'background-image') ?? ''),
+      rulesFor('.bar-col:hover', hoverMedia!).some((r) => decl(r.body, 'background') === 'var(--bb-hover)'),
+    ).toBe(true)
+    expect(rulesFor('.bar-col:hover', topLevel())).toHaveLength(0)
+    // current: the always-on column wash + the label foreground emphasis
+    // (weight like the week row's current, muted→fg for the 0.7rem label)
+    expect(rulesFor('.bar-col.current').some((r) => decl(r.body, 'background') === 'var(--bb-accent-soft)')).toBe(true)
+    expect(
+      rulesFor('.bar-col.current .bar-val').some(
+        (r) => decl(r.body, 'font-weight') === '600' && decl(r.body, 'color') === 'var(--bb-fg)',
       ),
     ).toBe(true)
+    // .bar-col:hover and .bar-col.current share specificity (0,2,0), so
+    // source order decides the overlay: the hover wash sits after the
+    // current rule and wins on desktop
+    expect(css.search(/\.bar-col:hover\s*\{/)).toBeGreaterThan(css.search(/\.bar-col\.current\s*\{/))
+  })
+})
+
+// --- TASK-146 §3 (design: tmp/tasks/tm-146/design_period_navigation.md §3
+// 方針1/方針3・遷移全数表 #12/#15/#17/#18/#20): the transition vocabulary
+// gains its missing members — the zone loading fade (the .view-stack.loading
+// behavior, zone-scoped), the scrim / dialog-backdrop fades, and the single
+// appear-fade grammar (bb-appear) the row additions and the manage screens'
+// inline state changes share. Written test-first against the not-yet-revised
+// stylesheet. ---
+
+describe('transition vocabulary additions (TASK-146, static checks)', () => {
+  it('[covers:web-shell.loading-skeleton] .zone.is-loading は .view-stack.loading と同一の挙動へ（opacity 0.15s の fade）', () => {
+    // #12: the zone-scoped dim used to flip opacity instantly — it joins the
+    // 0.15s fade the view-stack dim has had since TASK-39
+    const zoneRules = rulesFor('.zone.is-loading').concat(rulesFor('.zone'))
+    expect(
+      zoneRules.some((r) => /^opacity\s*0\.15s/.test(decl(r.body, 'transition') ?? 'x')),
+      '.zone/.zone.is-loading carries an opacity 0.15s transition',
+    ).toBe(true)
+    expect(rulesFor('.zone.is-loading').some((r) => decl(r.body, 'opacity') === '0.6')).toBe(true)
+  })
+
+  it('[covers:web-common.overlay-transition] scrim と dialog-backdrop は fade（opacity 遷移）で出現・消滅し reduced-motion で無効', () => {
+    // #17: the drawer scrim leaves the display toggle's instant appear
+    expect(css).toMatch(/\.scrim[^{}]*\{[^}]*transition:\s*opacity/)
+    // #16: the modal frames' backdrop fades with the dialog
+    expect(css).toMatch(/\.dialog-backdrop[^{}]*\{[^}]*transition:\s*opacity/)
+    // the reduced-motion block disables both (the second guard)
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reduced).toMatch(/\.scrim[^{]*\{[^}]*transition:\s*none/)
+    expect(reduced).toMatch(/\.dialog-backdrop[^{]*\{[^}]*transition:\s*none/)
+  })
+
+  it('[covers:web-common.appear-fade] 出現/消滅fade語彙は bb-appear 1組（opacity fade・0.15-0.2s）で reduced-motion で無効', () => {
+    // #18/#20: ONE shared grammar class carries the row additions and the
+    // manage screens' inline state changes — an opacity fade in the
+    // bb-fade-in family, nothing fancier
+    // (the reduced-motion block's own `transition: none` rules start with
+    // .bb-appear too — they are the second guard below, not the vocabulary)
+    const appear = rules(css).filter(
+      (r) => r.selectors.some((s) => s.startsWith('.bb-appear')) && decl(r.body, 'transition') !== 'none',
+    )
+    expect(appear.length, 'the bb-appear grammar exists').toBeGreaterThan(0)
+    // the fade timing lives on the -active pair once; the from/to pair only
+    // sets the origin (opacity 0) — a fade and only a fade
+    const active = appear.filter((r) => r.selectors.some((s) => /-active$/.test(s)))
+    const origin = appear.filter((r) => !r.selectors.some((s) => /-active$/.test(s)))
+    expect(active.length, 'the bb-appear active pair exists').toBeGreaterThan(0)
+    for (const r of active) {
+      const t = decl(r.body, 'transition') ?? decl(r.body, 'animation') ?? ''
+      expect(t, `${r.selectors.join(',')}: a fade and only a fade`).toMatch(/opacity/)
+      expect(t).toMatch(/0\.(15|2|16)s/)
+    }
+    for (const r of origin) {
+      expect(r.selectors.join(','), 'every timing-less rule is the origin pair').toMatch(/-from|-to/)
+      expect(decl(r.body, 'opacity'), 'the origin sets opacity 0').toBe('0')
+    }
+    // reduced-motion turns the vocabulary off (the second guard)
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)
   })
 })

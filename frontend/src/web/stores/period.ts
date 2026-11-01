@@ -16,11 +16,10 @@ export type PeriodMode = 'month' | 'week' | 'year' | 'range'
 export const usePeriodStore = defineStore('web-period', () => {
   const session = useSessionStore()
   const thisMonth = jstMonth()
-  const thisYear = Number(thisMonth.slice(0, 4))
   const mode = ref<PeriodMode>('month')
   const month = ref(thisMonth)
   const week = ref(weekStart(jstToday())) // TASK-53: the selected week's Monday
-  const year = ref(thisYear)
+  const year = ref(Number(thisMonth.slice(0, 4)))
   const from = ref(`${thisMonth}-01`)
   const to = ref(monthEnd(thisMonth))
 
@@ -127,28 +126,17 @@ export const usePeriodStore = defineStore('web-period', () => {
     return base
   })
 
-  const thisWeek = weekStart(jstToday())
-  const canNext = computed(() =>
-    mode.value === 'month'
-      ? month.value < thisMonth
-      : mode.value === 'week'
-        ? week.value < thisWeek
-        : mode.value === 'year'
-          ? year.value < thisYear
-          : false,
-  )
+  // TASK-146 §1: the current-period cap is gone — month / week step into
+  // the future freely (a future period renders the existing empty
+  // vocabulary). The only bound left is the backend's Year 1900..=9999
+  // acceptance (domain resolve_period), so the year clamps at both ends;
+  // the range mode never shows the step UI at all.
+  const canNext = computed(() => (mode.value === 'year' ? year.value < 9999 : true))
 
   function step(delta: number): void {
-    if (mode.value === 'month') {
-      const next = shiftMonth(month.value, delta)
-      if (next <= thisMonth) month.value = next
-    } else if (mode.value === 'week') {
-      const next = shiftDate(week.value, delta * 7)
-      if (next <= thisWeek) week.value = next
-    } else if (mode.value === 'year') {
-      const next = year.value + delta
-      if (next <= thisYear) year.value = next
-    }
+    if (mode.value === 'month') month.value = shiftMonth(month.value, delta)
+    else if (mode.value === 'week') week.value = shiftDate(week.value, delta * 7)
+    else if (mode.value === 'year') year.value = Math.min(Math.max(year.value + delta, 1900), 9999)
   }
 
   /** Jump to a month (e.g. a bar of the trend chart). */

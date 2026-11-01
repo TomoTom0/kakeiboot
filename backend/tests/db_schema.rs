@@ -1,5 +1,5 @@
-//! Schema constraint tests over migrations 0001-0011 (TASK-8, TASK-16,
-//! TASK-17, TASK-18, TASK-32). Each test targets one condition in
+//! Schema constraint tests over migrations 0001-0012 (TASK-8, TASK-16,
+//! TASK-17, TASK-18, TASK-32, TASK-140). Each test targets one condition in
 //! tests/design/conditions.toml via a [covers:<id>] comment on the test it
 //! belongs to.
 
@@ -70,7 +70,10 @@ async fn migrations_apply_cleanly() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(latest >= 11, "0009 + 0010 + 0011 applied (latest {latest})");
+    assert!(
+        latest >= 12,
+        "0009 + 0010 + 0011 + 0012 applied (latest {latest})"
+    );
     // 0010 (TASK-18): drafts.batch_id (NULL = single-tool / reopen)
     let batch_cols: Vec<(String,)> =
         sqlx::query_as("SELECT name FROM pragma_table_info('drafts') WHERE name = 'batch_id'")
@@ -1888,4 +1891,144 @@ async fn ledger_labels_cascade_on_ledger_delete() {
         .await
         .unwrap();
     assert_eq!(keep, 5);
+}
+
+// ---------------------------------------------------------------------------
+// 0012 (TASK-140): data-only migration revoking refresh children that a
+// grace-window reissue superseded before the fix (they stayed live). Only a
+// row with direct evidence is revoked: unused, unrevoked, referenced by no
+// child_hash, in a grant that has a referenced unused unrevoked tip.
+
+/// (token_hash, grant_id, child_hash, used_at, revoked_at)
+type RefreshFixture = (
+    &'static str,
+    i64,
+    Option<&'static str>,
+    Option<i64>,
+    Option<i64>,
+);
+
+// [covers:db-schema.migration-0012-revoke-superseded-children]
+#[tokio::test]
+async fn migration_0012_revokes_only_superseded_children() {
+    let pool = bare_mem_pool().await;
+    migrate_until(&pool, 12).await;
+    insert_user(&pool, 1).await;
+    sqlx::query(
+        "INSERT INTO oauth_clients (client_id, metadata_json, redirect_uris_json, token_endpoint_auth_method, fetched_at, expires_at)
+         VALUES ('https://chatgpt.com/c', '{}', '[]', 'none', 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for g in 1..=6 {
+        sqlx::query(
+            "INSERT INTO oauth_grants (id, user_id, client_id, scope, resource, created_at, absolute_expires_at)
+             VALUES (?, 1, 'https://chatgpt.com/c', 'ledger.read', 'http://localhost/mcp', 0, 9999999999999)",
+        )
+        .bind(g)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let rows: [RefreshFixture; 15] = [
+        // grant 1 (superseded child): R -> C2 current, C1 superseded orphan
+        ("g1-r", 1, Some("g1-c2"), Some(10), None),
+        ("g1-c1", 1, None, None, None),
+        ("g1-c2", 1, None, None, None),
+        // grant 2 (no rotation yet): the initial token only
+        ("g2-r", 2, None, None, None),
+        // grant 3 (parent expired and deleted): the current child alone
+        ("g3-c", 3, None, None, None),
+        // grant 4 (TTL not monotonic): an older used row remains while the
+        // current child's parent was deleted (o's child row is gone too)
+        ("g4-o", 4, Some("g4-deleted"), Some(10), None),
+        ("g4-k", 4, None, None, None),
+        // grant 5 (tip is a grandchild): R -> C2 (used) -> G; C1 superseded
+        ("g5-r", 5, Some("g5-c2"), Some(10), None),
+        ("g5-c1", 5, None, None, None),
+        ("g5-c2", 5, Some("g5-g"), Some(20), None),
+        ("g5-g", 5, None, None, None),
+        // grant 6 (already revoked superseded child keeps its timestamp)
+        ("g6-r", 6, Some("g6-c2"), Some(10), None),
+        ("g6-c1", 6, None, None, Some(7)),
+        ("g6-c2", 6, None, None, None),
+        ("g6-c0", 6, None, None, None),
+    ];
+    for (hash, grant, child, used, revoked) in rows {
+        sqlx::query(
+            "INSERT INTO oauth_refresh_tokens (token_hash, grant_id, child_hash, created_at, expires_at, used_at, revoked_at)
+             VALUES (?, ?, ?, 0, 9999999999999, ?, ?)",
+        )
+        .bind(hash.as_bytes())
+        .bind(grant)
+        .bind(child.map(str::as_bytes))
+        .bind(used)
+        .bind(revoked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let before_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    migrate_rest(&pool).await;
+    let after_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+
+    let applied: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 12 AND success = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(applied, 1, "migration 0012 exists and was applied");
+
+    let revoked_of = |hash: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT revoked_at FROM oauth_refresh_tokens WHERE token_hash = ?",
+            )
+            .bind(hash.as_bytes())
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // superseded children: revoked at the migration time (ms, SQL clock is
+    // second-granular, so the lower bound is truncated to the second)
+    for hash in ["g1-c1", "g5-c1", "g6-c0"] {
+        let at = revoked_of(hash)
+            .await
+            .unwrap_or_else(|| panic!("{hash} revoked"));
+        assert!(
+            at >= before_ms / 1000 * 1000 && at <= after_ms,
+            "{hash}: revoked_at {at} is the migration time in ms"
+        );
+    }
+    // everything else is untouched
+    for hash in [
+        "g1-r", "g1-c2", "g2-r", "g3-c", "g4-o", "g4-k", "g5-r", "g5-c2", "g5-g", "g6-r", "g6-c2",
+    ] {
+        assert_eq!(revoked_of(hash).await, None, "{hash} untouched");
+    }
+    assert_eq!(
+        revoked_of("g6-c1").await,
+        Some(7),
+        "already revoked row keeps its value"
+    );
+    let used: Vec<(Vec<u8>, Option<i64>)> =
+        sqlx::query_as("SELECT token_hash, used_at FROM oauth_refresh_tokens ORDER BY token_hash")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    for (hash, used_at) in used {
+        let name = String::from_utf8(hash).unwrap();
+        let want = rows.iter().find(|r| r.0 == name).unwrap().3;
+        assert_eq!(used_at, want, "{name}: used_at untouched");
+    }
 }

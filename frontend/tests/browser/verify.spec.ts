@@ -214,15 +214,28 @@ test.describe('daily bars (360x780)', () => {
 })
 
 // --- TASK-116 (design tmp/tasks/tm-116/design_breakdown-expansion.md §5-3):
-// the newly stacked bars measured in the real layout — the daily segments'
-// visible geometry (the min-height overshoot clips from the top inside the
-// overflow-hidden container while the first series anchors the bottom), the
-// week row's multi-stop inline gradient, and the 360px fit of both zones. ---
+// the newly stacked bars measured in the real layout. TASK-123 (design
+// tmp/tasks/tm-123/design_breakdown-visual.md v5) rewrote the segment
+// grammar: the full-perimeter 1px var(--seg-outline) border (the old
+// border-top / SEG_GAP separation is gone), the allocation always fits (the
+// top-clip overshoot is structurally gone), the corners are top-only with
+// the cap arithmetic, the palette values are swapped and the week row's
+// gradient became a DOM stacked bar (TASK-129: the shared .row-bar +
+// .row-seg component). ---
+
+/** Channels of a computed color, tolerant of both the legacy
+ * `rgba(r, g, b, a)` and the modern `rgb(r g b / a[%])` serializations
+ * (the alpha normalizes to 0..1 either way). */
+function colorChannels(c: string): number[] {
+  const n = (c.match(/-?[\d.]+/g) ?? []).map(Number)
+  if (n.length === 4 && n[3]! > 1) n[3] = n[3]! / 100
+  return n
+}
 
 test.describe('stacked breakdown bars (360x780)', () => {
   test.use({ viewport: { width: 360, height: 780 } })
 
-  test('[covers:web-receipts.trend-card-granularity] daily bars stack their series: first series anchors the bottom, segments paint real series colors', async ({ page }) => {
+  test('[covers:web-receipts.trend-card-granularity][covers:web-common.stack-segment-outline] daily bars stack their series with the TASK-123 grammar: full 1px outline, allocation fits, first series at the base, new palette colors', async ({ page }) => {
     logPageIssues(page, 'daily-seg')
     await installApiStub(page)
     await page.goto('/receipts?month=2026-10')
@@ -235,36 +248,56 @@ test.describe('stacked breakdown bars (360x780)', () => {
       // 10/5 (おにぎり 150円 食費) — the first recorded day, one segment
       const first = segBars[0]!
       const segs = Array.from(first.querySelectorAll('.daily-seg')) as HTMLElement[]
+      const cs = getComputedStyle(segs[0]!)
       const barR = first.getBoundingClientRect()
       return {
         segBars: segBars.length,
-        overflow: getComputedStyle(first).overflow,
-        barH: barR.height,
         colH: (first.parentElement as HTMLElement).getBoundingClientRect().height,
+        barH: barR.height,
+        segSum: segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0),
+        borderWidths: [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth],
+        borderStyle: cs.borderStyle,
+        borderColor: cs.borderColor,
         bottomGap: segs.map((s) => barR.bottom - s.getBoundingClientRect().bottom),
-        visibleSum: segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0),
         colors: segs.map((s) => getComputedStyle(s).backgroundColor),
+        radiusTop: cs.borderTopLeftRadius,
+        radiusBottom: cs.borderBottomLeftRadius,
       }
     })
     expect(m.segBars, 'the three recorded days carry segments').toBe(3)
-    expect(m.overflow).toBe('hidden')
-    // the column keeps the fixed 110px track height
+    // the column keeps the fixed 110px track height and the bar stays inside
     expect(m.colH).toBeCloseTo(110, 0)
-    // the visible segment sum may reach past the bar height (min-height 2px
-    // per segment clips from the top) — the bar itself never exceeds the
-    // container and the FIRST series anchors the bottom edge
     expect(m.barH).toBeLessThanOrEqual(m.colH + 1)
-    expect(m.visibleSum).toBeGreaterThanOrEqual(m.barH - 1)
+    // TASK-123 §4-4: EVERY segment carries the full-perimeter 1px outline —
+    // all four sides (the old single border-top between neighbors is gone)
+    for (const w of m.borderWidths) expect(w, 'all four border sides at 1px').toBe('1px')
+    expect(m.borderStyle).toBe('solid')
+    // the outline is the light theme's black-40% ink
+    const oc = colorChannels(m.borderColor)
+    expect(oc[0]!).toBeCloseTo(0, 0)
+    expect(oc[1]!).toBeCloseTo(0, 0)
+    expect(oc[2]!).toBeCloseTo(0, 0)
+    expect(oc[3]!).toBeCloseTo(0.4, 2)
+    // §4-5 rule D: the allocation always fits — the segment sum equals the
+    // bar (the min-height overshoot that clipped from the top is gone)
+    expect(m.segSum).toBeLessThanOrEqual(m.barH + 1)
+    expect(m.segSum).toBeGreaterThanOrEqual(m.barH - 1)
+    // the FIRST series still anchors the bottom edge
     expect(Math.min(...m.bottomGap)).toBeLessThanOrEqual(1)
-    // the segments paint resolved series colors (light palette --series-1
-    // #0072B2 on 10/5), never transparent
+    // the segments paint the swapped palette's resolved colors (light
+    // --series-1 #803A0D on 10/5's 食費), never transparent
     expect(m.colors.length).toBeGreaterThanOrEqual(1)
     for (const c of m.colors) expect(c).not.toBe('rgba(0, 0, 0, 0)')
-    expect(m.colors[0]).toBe('rgb(0, 114, 178)')
+    const seg = colorChannels(m.colors[0]!)
+    expect([seg[0], seg[1], seg[2]].map((v) => Math.round(v!))).toEqual([128, 58, 13])
+    // §4-3: the single-segment bar's segment is the top one — rounded top
+    // corners within the 2px cap, square baseline corners
+    expect(Number.parseFloat(m.radiusTop)).toBeLessThanOrEqual(2)
+    expect(m.radiusBottom).toBe('0px')
   })
 
-  test('[covers:web-home.week-card] week rows: the inline bar is a multi-stop series gradient and zero weeks drop it', async ({ page }) => {
-    logPageIssues(page, 'week-gradient')
+  test('[covers:web-home.week-card][covers:web-home.week-row-stack-bar] week rows: the inline bar is a DOM stacked bar (.row-bar segments with share titles) and zero weeks drop it', async ({ page }) => {
+    logPageIssues(page, 'week-bar')
     await installApiStub(page)
     await page.goto('/')
     await expect(page.locator('[data-test="week-card"]')).toBeVisible()
@@ -273,56 +306,79 @@ test.describe('stacked breakdown bars (360x780)', () => {
       const rows = Array.from(document.querySelectorAll('[data-test="week-card"] button.week-row')) as HTMLElement[]
       const filled = rows.find((r) => r.dataset.test === 'row-2026-10-05')!
       const zero = rows.find((r) => r.dataset.test === 'row-2026-10-12')!
-      const raw = filled.getAttribute('style') ?? ''
-      const img = raw.match(/background-image:[^;]+/)?.[0] ?? ''
+      const bar = filled.querySelector('.row-bar') as HTMLElement | null
+      const track = filled.querySelector('.week-bar-track') as HTMLElement | null
+      const segs = bar ? (Array.from(bar.querySelectorAll('.row-seg')) as HTMLElement[]) : []
+      const rowR = filled.getBoundingClientRect()
       return {
-        raw,
-        resolved: getComputedStyle(filled).backgroundImage,
-        zeroRaw: zero.getAttribute('style') ?? '',
-        stopPcts: [...img.matchAll(/(\d+(?:\.\d+)?)%/g)].map((x) => Number(x[1])),
-        // REVIEW-3 Low-1: the fill the stops must fit inside rides the same
-        // inline style as --rank-fill; the head stops live before the tail
-        fillPct: Number(raw.match(/--rank-fill:\s*([\d.]+)%/)?.[1] ?? NaN),
-        headPcts: [...img.slice(0, img.indexOf('transparent')).matchAll(/([\d.]+)%/g)].map((x) => Number(x[1])),
-        tailPct: Number(img.match(/transparent\s+([\d.]+)%/)?.[1] ?? NaN),
+        barPresent: bar !== null,
+        barH: bar ? bar.getBoundingClientRect().height : 0,
+        segCount: segs.length,
+        segColors: segs.map((s) => getComputedStyle(s).backgroundColor),
+        segBorders: segs.map((s) => getComputedStyle(s).borderTopWidth),
+        segTitles: segs.map((s) => s.getAttribute('title') ?? ''),
+        rowH: rowR.height,
+        rowW: rowR.width,
+        rowKeys: rows.map((r) => r.dataset.test ?? ''),
+        rowLabels: rows.map((r) => r.querySelector('.week-label')?.textContent ?? ''),
+        amounts: rows.map((r) => r.querySelector('.amount')?.textContent ?? ''),
+        currentKey: rows.find((r) => r.classList.contains('current'))?.dataset.test ?? null,
+        rowImage: getComputedStyle(filled).backgroundImage,
+        zeroBar: zero.querySelector('.row-bar') !== null,
+        barW: bar ? bar.getBoundingClientRect().width : 0,
+        trackW: track ? track.getBoundingClientRect().width : 0,
       }
     })
-    // the inline style writes a multi-stop gradient: the mock month's two
-    // series colors (食費 s1 + 日用品 s4) + the transparent tail
-    expect(m.raw).toContain('background-image')
-    expect(m.raw).toContain('var(--series-1)')
-    expect(m.raw).toContain('var(--series-4)')
-    expect(m.raw).toContain('transparent')
-    expect(m.resolved).toContain('linear-gradient')
-    // the percent stops stay ordered within the fill
-    expect(m.stopPcts.length).toBeGreaterThanOrEqual(2)
-    expect(Math.max(...m.stopPcts)).toBeLessThanOrEqual(100)
-    // and the color stops stay inside the row's OWN fill (design §5-1): the
-    // head stops sit at or below the --rank-fill value, the last one closes
-    // exactly at it and the transparent tail opens there
-    expect(Number.isNaN(m.fillPct)).toBe(false)
-    expect(m.headPcts.length).toBeGreaterThanOrEqual(2)
-    for (const p of m.headPcts) expect(p).toBeLessThanOrEqual(m.fillPct)
-    expect(Math.max(...m.headPcts)).toBe(m.fillPct)
-    expect(m.tailPct).toBe(m.fillPct)
-    // zero-total weeks carry no color stop at all
-    expect(m.zeroRaw).not.toContain('var(--series-')
+    // TASK-146 §2: the fetch range crosses the month, so every row is a FULL
+    // 7-day week and the edge labels write the crossing as-is
+    expect(m.rowKeys).toEqual(['row-2026-09-28', 'row-2026-10-05', 'row-2026-10-12', 'row-2026-10-19', 'row-2026-10-26'])
+    expect(m.rowLabels).toEqual(['9/28〜10/4', '10/5〜10/11', '10/12〜10/18', '10/19〜10/25', '10/26〜11/1'])
+    expect(m.amounts).toEqual(['0円', '948円', '0円', '0円', '0円'])
+    expect(m.currentKey).toBe('row-2026-10-12')
+    // the bar element exists at the fixed readable height (TASK-129: 6px —
+    // the shared component's grammar value, well above the old 2px gradient)
+    expect(m.barPresent).toBe(true)
+    expect(m.barH).toBeCloseTo(6, 0)
+    // the 948円 week splits into the month's two series — 食費 (the swapped
+    // --series-1 #803A0D) then 日用品 (--series-4 #44BEAD), each titled with
+    // the share form and carrying the 1px outline
+    expect(m.segCount).toBe(2)
+    const c0 = colorChannels(m.segColors[0]!).map((v) => Math.round(v))
+    const c1 = colorChannels(m.segColors[1]!).map((v) => Math.round(v))
+    expect(c0).toEqual([128, 58, 13])
+    expect(c1).toEqual([68, 190, 173])
+    for (const t of m.segTitles) expect(t, 'the share-form title').toMatch(/^(食費|日用品) [\d,]+円（\d+%）$/)
+    for (const b of m.segBorders) expect(b).toBe('1px')
+    // the row left the shared ranked-row gradient: no background-image on
+    // the button anymore (the composition lives in the bar's elements)
+    expect(m.rowImage).toBe('none')
+    // the row keeps its 44px full-width shape and the bar fits inside it
+    expect(m.rowH).toBeCloseTo(44, 0)
+    expect(m.barW).toBeGreaterThan(0)
+    expect(m.barW).toBeLessThanOrEqual(m.rowW)
+    // TASK-129 absolute scale: the 948円 week renders at 948 / screen-scale
+    // 1000 of the track (barScale(max(550, 398, 948)) = 1000) — the week is
+    // the screen's own max, so 0.948 and NOT the full track
+    expect(m.barW / m.trackW).toBeCloseTo(0.948, 2)
+    // zero-total weeks draw no bar element at all
+    expect(m.zeroBar).toBe(false)
   })
 
-  // REVIEW-3 Low-1: the fill-bound stop check above only proves itself when
-  // a row's fill actually sits below 100 — the stock mock records a single
-  // week (that row IS the max, fill=100, where "stops <= fill" and
-  // "<= 100" coincide by accident). A week-trend-only route override (the
-  // later registration wins the match; everything else falls through to the
-  // installed stub) re-seeds the receipts so a second, heavier week becomes
-  // the max and the 10/5 row's gradient must still close inside its own
-  // sub-100 fill.
-  test('[covers:web-home.week-card] week gradient stops close inside a sub-100 fill (a second heavier week)', async ({ page }) => {
+  // The sub-100 proof (REVIEW-3 Low-1's non-vacuity, carried over to the
+  // TASK-129 absolute scale): a week-trend-only route override (the later
+  // registration wins the match; everything else falls through to the
+  // installed stub — so the breakdown keeps the original 550/398 rows)
+  // re-seeds the weeks to 798円 and 1200円. The screen scale aggregates the
+  // breakdown max (550) and the week max (1200) into barScale(1200) = 2000,
+  // and the week bar LENGTHS are the amounts over that shared scale —
+  // 798/2000 = 0.399 and 1200/2000 = 0.6 of the track (the max week no
+  // longer pegs the full track).
+  test('[covers:web-home.week-row-stack-bar] week bar lengths follow the absolute scale (798/2000 and 1200/2000 of the track, the max week no longer full)', async ({ page }) => {
     logPageIssues(page, 'sub100-fill')
     await installApiStub(page)
     // the week-trend answer comes off a re-seeded mock: receipt 103 moves
     // into the 10/12 week at 1200円, so the 10/5 week keeps both series
-    // (798円) and fills round(798/1200*100) = 67%
+    // (798円) and the breakdown's 食費 row grows to 1600円 (the screen max)
     const mock = createMockDataApi()
     await mock.updateReceipt(1, 103, {
       revision: 1,
@@ -336,8 +392,11 @@ test.describe('stacked breakdown bars (360x780)', () => {
           axis: 'category',
           metric: 'amount',
           granularity: 'week',
-          from: '2026-10-01',
-          to: '2026-10-31',
+          // TASK-146 §2: the week fetch crosses the month now — the Monday of
+          // the week holding the 1st through the Sunday of the week holding
+          // the 31st
+          from: '2026-09-28',
+          to: '2026-11-01',
           limit: 5,
         })
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
@@ -350,35 +409,30 @@ test.describe('stacked breakdown bars (360x780)', () => {
       const rows = Array.from(document.querySelectorAll('[data-test="week-card"] button.week-row')) as HTMLElement[]
       const read = (testId: string) => {
         const row = rows.find((r) => r.dataset.test === testId)!
-        const raw = row.getAttribute('style') ?? ''
-        const img = raw.match(/background-image:[^;]+/)?.[0] ?? ''
+        const bar = row.querySelector('.row-bar') as HTMLElement | null
+        const track = row.querySelector('.week-bar-track') as HTMLElement | null
         return {
           amount: row.querySelector('.amount')?.textContent ?? '',
-          fillPct: Number(raw.match(/--rank-fill:\s*([\d.]+)%/)?.[1] ?? NaN),
-          headPcts: [...img.slice(0, img.indexOf('transparent')).matchAll(/([\d.]+)%/g)].map((x) => Number(x[1])),
-          tailPct: Number(img.match(/transparent\s+([\d.]+)%/)?.[1] ?? NaN),
+          segTitles: bar ? Array.from(bar.querySelectorAll('.row-seg')).map((s) => s.getAttribute('title') ?? '') : [],
+          barW: bar ? bar.getBoundingClientRect().width : 0,
+          trackW: track ? track.getBoundingClientRect().width : 0,
         }
       }
       return { light: read('row-2026-10-05'), max: read('row-2026-10-12') }
     })
-    // the seeded month: the 10/5 week holds 798円, the moved 10/12 week is
-    // the 1200円 max
+    // the seeded month: the 10/5 week holds 798円, the moved 10/12 week
+    // holds 1200円 — the screen scale is barScale(max(550, 1200)) = 2000
     expect(m.light.amount).toBe('798円')
     expect(m.max.amount).toBe('1,200円')
-    // the light row's fill really sits below 100 (67%) with BOTH series
-    // stops inside it — every head stop <= the row's own fill, the last one
-    // closes exactly at it and the transparent tail opens there
-    expect(m.light.fillPct).toBeLessThan(100)
-    expect(m.light.fillPct).toBe(67)
-    expect(m.light.headPcts.length).toBeGreaterThanOrEqual(2)
-    for (const p of m.light.headPcts) expect(p).toBeLessThanOrEqual(m.light.fillPct)
-    expect(Math.max(...m.light.headPcts)).toBe(m.light.fillPct)
-    expect(m.light.tailPct).toBe(m.light.fillPct)
-    // the heavier week becomes the max (fill=100) and closes the same way
-    expect(m.max.fillPct).toBe(100)
-    for (const p of m.max.headPcts) expect(p).toBeLessThanOrEqual(m.max.fillPct)
-    expect(Math.max(...m.max.headPcts)).toBe(m.max.fillPct)
-    expect(m.max.tailPct).toBe(m.max.fillPct)
+    // the light row's bar keeps BOTH series segments, and both bars render
+    // their amounts over the shared scale (798/2000 and 1200/2000)
+    expect(m.light.segTitles.length).toBe(2)
+    expect(m.light.barW / m.light.trackW).toBeCloseTo(798 / 2000, 2)
+    expect(m.max.segTitles.length).toBe(1)
+    expect(m.max.barW / m.max.trackW).toBeCloseTo(1200 / 2000, 2)
+    // the ratio between the bars equals the value ratio (one shared scale)
+    expect(m.light.barW / m.max.barW).toBeCloseTo(798 / 1200, 2)
+    expect(m.max.barW).toBeGreaterThan(m.light.barW)
   })
 
   test('[covers:web-receipts.daily-bars-min-track][covers:web-home.week-card] the stacked daily bars and the week rows keep the 360px fit', async ({ page }) => {
@@ -394,6 +448,432 @@ test.describe('stacked breakdown bars (360x780)', () => {
       }))
       expect(m.sw, path).toBeLessThanOrEqual(m.cw)
     }
+  })
+
+  // TASK-123 §4-4: the outline on the OTHER sites and themes — the trend
+  // .bar-seg pair, the week row's .row-seg children (TASK-129: the shared
+  // component) and the dark theme's white 40% ink; the border-box inner
+  // consumption keeps the bar's outer shape (the segment sum never exceeds
+  // the stack).
+  test('[covers:web-common.stack-segment-outline] trend・週行セグメントも全周1px縁取り（border-box内側消費で外形不変）・dark は白40%', async ({ page }) => {
+    logPageIssues(page, 'outline')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const sample = () =>
+      page.evaluate(() => {
+        const stack = document.querySelector('[data-test="bar-2026-10"] .bar-stack') as HTMLElement | null
+        const segs = stack ? (Array.from(stack.querySelectorAll('.bar-seg')) as HTMLElement[]) : []
+        const weekSegs = Array.from(document.querySelectorAll('[data-test="week-card"] .row-seg')) as HTMLElement[]
+        const cs = segs[0] ? getComputedStyle(segs[0]!) : null
+        return {
+          segCount: segs.length,
+          borderWidths: cs ? [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth] : [],
+          borderColor: cs ? cs.borderColor : '',
+          segSum: segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0),
+          stackH: stack ? stack.getBoundingClientRect().height : 0,
+          weekBorders: weekSegs.map((s) => getComputedStyle(s).borderTopWidth),
+        }
+      })
+    const light = await sample()
+    expect(light.segCount, 'the current month holds the two series').toBe(2)
+    for (const w of light.borderWidths) expect(w).toBe('1px')
+    // light: black 40% over the fills
+    const lc = colorChannels(light.borderColor)
+    expect(lc[0]!).toBeCloseTo(0, 0)
+    expect(lc[3]!).toBeCloseTo(0.4, 2)
+    // border-box inner consumption: the outline never widens the bar — the
+    // segments' outer sum stays within the stack
+    expect(light.segSum).toBeLessThanOrEqual(light.stackH + 1)
+    // the week bar's segments carry the same outline
+    for (const b of light.weekBorders) expect(b).toBe('1px')
+    // dark: the SAME token resolves to white 40%
+    await page.emulateMedia({ colorScheme: 'dark' })
+    const dark = await sample()
+    const dc = colorChannels(dark.borderColor)
+    expect(dc[0]!).toBeCloseTo(255, 0)
+    expect(dc[1]!).toBeCloseTo(255, 0)
+    expect(dc[2]!).toBeCloseTo(255, 0)
+    expect(dc[3]!).toBeCloseTo(0.4, 2)
+  })
+
+  // TASK-123 §4-3: the corner rules in the real paint — no mid-stack
+  // rounding (the visual bottom segment's corners are all square), the top
+  // segment rounds only its top corners within the cap min(2px, width/4)
+  // (the narrow daily bars prove the cap: a ~9px bar tops out at ~2px, a
+  // 4px bar would pin at 1px), and the baseline side stays square.
+  // REVIEW-5 medium-2: the containers carry NO radius and no clip, so the
+  // child's computed radius is the PAINTED shape — a static 2px container
+  // radius + overflow:hidden used to own the outline below 8px widths (a
+  // 4px bar's arc was fully clipped back to the container's pill), which a
+  // child-only computed-style read cannot see. The assertions below pin
+  // both halves: the child's radius obeys the cap AND every ancestor
+  // container of the segment has zero radius with visible overflow.
+  test('[covers:web-common.stack-corner-rules] 中段角丸なし（下段セグメント4隅直角）・最上段は上端のみcap式丸め（min(2px, 幅/4)）・容器は角もclipも持たず子の角丸が外形を支配', async ({ page }) => {
+    logPageIssues(page, 'corners')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      // the 2-segment trend bar: DOM first child = visual BOTTOM (column-
+      // reverse) — the mid-stack segment that TASK-95's :first-child radius
+      // used to round
+      const stack = document.querySelector('[data-test="bar-2026-10"] .bar-stack') as HTMLElement
+      const segs = Array.from(stack.querySelectorAll('.bar-seg')) as HTMLElement[]
+      const bottom = getComputedStyle(segs[0]!)
+      const top = getComputedStyle(segs[segs.length - 1]!)
+      const stackCs = getComputedStyle(stack)
+      return {
+        segCount: segs.length,
+        bottomCorners: [bottom.borderTopLeftRadius, bottom.borderTopRightRadius, bottom.borderBottomLeftRadius, bottom.borderBottomRightRadius],
+        topTop: Number.parseFloat(top.borderTopLeftRadius),
+        topBottom: top.borderBottomLeftRadius,
+        stackCorners: [stackCs.borderTopLeftRadius, stackCs.borderTopRightRadius, stackCs.borderBottomLeftRadius, stackCs.borderBottomRightRadius],
+        stackOverflow: stackCs.overflow,
+      }
+    })
+    expect(m.segCount).toBe(2)
+    // no mid-stack rounding: the visual bottom (first series) segment keeps
+    // ALL FOUR corners square
+    for (const c of m.bottomCorners) expect(c).toBe('0px')
+    // the top segment rounds only its top corners, within the 2px cap
+    expect(m.topTop).toBeGreaterThanOrEqual(0.5)
+    expect(m.topTop).toBeLessThanOrEqual(2)
+    expect(m.topBottom).toBe('0px')
+    // REVIEW-5 medium-2: the container paints no shape of its own — zero
+    // radius on all four corners and no overflow clip, so the top segment's
+    // cap radius above IS the bar's painted outline (never overridden by a
+    // static container arc on narrow bars)
+    for (const c of m.stackCorners) expect(c).toBe('0px')
+    expect(m.stackOverflow).toBe('visible')
+    // the cap arithmetic holds on every daily top segment (a narrow bar's
+    // radius pins at width/4, never at the loose 2px+) — the daily bars
+    // live on /receipts, so sample them there, container halves included
+    await page.goto('/receipts?month=2026-10')
+    await expect(page.locator('[data-test="daily"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const caps = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-test="daily"] .daily-bar'))
+        .filter((b) => b.querySelector('.daily-seg') !== null)
+        .map((b) => {
+          const segs2 = Array.from(b.querySelectorAll('.daily-seg')) as HTMLElement[]
+          const topSeg = segs2[segs2.length - 1]!
+          const cs = getComputedStyle(topSeg)
+          const barCs = getComputedStyle(b)
+          const w = topSeg.getBoundingClientRect().width
+          const r = Number.parseFloat(cs.borderTopLeftRadius)
+          return {
+            w,
+            r,
+            cap: Math.min(2, w / 4),
+            barRadius: [barCs.borderTopLeftRadius, barCs.borderTopRightRadius, barCs.borderBottomLeftRadius, barCs.borderBottomRightRadius],
+            barOverflow: barCs.overflow,
+          }
+        }),
+    )
+    expect(caps.length).toBeGreaterThanOrEqual(3)
+    for (const c of caps) {
+      expect(c.r, `width ${c.w}: radius within min(2, w/4)=${c.cap}`).toBeLessThanOrEqual(c.cap + 0.51)
+      // the daily container paints no shape of its own either (REVIEW-5
+      // medium-2 — the narrowest tracks are where the static 2px container
+      // radius used to recreate the pill)
+      for (const br of c.barRadius) expect(br, `width ${c.w}: container radius`).toBe('0px')
+      expect(c.barOverflow, `width ${c.w}: container overflow`).toBe('visible')
+    }
+  })
+
+  // TASK-123 §4-5 rule F: a bar whose outer size falls below 3px keeps the
+  // data ratio and drops the outline (fill only) — a month-trend route
+  // override seeds a 1-yen month whose bar is a fraction of a pixel next to
+  // the 948円 month. The rule D no-clip property rides along: every stack's
+  // segment sum stays within the bar.
+  test('[covers:web-common.stack-dimension-rules] 1円月のbarはデータ比率どおり<1pxで縁取りなし（規則F）・通常棒は縁取りあり・セグメント合計は棒寸法内（規則D）', async ({ page }) => {
+    logPageIssues(page, 'rule-f')
+    await installApiStub(page)
+    // the month-trend answer (display window and prefetch alike) holds one
+    // 948円 month and one 1-yen month: niceMax(948)=1000, so the tiny bar
+    // allocates ~0.08px of the 80px bar area (the 96px plot minus the 16px
+    // headroom, TASK-131) — deep under the 3px minimum
+    await page.route(
+      (url) => url.pathname === '/api/ledgers/1/analysis/trend' && url.searchParams.get('granularity') === 'month',
+      async (route) => {
+        const buckets = ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']
+        const body = {
+          axis: 'category',
+          metric: 'amount',
+          granularity: 'month',
+          period: { from: '2026-05-01', to: '2026-10-31', label: '' },
+          buckets,
+          series: [
+            { key: 1, label: '食費', values: [550, 0, 0, 0, 0, 1], total: 551 },
+            { key: 4, label: '日用品', values: [398, 0, 0, 0, 0, 0], total: 398 },
+          ],
+          bucket_totals: [948, 0, 0, 0, 0, 1],
+          truncated_rows: 0,
+        }
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      },
+    )
+    await page.goto('/')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const read = (bar: string) => {
+        const stack = document.querySelector(`[data-test="${bar}"] .bar-stack`) as HTMLElement | null
+        const segs = stack ? (Array.from(stack.querySelectorAll('.bar-seg')) as HTMLElement[]) : []
+        const cs = segs[0] ? getComputedStyle(segs[0]!) : null
+        return {
+          segH: segs[0] ? segs[0].getBoundingClientRect().height : -1,
+          borderWidth: cs ? cs.borderTopWidth : '',
+          segSum: segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0),
+          stackH: stack ? stack.getBoundingClientRect().height : -1,
+        }
+      }
+      const fits = Array.from(document.querySelectorAll('[data-test="trend"] .bar-stack')).map((st) => {
+        const segs = Array.from(st.querySelectorAll('.bar-seg')) as HTMLElement[]
+        return segs.reduce((a, s) => a + s.getBoundingClientRect().height, 0) - (st as HTMLElement).getBoundingClientRect().height
+      })
+      return { big: read('bar-2026-05'), tiny: read('bar-2026-10'), fits }
+    })
+    // the normal month's segments carry the outline and its column fits
+    expect(m.big.borderWidth).toBe('1px')
+    // rule F: the 1-yen bar keeps its data-ratio outline (a fraction of a
+    // pixel, NOT the old 2px min-height floor) and drops the outline — the
+    // fill must not collapse under the 2px of border
+    expect(m.tiny.segH).toBeLessThan(1)
+    expect(m.tiny.segH).toBeGreaterThan(0)
+    expect(m.tiny.borderWidth).toBe('0px')
+    // rule D: every stack's allocation fits (no top-clip overshoot)
+    for (const f of m.fits) expect(f).toBeLessThanOrEqual(1)
+  })
+})
+
+// --- TASK-129 (design: tmp/tasks/tm-129/design_ranked-row-bar.md v3): the
+// ranked rows' bottom gradient became the shared 6px DOM bar (.row-bar +
+// .row-seg) inside an absolutely-positioned full-width track, every row bar
+// renders its value over the screen's absolute scale (barScale(max outer
+// amount) — mock month: max(550, 398, week 948) = 1000), and the same scale
+// carries the week bars. The share-less「ほか」row paints from its own value,
+// rule F drops the outline on a sub-3px bar, a resize recomputes the
+// lengths, and the payments zone keeps its pressable 44px button rows. ---
+
+test.describe('ranked row bars & the absolute scale (TASK-129, 360x780)', () => {
+  test.use({ viewport: { width: 360, height: 780 } })
+
+  test('[covers:web-common.row-bar-component][covers:web-common.bar-scale][covers:web-home.breakdown-rest-row] ranked row bars: 6px DOM bar, 4-side 1px outline, right cap, bar/track = value/scale — the share-less rest row included, one scale with the week bar', async ({ page }) => {
+    logPageIssues(page, 'row-bar')
+    await installApiStub(page)
+    // the breakdown answer comes off a richer analysis fixture. The rows
+    // sort amount-desc and the top-5 stay visible, so the tail (the four
+    // 4円 rows) folds into the「ほか 4件・計16円」rest row (share-less, its
+    // bar must still follow its own value: 16/1000 of the track, outlined),
+    // while 雑貨 5円 rides the 5th visible slot at 5/1000×track ≈ 1.5px —
+    // the sub-3px bar proving rule F. The week data stays the stub's (948円
+    // week), so the screen scale is barScale(max(500, 300, 948)) = 1000.
+    await page.route(
+      (url) => url.pathname === '/api/ledgers/1/analysis' && url.searchParams.get('axis') === 'category',
+      async (route) => {
+        const body = {
+          axis: 'category',
+          metric: 'amount',
+          period: { from: '2026-10-01', to: '2026-10-31', label: '2026年10月' },
+          totals: { amount: 948, count: 3, unit: 316, days: 31 },
+          rows: [
+            { key: 1, label: '食費', amount: 500, count: 2, unit: 250, share: 0.528 },
+            { key: 4, label: '日用品', amount: 300, count: 1, unit: 300, share: 0.316 },
+            { key: 3, label: '文具', amount: 20, count: 1, unit: 20, share: 0.021 },
+            { key: 6, label: '趣味', amount: 12, count: 1, unit: 12, share: 0.013 },
+            { key: 5, label: '雑貨', amount: 5, count: 1, unit: 5, share: 0.005 },
+            { key: 7, label: 'その他', amount: 4, count: 1, unit: 4, share: 0.004 },
+            { key: 8, label: '飲料', amount: 4, count: 1, unit: 4, share: 0.004 },
+            { key: 9, label: '菓子', amount: 4, count: 1, unit: 4, share: 0.004 },
+            { key: 10, label: '雑誌', amount: 4, count: 1, unit: 4, share: 0.004 },
+          ],
+          truncated_rows: 0,
+        }
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      },
+    )
+    await page.goto('/')
+    await expect(page.locator('[data-test="breakdown"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-test="breakdown"] .ranked-row')) as HTMLElement[]
+      const read = (label: string) => {
+        const row = rows.find((r) => (r.querySelector('.ranked-label')?.textContent ?? '').startsWith(label)) ?? null
+        const bar = row?.querySelector('.row-bar') as HTMLElement | null
+        const seg = bar?.querySelector('.row-seg') as HTMLElement | null
+        const track = row?.querySelector('.ranked-bar-track') as HTMLElement | null
+        const cs = seg ? getComputedStyle(seg) : null
+        return {
+          found: row !== null,
+          rowH: row ? row.getBoundingClientRect().height : 0,
+          barPresent: bar !== null,
+          barH: bar ? bar.getBoundingClientRect().height : 0,
+          segW: seg ? seg.getBoundingClientRect().width : 0,
+          segH: seg ? seg.getBoundingClientRect().height : 0,
+          trackW: track ? track.getBoundingClientRect().width : 0,
+          borderWidths: cs ? [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth] : [],
+          radius: cs
+            ? [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomLeftRadius, cs.borderBottomRightRadius]
+            : [],
+          fillColor: cs ? cs.backgroundColor : '',
+          fillStyle: row ? row.getAttribute('style') ?? '' : '',
+        }
+      }
+      const weekRow = document.querySelector('[data-test="week-card"] [data-test="row-2026-10-05"]') as HTMLElement | null
+      const weekBar = weekRow?.querySelector('.row-bar') as HTMLElement | null
+      const weekTrack = weekRow?.querySelector('.week-bar-track') as HTMLElement | null
+      return {
+        top: read('食費'),
+        daily: read('日用品'),
+        rest: read('ほか'),
+        tiny: read('雑貨'),
+        week: {
+          barW: weekBar ? weekBar.getBoundingClientRect().width : 0,
+          trackW: weekTrack ? weekTrack.getBoundingClientRect().width : 0,
+        },
+      }
+    })
+    // every row renders its 44px shape and the 6px shared bar inside the
+    // absolutely-positioned track that spans the row (padding included)
+    for (const r of [m.top, m.daily, m.rest]) {
+      expect(r.found).toBe(true)
+      expect(r.rowH).toBeCloseTo(44, 0)
+      expect(r.barPresent).toBe(true)
+      expect(r.barH).toBeCloseTo(6, 0)
+      expect(r.trackW).toBeGreaterThan(0)
+      // the outline: all four sides at 1px; the cap: the data end (right)
+      // alone rounds — BOTH right corners at 1.5px (min(2, 6/4), the SVG
+      // grammar's twin) — the base end (left) stays square
+      for (const w of r.borderWidths) expect(w).toBe('1px')
+      expect(Number.parseFloat(r.radius[1]!)).toBeCloseTo(1.5, 1)
+      expect(r.radius[0]).toBe('0px')
+      expect(r.radius[2]).toBe('0px')
+      expect(r.radius[3]).toBe('1.5px')
+    }
+    // the top row paints its series color (食費 key 1 → --series-1 #803A0D)
+    const top = colorChannels(m.top.fillColor).map((v) => Math.round(v))
+    expect(top.slice(0, 3)).toEqual([128, 58, 13])
+    // the lengths are the values over the ONE screen scale 1000: the ratio
+    // bar/track equals value/1000 for the top row, the second row…
+    expect(m.top.segW / m.top.trackW).toBeCloseTo(500 / 1000, 2)
+    expect(m.daily.segW / m.daily.trackW).toBeCloseTo(300 / 1000, 2)
+    // …and the share-less「ほか」row — its bar comes from its own value (the
+    // folded tail's 16円), not from any share denominator
+    expect(m.rest.segW / m.rest.trackW).toBeCloseTo(16 / 1000, 3)
+    // one scale across surfaces: the week bar (948円) rides the same 1000
+    expect(m.week.barW / m.week.trackW).toBeCloseTo(948 / 1000, 2)
+    // rule F on the row bar: the 5円 row's bar is under 3px — the data ratio
+    // wins and the outline drops (fill only), the bar itself stays visible
+    expect(m.tiny.barPresent).toBe(true)
+    expect(m.tiny.segW).toBeGreaterThan(0)
+    expect(m.tiny.segW).toBeLessThan(3)
+    for (const w of m.tiny.borderWidths) expect(w, 'rule F: no outline under 3px').toBe('0px')
+  })
+
+  test('[covers:web-common.row-bar-component] a resize recomputes the bar lengths (the same value/scale ratio at the new track width)', async ({ page }) => {
+    logPageIssues(page, 'row-bar-resize')
+    await installApiStub(page)
+    await page.goto('/')
+    await expect(page.locator('[data-test="breakdown"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const read = () =>
+      page.evaluate(() => {
+        const row = Array.from(document.querySelectorAll('[data-test="breakdown"] .ranked-row')).find((r) =>
+          (r.querySelector('.ranked-label')?.textContent ?? '').startsWith('食費'),
+        ) as HTMLElement
+        const seg = row.querySelector('.row-seg') as HTMLElement
+        const track = row.querySelector('.ranked-bar-track') as HTMLElement
+        return { segW: seg.getBoundingClientRect().width, trackW: track.getBoundingClientRect().width }
+      })
+    const narrow = await read()
+    expect(narrow.segW / narrow.trackW).toBeCloseTo(550 / 1000, 2)
+    // widen the viewport (still the single-column band): the track grows and
+    // the ResizeObserver path recomputes the bar — the ratio stays put
+    await page.setViewportSize({ width: 740, height: 780 })
+    await page.waitForTimeout(200)
+    const wide = await read()
+    expect(wide.trackW).toBeGreaterThan(narrow.trackW + 100)
+    expect(wide.segW / wide.trackW).toBeCloseTo(550 / 1000, 2)
+    expect(wide.segW).toBeGreaterThan(narrow.segW)
+  })
+
+  test('[covers:web-receipts.payment-filter][covers:web-common.row-bar-component] the payments zone keeps the 44px pressable button rows and carries the shared DOM bar (the null-key row a span with a bar)', async ({ page }) => {
+    logPageIssues(page, 'payments-row-bar')
+    await installApiStub(page)
+    // the payments ranking comes off a richer fixture: two keyed rows plus a
+    // null-key aggregate (a non-pressable span row — its bar comes from its
+    // own value like every other row)
+    await page.route(
+      (url) => url.pathname === '/api/ledgers/1/analysis' && url.searchParams.get('axis') === 'payment_method',
+      async (route) => {
+        const body = {
+          axis: 'payment_method',
+          metric: 'amount',
+          period: { from: '2026-10-01', to: '2026-10-31', label: '2026年10月' },
+          totals: { amount: 948, count: 3, unit: 316, days: 31 },
+          rows: [
+            { key: 'cash', label: '現金', amount: 500, count: 2, unit: 250, share: 0.528 },
+            { key: 'credit_card', label: 'クレジットカード', amount: 300, count: 1, unit: 300, share: 0.316 },
+            { key: null, label: 'その他', amount: 148, count: 1, unit: 148, share: 0.156 },
+          ],
+          truncated_rows: 0,
+        }
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      },
+    )
+    await page.goto('/receipts?month=2026-10')
+    await expect(page.locator('[data-test="payments"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-test="payments"] .ranked-row')) as HTMLElement[]
+      return rows.map((row) => {
+        const seg = row.querySelector('.row-seg') as HTMLElement | null
+        const track = row.querySelector('.ranked-bar-track') as HTMLElement | null
+        return {
+          tag: row.tagName,
+          rowH: row.getBoundingClientRect().height,
+          segPresent: seg !== null,
+          segW: seg ? seg.getBoundingClientRect().width : 0,
+          trackW: track ? track.getBoundingClientRect().width : 0,
+          amount: row.querySelector('.amount')?.textContent ?? '',
+        }
+      })
+    })
+    expect(m.length).toBe(3)
+    const amounts = m.map((r) => Number(r.amount.replace(/[円,]/g, '')))
+    for (const r of m) {
+      expect(r.rowH).toBeCloseTo(44, 0)
+      expect(r.segPresent).toBe(true)
+    }
+    // the two keyed rows are pressable buttons; the null-key aggregate row
+    // stays a plain span (TASK-65) — with its bar present either way
+    expect(m.map((r) => r.tag)).toEqual(['BUTTON', 'BUTTON', 'SPAN'])
+    // the payments rows share one screen scale — barScale(max outer amount)
+    // over the row values (the daily zone stays on the old basis until
+    // TASK-126): every row's length ratio equals its value over that scale.
+    // The ladder below is the same 1/2/5 ceiling barScale implements.
+    const scale = Math.max(...amounts)
+    const nice = (v: number) => {
+      const exp = Math.pow(10, Math.floor(Math.log10(v)))
+      for (const s of [1, 2, 5, 10]) if (s * exp >= v) return s * exp
+      return 10 * exp
+    }
+    for (const [i, r] of m.entries()) {
+      expect(r.segW / r.trackW).toBeCloseTo(amounts[i]! / nice(scale), 2)
+    }
+    // the press still filters in place (the TASK-65 regression): pressing
+    // 現金 moves the URL, pressing it again clears it
+    const cash = page.locator('[data-test="payments"] [data-test="row-現金"]')
+    await cash.click()
+    await page.waitForLoadState('networkidle')
+    expect(page.url()).toContain('payment_method=cash')
+    await page.locator('[data-test="payments"] [data-test="row-現金"]').click()
+    await page.waitForLoadState('networkidle')
+    expect(page.url()).not.toContain('payment_method=')
   })
 })
 
@@ -443,10 +923,13 @@ test.describe('trend axis (360x780)', () => {
         yAxisRight: yAxis ? yAxis.right : -1,
         plotLeft: plot ? plot.left : -1,
         plotTop: plot ? plot.top : -1,
+        plotBottom: plot ? plot.bottom : -1,
         plotHeight: plot ? plot.height : -1,
         gridTops,
         labelCount: document.querySelectorAll('.bar-label').length,
         topValTop: valTops.length ? Math.min(...valTops) : -1,
+        colBottoms: Array.from(card?.querySelectorAll('.bar-col') ?? []).map((c) => rect(c)?.bottom ?? -1),
+        stackTops: Array.from(card?.querySelectorAll('.bar-col .bar-stack') ?? []).map((s) => rect(s)?.top ?? -1),
       }
     })
     const dump = JSON.stringify(m)
@@ -469,6 +952,16 @@ test.describe('trend axis (360x780)', () => {
     expect(m.labelCount, dump).toBe(0)
     // (7) headroom: even the tallest bar's value label stays inside the plot
     expect(m.topValTop, dump).toBeGreaterThanOrEqual(m.plotTop)
+    // (8) TASK-131: every column's bottom edge sits on the zero baseline
+    // (the plot's bottom) — the content-grown grid row used to sink every
+    // bar (the 0-yen placeholder columns included) below the baseline
+    expect(m.colBottoms.length, dump).toBe(6)
+    for (const b of m.colBottoms) expect(Math.abs(b - m.plotBottom), dump).toBeLessThanOrEqual(2)
+    // (9) TASK-131: the tallest stack never overshoots the max gridline
+    // (its top edge; catches the grown-row-but-dead-padding states — the
+    // baseline sinking itself is caught by (8))
+    expect(m.stackTops.length, dump).toBeGreaterThan(0)
+    expect(Math.min(...m.stackTops), dump).toBeGreaterThanOrEqual(tops[0]! - 2)
 
     // (6) the year mode is dense: 12 bars still fit the viewport and the
     // value labels thin to the 5 tick positions (the hidden values stay
@@ -493,6 +986,95 @@ test.describe('trend axis (360x780)', () => {
     expect(y.overflow, ydump).toBeLessThanOrEqual(2)
     expect(y.valBars, ydump).toEqual(['bar-2026-01', 'bar-2026-04', 'bar-2026-07', 'bar-2026-10', 'bar-2026-12'])
     expect(y.hiddenTitle, ydump).toMatch(/^2026年2月 \d+円$/)
+  })
+
+  // TASK-131 (design: tmp/tasks/tm-131/design_bar-col-padding-conflict.md
+  // §2/§6): the bar-column geometry the axis test above could not see —
+  // .bar-btn's padding reset beat .bar-col's headroom padding (same
+  // specificity, later source order) while the TASK-123 explicit px
+  // segments grew the auto grid row off the content-based min-size, so
+  // every bar sank +30px below the zero baseline and the 100/95/90% bars
+  // collapsed onto one flex-shrink ceiling. The default stub's lone 94.8%
+  // bar cannot expose the ceiling — the direct regression needs the
+  // high-ratio bars side by side, so a month-trend route override seeds
+  // the ladder window 1000/950/900/840/500/0円 (niceMax 1000 →
+  // 100/95/90/84/50/0%).
+  test('[covers:web-browse.trend-bar-geometry] 高比率同居窓は全棒下端=zero baseline・100%棒上端=max gridline・棒高は設計式どおり（天井崩壊なし）', async ({ page }) => {
+    logPageIssues(page, 'trend-bar-geometry')
+    await installApiStub(page)
+    await page.route(
+      (url) => url.pathname === '/api/ledgers/1/analysis/trend' && url.searchParams.get('granularity') === 'month',
+      async (route) => {
+        const body = {
+          axis: 'category',
+          metric: 'amount',
+          granularity: 'month',
+          period: { from: '2026-05-01', to: '2026-10-31', label: '' },
+          buckets: ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'],
+          series: [{ key: 1, label: '食費', values: [1000, 950, 900, 840, 500, 0], total: 4190 }],
+          bucket_totals: [1000, 950, 900, 840, 500, 0],
+          truncated_rows: 0,
+        }
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      },
+    )
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const m = await page.evaluate(() => {
+      const rect = (el: Element | null | undefined) => el?.getBoundingClientRect() ?? null
+      const card = document.querySelector('[data-test="trend-card"]')
+      const plot = rect(card?.querySelector('.plot'))
+      const cols = Array.from(card?.querySelectorAll('.bar-col') ?? [])
+      return {
+        missing: !card || !plot,
+        plotBottom: plot ? plot.bottom : -1,
+        trackH: plot ? plot.height : -1,
+        gridTops: Array.from(card?.querySelectorAll('.gridline') ?? []).map((g) => rect(g)?.top ?? -1),
+        colBottoms: cols.map((c) => rect(c)?.bottom ?? -1),
+        bars: cols.map((c) => {
+          const stack = rect(c.querySelector('.bar-stack'))
+          return {
+            key: c.getAttribute('data-test') ?? '',
+            top: stack ? stack.top : -1,
+            height: stack ? stack.height : -1,
+          }
+        }),
+      }
+    })
+    const dump = JSON.stringify(m)
+    expect(m.missing, dump).toBe(false)
+    // the ladder in bucket order: 100/95/90/84/50% + the 0-yen placeholder
+    // month (its column carries the fallback .bar, so no .bar-stack)
+    const ladder: Record<string, number> = {
+      'bar-2026-05': 1,
+      'bar-2026-06': 0.95,
+      'bar-2026-07': 0.9,
+      'bar-2026-08': 0.84,
+      'bar-2026-09': 0.5,
+    }
+    const stacked = m.bars.filter((b) => ladder[b.key] !== undefined)
+    // (1) TASK-131: every column's bottom edge (the 0-yen placeholder
+    // included) sits on the zero baseline — the plot's bottom. The grown
+    // grid row used to sink all of them +30px below it, onto the month
+    // tick row
+    expect(m.colBottoms.length, dump).toBe(6)
+    for (const b of m.colBottoms) expect(Math.abs(b - m.plotBottom), dump).toBeLessThanOrEqual(2)
+    // (2) TASK-131: the 100% bar's stack top meets the max gridline (the
+    // headroom puts the full bar 16px under the plot top; catches the
+    // pinned-row-but-dead-padding state — the sinking is caught by (1))
+    expect(stacked.length, dump).toBe(5)
+    expect(m.gridTops.length, dump).toBe(2)
+    const full = m.bars.find((b) => b.key === 'bar-2026-05')!
+    expect(Math.abs(full.top - Math.min(...m.gridTops)), dump).toBeLessThanOrEqual(2)
+    // (3) TASK-131: every stack's height follows ratio × barArea (±2px),
+    // barArea = the track height minus the 16px headroom — the monotone
+    // ladder survives: no flex-shrink ceiling flattening 100/95/90 onto
+    // one height, no under-84% inflation
+    const barArea = m.trackH - 16
+    for (const b of stacked) {
+      expect(Math.abs(b.height - ladder[b.key]! * barArea), `${dump} [${b.key}]`).toBeLessThanOrEqual(2)
+    }
   })
 })
 
@@ -1433,5 +2015,109 @@ test.describe('trend fit at the 2-column boundary (768x780)', () => {
     // inside the scroll port
     expect(m.docOverflow, dump).toBeLessThanOrEqual(1)
     expect(m.axisOverflow, dump).toBeLessThanOrEqual(0)
+  })
+})
+
+// --- TASK-124 (design tmp/tasks/tm-124/design_spa-url-routing.md v2): the
+// browsing URL sync and the tabbar-外 topbar ‹, as real-browser facts. (a) the
+// period chip's step replaces the URL's period key without stacking history,
+// and the browser back restores the entry's final period (e); (c) a deep link
+// restores the label filter together with the period on Home; (h) the ‹ is a
+// 44px icon-only target right after the brand that climbs to the parent
+// section. Written test-first — these stay red until the implementation
+// lands. ---
+
+test.describe('browsing url sync + topbar back (390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  test('[covers:web-browse.url-period-sync][covers:web-browse.url-pop-restore] 時期チップの送りはURLのperiod keyをreplaceで置換し（履歴に積まない）・browser戻るは戻り先entryの期間ごと復元する', async ({ page }) => {
+    logPageIssues(page, 'url-period')
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    // two month steps through the period chip: 2026-10 -> 09 -> 08
+    await page.locator('[data-test="filter-period"]').click()
+    await expect(page.locator('[data-test="period-prev"]')).toBeVisible()
+    await page.locator('[data-test="period-prev"]').click()
+    await expect(page).toHaveURL(/month=2026-09/)
+    await page.locator('[data-test="period-prev"]').click()
+    await expect(page).toHaveURL(/month=2026-08/)
+    await page.keyboard.press('Escape') // close the dialog for the tab switch
+    // leave to Home through the tabbar (a keys-less push), then come back
+    await page.locator('[data-test="tabbar"] a').first().click()
+    await expect(page.locator('[data-test="period-total"]')).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/')
+    await page.goBack()
+    // the back lands on the categories entry's final URL (2026-08) and the
+    // pop imports it: the chip shows August
+    await expect(page).toHaveURL(/\/categories\?month=2026-08/)
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute(
+      'aria-label',
+      '期間で絞り込み: 2026年8月',
+    )
+    // the two steps never stacked history: the next back leaves the app
+    // (a push-per-step implementation would land on ?month=2026-09 instead)
+    await page.goBack()
+    await expect(page).not.toHaveURL(/\/categories/)
+  })
+
+  test('[covers:web-browse.url-restore] 直リンクの labels= と期間は Home でも復元される（analysis へ label_colors 付きで流れる・URL の keys は保たれる）', async ({ page }) => {
+    logPageIssues(page, 'url-restore')
+    await installApiStub(page)
+    const apiUrls: string[] = []
+    page.on('request', (r) => {
+      if (r.url().includes('/api/ledgers/1/analysis')) apiUrls.push(r.url())
+    })
+    await page.goto('/?labels=red&month=2026-09')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    // the analysis query carries both the deep-linked month and the label filter
+    expect(
+      apiUrls.some((u) => u.includes('month=2026-09') && u.includes('label_colors=red')),
+      JSON.stringify(apiUrls),
+    ).toBe(true)
+    // the URL keeps both keys (no rewrite drops them)
+    expect(new URL(page.url()).searchParams.get('labels')).toBe('red')
+    expect(new URL(page.url()).searchParams.get('month')).toBe('2026-09')
+  })
+
+  test('[covers:web-shell.topbar-back] tabbar外画面のtopbar ‹ は44px・brand直後・表題直前で親sectionへ戻る（manage→データtab・search→ホーム）', async ({ page }) => {
+    logPageIssues(page, 'topbar-back')
+    await installApiStub(page)
+    await page.goto('/settings/labels')
+    const back = page.locator('[data-test="topbar-back"]')
+    await expect(back).toBeVisible()
+    await expect(back).toHaveAttribute('aria-label', 'データへ戻る')
+    const box = await back.boundingBox()
+    expect(box).toBeTruthy()
+    expect(box!.width).toBeCloseTo(44, 1)
+    expect(box!.height).toBeCloseTo(44, 1)
+    // the ‹ sits right after the brand and right before the topbar title
+    const order = await page.evaluate(() =>
+      Array.from(document.querySelector('header.topbar')!.children).map((el) => ({
+        test: el.getAttribute('data-test'),
+        brand: el.classList.contains('topbar-brand'),
+        title: el.tagName === 'H1',
+      })),
+    )
+    const dump = JSON.stringify(order)
+    const idx = order.findIndex((o) => o.test === 'topbar-back')
+    expect(idx, dump).toBeGreaterThan(order.findIndex((o) => o.brand))
+    expect(idx, dump).toBeLessThan(order.findIndex((o) => o.title))
+    await back.click()
+    await expect(page).toHaveURL(/\/settings\/data$/)
+
+    // /search climbs to Home; the browsing screens keep the tabbar instead
+    await page.goto('/search')
+    await expect(page.locator('[data-test="topbar-back"]')).toHaveAttribute('aria-label', 'ホームへ戻る')
+    await page.locator('[data-test="topbar-back"]').click()
+    expect(new URL(page.url()).pathname).toBe('/')
+    for (const path of ['/', '/categories?month=2026-10', '/axes/category/1?month=2026-10', '/receipts/101']) {
+      await page.goto(path)
+      expect(await page.locator('[data-test="topbar-back"]').count(), path).toBe(0)
+    }
+    // the axis detail keeps its PageHead ‹ (inside .page-head, not the topbar)
+    await page.goto('/axes/category/1?month=2026-10')
+    await expect(page.locator('.page-head [data-test="page-back"]')).toBeVisible()
   })
 })

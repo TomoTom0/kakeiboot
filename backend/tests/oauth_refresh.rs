@@ -46,6 +46,76 @@ async fn refresh_row(
     .unwrap()
 }
 
+/// (revoked_at, revoked_reason) of a grant.
+async fn grant_state(pool: &sqlx::SqlitePool, grant_id: i64) -> (Option<i64>, Option<String>) {
+    sqlx::query_as("SELECT revoked_at, revoked_reason FROM oauth_grants WHERE id = ?")
+        .bind(grant_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// POST /oauth/token grant_type=refresh_token for `token` (+ extra params).
+async fn rotate(
+    router: &axum::Router,
+    mock: &oauth::MockIds,
+    issuer: &str,
+    token: &str,
+    extras: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = post_form(
+        router,
+        "/oauth/token",
+        &refresh_form(mock, issuer, token, extras),
+        &[],
+    )
+    .await;
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+/// Rotation that must succeed: returns (access, refresh).
+async fn rotate_ok(
+    router: &axum::Router,
+    mock: &oauth::MockIds,
+    issuer: &str,
+    token: &str,
+) -> (String, String) {
+    let (status, body) = rotate(router, mock, issuer, token, "").await;
+    assert_eq!(status, 200, "rotation failed: {body}");
+    (
+        body["access_token"].as_str().unwrap().to_string(),
+        body["refresh_token"].as_str().unwrap().to_string(),
+    )
+}
+
+/// Bearer use of an access token on /mcp: 401 when the token is not valid
+/// (a valid token reaches rmcp, which answers its own non-401 error).
+async fn bearer_status(router: &axum::Router, access: &str) -> StatusCode {
+    oauth::post_form(
+        router,
+        "/mcp",
+        "{}",
+        &[("authorization", format!("Bearer {access}"))],
+    )
+    .await
+    .status()
+}
+
+/// Presenting `token` must fail as invalid_grant (400).
+async fn assert_invalid_grant(
+    router: &axum::Router,
+    mock: &oauth::MockIds,
+    issuer: &str,
+    token: &str,
+    extras: &str,
+    what: &str,
+) {
+    let (status, body) = rotate(router, mock, issuer, token, extras).await;
+    assert_eq!(status, 400, "{what}: {body}");
+    assert_eq!(body["error"], "invalid_grant", "{what}: {body}");
+}
+
 // [covers:auth-oauth.refresh-first-rotation]
 #[tokio::test]
 async fn first_rotation_issues_child_pair() {
@@ -144,6 +214,8 @@ async fn grace_window_reissue_replaces_child() {
     let body = body_json(resp).await;
     let child1 = body["refresh_token"].as_str().unwrap().to_string();
     let access1 = body["access_token"].as_str().unwrap().to_string();
+    let used_at_first = refresh_row(&pool, &flow.refresh_token).await.0;
+    assert!(used_at_first.is_some());
 
     // immediate replay of the parent (within 60s grace, child unused)
     let resp = post_form(
@@ -161,12 +233,11 @@ async fn grace_window_reissue_replaces_child() {
     assert_ne!(access1, access2);
 
     // used_at keeps the original rotation time (not updated)
-    let row_before: Option<i64> = {
-        let r = refresh_row(&pool, &flow.refresh_token).await;
-        r.0
-    };
-    let now = budget_book::auth::session::now_ms();
-    assert!(row_before.unwrap() <= now);
+    assert_eq!(
+        refresh_row(&pool, &flow.refresh_token).await.0,
+        used_at_first,
+        "parent used_at unchanged by the reissue"
+    );
 
     // child_hash now points at child2
     let row = refresh_row(&pool, &flow.refresh_token).await;
@@ -194,15 +265,16 @@ async fn grace_window_reissue_replaces_child() {
             .await
             .unwrap();
     assert!(access2_revoked.is_none());
-    // child1 itself is revoked? spec: 旧の子と対の access を失効 (child1 row
-    // itself remains unused/valid-but-orphaned; the family moved on)
-    let child1_used: Option<i64> =
-        sqlx::query_scalar("SELECT used_at FROM oauth_refresh_tokens WHERE token_hash = ?")
-            .bind(oauth::token_hash(&child1))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(child1_used.is_none());
+    // TASK-140: the superseded child's refresh row itself is revoked too
+    // (one live child per family, spec_auth.md 4-9 step 3); it was never
+    // used, so used_at stays NULL
+    let (child1_used, _, child1_revoked) = refresh_row(&pool, &child1).await;
+    assert!(child1_used.is_none(), "old child never used");
+    assert!(child1_revoked.is_some(), "old child's refresh row revoked");
+    // child2 is the single live child; the grant stays valid
+    let (child2_used, _, child2_revoked) = refresh_row(&pool, &child2).await;
+    assert!(child2_used.is_none() && child2_revoked.is_none());
+    assert_eq!(grant_state(&pool, flow.grant_id).await, (None, None));
 }
 
 // [covers:auth-oauth.refresh-reuse-beyond-grace]
@@ -475,4 +547,469 @@ async fn refresh_failure_modes() {
             .unwrap();
     assert!(grant.0.is_some(), "client mismatch revokes the grant");
     assert_eq!(grant.1.as_deref(), Some("client_mismatch"));
+}
+
+// ---------------------------------------------------------------------------
+// TASK-140: a child superseded by a grace-window reissue is revoked, and
+// presenting it later is a theft signal that revokes the whole family
+// (spec_auth.md 4-9 steps 1 and 3, 4-10; spec_data-model.md section 14).
+
+// [covers:auth-oauth.refresh-superseded-child-reuse]
+// S1: the attacker rotates the stolen R first (C1/A1); the legitimate client
+// replays R within grace (C2/A2); the attacker then uses C1.
+#[tokio::test]
+async fn superseded_child_attacker_first_revokes_family() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (a2, c2) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    assert_eq!(
+        bearer_status(&router, &a1).await,
+        StatusCode::UNAUTHORIZED,
+        "the attacker's A1 is already dead before C1 is presented"
+    );
+
+    assert_invalid_grant(&router, &mock, &issuer, &c1, "", "superseded C1").await;
+    let (revoked_at, reason) = grant_state(&pool, flow.grant_id).await;
+    assert!(
+        revoked_at.is_some(),
+        "grant revoked (committed before the response)"
+    );
+    assert_eq!(reason.as_deref(), Some("refresh_reuse"));
+    // no second family survives: C2 and A2 die with the grant
+    assert_invalid_grant(
+        &router,
+        &mock,
+        &issuer,
+        &c2,
+        "",
+        "C2 after family revocation",
+    )
+    .await;
+    assert_eq!(bearer_status(&router, &a2).await, StatusCode::UNAUTHORIZED);
+}
+
+// [covers:auth-oauth.refresh-superseded-child-reuse]
+// S2: the legitimate client rotates R first (C1); the attacker replays the
+// stolen R within grace (C2/A2); the legitimate client then uses its C1.
+#[tokio::test]
+async fn superseded_child_legit_first_revokes_attacker_family() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (a2, c2) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+
+    assert_invalid_grant(
+        &router,
+        &mock,
+        &issuer,
+        &c1,
+        "",
+        "legit client's superseded C1",
+    )
+    .await;
+    let (revoked_at, reason) = grant_state(&pool, flow.grant_id).await;
+    assert!(revoked_at.is_some());
+    assert_eq!(reason.as_deref(), Some("refresh_reuse"));
+    assert_invalid_grant(&router, &mock, &issuer, &c2, "", "attacker's C2").await;
+    assert_eq!(bearer_status(&router, &a2).await, StatusCode::UNAUTHORIZED);
+}
+
+// [covers:auth-oauth.refresh-grace-retry-no-false-positive]
+// The reason the grace window exists: R was sent but the response (C1) was
+// lost, so the client re-sends R and continues with C2. It never holds C1,
+// so the family survives.
+#[tokio::test]
+async fn grace_retry_then_new_child_keeps_family() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let _lost = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (_a2, c2) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (a3, _c3) = rotate_ok(&router, &mock, &issuer, &c2).await;
+    assert_eq!(grant_state(&pool, flow.grant_id).await, (None, None));
+    assert_ne!(bearer_status(&router, &a3).await, StatusCode::UNAUTHORIZED);
+}
+
+// [covers:auth-oauth.refresh-superseded-child-grandchild]
+// R -> C1, R -> C2 (grace), C2 -> C3; then the superseded C1 is presented.
+#[tokio::test]
+async fn superseded_child_after_grandchild_revokes_family() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (_a2, c2) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (a3, c3) = rotate_ok(&router, &mock, &issuer, &c2).await;
+
+    assert_invalid_grant(&router, &mock, &issuer, &c1, "", "superseded C1").await;
+    assert_eq!(
+        grant_state(&pool, flow.grant_id).await.1.as_deref(),
+        Some("refresh_reuse")
+    );
+    assert_invalid_grant(&router, &mock, &issuer, &c3, "", "grandchild C3").await;
+    assert_eq!(bearer_status(&router, &a3).await, StatusCode::UNAUTHORIZED);
+}
+
+// [covers:auth-oauth.refresh-grace-reissue-repeated]
+// Three grace reissues of R: every superseded child (C1, C2) is revoked and
+// only C3 stays live; presenting either superseded child revokes the family.
+#[tokio::test]
+async fn repeated_grace_reissue_revokes_every_superseded_child() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (_a2, c2) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let (_a3, c3) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    assert!(refresh_row(&pool, &c1).await.2.is_some(), "C1 revoked");
+    assert!(refresh_row(&pool, &c2).await.2.is_some(), "C2 revoked");
+    assert!(refresh_row(&pool, &c3).await.2.is_none(), "C3 live");
+    assert_eq!(
+        refresh_row(&pool, &flow.refresh_token).await.1.as_deref(),
+        Some(oauth::token_hash(&c3).as_slice())
+    );
+
+    assert_invalid_grant(&router, &mock, &issuer, &c2, "", "superseded C2").await;
+    assert_eq!(
+        grant_state(&pool, flow.grant_id).await.1.as_deref(),
+        Some("refresh_reuse")
+    );
+}
+
+// [covers:auth-oauth.refresh-superseded-child-expired]
+// The revoked check precedes the expiry check (design review L1): an expired
+// superseded child is still a theft signal while the grant is valid.
+#[tokio::test]
+async fn expired_superseded_child_is_still_reuse() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let _ = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    sqlx::query("UPDATE oauth_refresh_tokens SET expires_at = 1 WHERE token_hash = ?")
+        .bind(oauth::token_hash(&c1))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_invalid_grant(&router, &mock, &issuer, &c1, "", "expired superseded C1").await;
+    let (revoked_at, reason) = grant_state(&pool, flow.grant_id).await;
+    assert!(
+        revoked_at.is_some(),
+        "expired superseded child revokes the family"
+    );
+    assert_eq!(reason.as_deref(), Some("refresh_reuse"));
+}
+
+// [covers:auth-oauth.refresh-superseded-child-survives-sweep]
+// TASK-140 review MEDIUM-1: the maintenance sweep keeps a superseded
+// (revoked) child past expiry + 1 day while the grant is live, so a late
+// presentation is still reuse and revokes the family.
+#[tokio::test]
+async fn superseded_child_survives_sweep_and_is_reuse() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let _ = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+    let now = budget_book::auth::session::now_ms();
+    sqlx::query("UPDATE oauth_refresh_tokens SET expires_at = ? WHERE token_hash = ?")
+        .bind(now - 3 * 86_400_000)
+        .bind(oauth::token_hash(&c1))
+        .execute(&pool)
+        .await
+        .unwrap();
+    budget_book::store::cleanup_expired(&pool, now, "2000-01-01", |_| Ok(()))
+        .await
+        .unwrap();
+    assert!(
+        refresh_row(&pool, &c1).await.2.is_some(),
+        "the superseded child survives the sweep"
+    );
+
+    assert_invalid_grant(&router, &mock, &issuer, &c1, "", "swept-window C1").await;
+    assert_eq!(
+        grant_state(&pool, flow.grant_id).await.1.as_deref(),
+        Some("refresh_reuse")
+    );
+}
+
+// [covers:auth-oauth.refresh-superseded-child-check-order]
+// Step 1 order (design review M3/L2/L6): expiry of a non-revoked row /
+// grant revoked / grant expired / user disabled -> resource mismatch ->
+// client mismatch -> revoked token (reuse) -> scope. Each case starts from a
+// superseded C1 (R -> C1, R -> C2) in a fresh app.
+#[tokio::test]
+async fn superseded_child_check_order() {
+    enum Case {
+        GrantRevoked,
+        UserDisabled,
+        ResourceMismatch,
+        ClientMismatch,
+        BadScope,
+    }
+    for case in [
+        Case::GrantRevoked,
+        Case::UserDisabled,
+        Case::ResourceMismatch,
+        Case::ClientMismatch,
+        Case::BadScope,
+    ] {
+        let (router, pool, mock, client, issuer) = setup().await;
+        let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+        let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+        let _ = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+        let mut extras = "";
+        let (label, want): (&str, (bool, Option<&str>)) = match case {
+            Case::GrantRevoked => {
+                sqlx::query(
+                    "UPDATE oauth_grants SET revoked_at = 1, revoked_reason = 'user' WHERE id = ?",
+                )
+                .bind(flow.grant_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+                (
+                    "grant revoked: rollback, reason untouched",
+                    (true, Some("user")),
+                )
+            }
+            Case::UserDisabled => {
+                sqlx::query(
+                    "UPDATE users SET disabled_at = 1 WHERE id = (SELECT user_id FROM oauth_grants WHERE id = ?)",
+                )
+                .bind(flow.grant_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+                ("user disabled: rollback, grant not revoked", (false, None))
+            }
+            Case::ResourceMismatch => {
+                extras = "&resource=http%3A%2F%2Flocalhost%3A40281%2Fother";
+                (
+                    "resource mismatch: rollback, grant not revoked",
+                    (false, None),
+                )
+            }
+            Case::ClientMismatch => {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO oauth_clients (client_id, metadata_json, redirect_uris_json, token_endpoint_auth_method, fetched_at, expires_at)
+                     VALUES ('https://chatgpt.com/clients/foreign', '{}', '[]', 'none', 0, 0)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "UPDATE oauth_grants SET client_id = 'https://chatgpt.com/clients/foreign' WHERE id = ?",
+                )
+                .bind(flow.grant_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+                (
+                    "client mismatch wins over reuse",
+                    (true, Some("client_mismatch")),
+                )
+            }
+            Case::BadScope => {
+                extras = "&scope=ledger.admin";
+                ("reuse wins over scope", (true, Some("refresh_reuse")))
+            }
+        };
+        assert_invalid_grant(&router, &mock, &issuer, &c1, extras, label).await;
+        let (revoked_at, reason) = grant_state(&pool, flow.grant_id).await;
+        assert_eq!((revoked_at.is_some(), reason.as_deref()), want, "{label}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TASK-140 diagnostics (design review L4): every refresh_reuse revocation
+// logs a WARN line with a `kind` field that tells the paths apart, plus
+// grant_id and client_id, and never a token, its hash or an assertion.
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// [covers:auth-oauth.refresh-reuse-diagnostic-kind]
+#[tokio::test]
+async fn refresh_reuse_logs_diagnostic_kind() {
+    // thread-local capture (common::logcap keeps a second dispatcher so a
+    // parallel test cannot poison the callsite interest cache)
+    let cap = common::logcap::LogCapture::new();
+
+    let (router, pool, mock, client, issuer) = setup().await;
+    let mut secrets: Vec<String> = Vec::new();
+
+    // grace_exceeded: replay of R after the 60s grace
+    let f1 = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (a, c) = rotate_ok(&router, &mock, &issuer, &f1.refresh_token).await;
+    secrets.extend([f1.refresh_token.clone(), f1.access_token.clone(), a, c]);
+    sqlx::query("UPDATE oauth_refresh_tokens SET used_at = ? WHERE token_hash = ?")
+        .bind(budget_book::auth::session::now_ms() - 120_000)
+        .bind(oauth::token_hash(&f1.refresh_token))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_invalid_grant(
+        &router,
+        &mock,
+        &issuer,
+        &f1.refresh_token,
+        "",
+        "grace exceeded",
+    )
+    .await;
+
+    // child_used: replay of R within grace after its child was used
+    let f2 = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (a, c1) = rotate_ok(&router, &mock, &issuer, &f2.refresh_token).await;
+    let (a2, g) = rotate_ok(&router, &mock, &issuer, &c1).await;
+    secrets.extend([
+        f2.refresh_token.clone(),
+        f2.access_token.clone(),
+        a,
+        c1,
+        a2,
+        g,
+    ]);
+    assert_invalid_grant(&router, &mock, &issuer, &f2.refresh_token, "", "child used").await;
+
+    // superseded_child: the superseded C1 is presented
+    let f3 = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+    let (a, c1) = rotate_ok(&router, &mock, &issuer, &f3.refresh_token).await;
+    let (a2, c2) = rotate_ok(&router, &mock, &issuer, &f3.refresh_token).await;
+    secrets.extend([
+        f3.refresh_token.clone(),
+        f3.access_token.clone(),
+        a,
+        a2,
+        c2,
+        c1.clone(),
+    ]);
+    assert_invalid_grant(&router, &mock, &issuer, &c1, "", "superseded child").await;
+
+    let out = cap.output();
+    for (kind, grant_id) in [
+        ("grace_exceeded", f1.grant_id),
+        ("child_used", f2.grant_id),
+        ("superseded_child", f3.grant_id),
+    ] {
+        let line = out
+            .lines()
+            .find(|l| l.contains("WARN") && l.contains("kind=") && l.contains(kind))
+            .unwrap_or_else(|| panic!("no WARN line with kind={kind}:\n{out}"));
+        assert!(
+            line.contains(&format!("grant_id={grant_id}")),
+            "{kind}: grant_id field: {line}"
+        );
+        assert!(
+            line.contains("client_id="),
+            "{kind}: client_id field: {line}"
+        );
+    }
+    for s in &secrets {
+        assert!(
+            !out.contains(s.as_str()),
+            "a token value leaked into the log"
+        );
+        assert!(
+            !out.contains(&hex(&oauth::token_hash(s))),
+            "a token hash leaked into the log"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TASK-140 fail-closed writes (design review L3): a failing revocation /
+// access-revocation UPDATE inside refresh() is a server error (500, rolled
+// back), never a silently committed invalid_grant or a reissued pair.
+
+// [covers:auth-oauth.refresh-revoke-write-failure-db-error]
+#[tokio::test]
+async fn refresh_revocation_write_failure_is_server_error() {
+    enum Case {
+        GraceExceeded,
+        ClientMismatch,
+        GraceReissueAccessRevoke,
+        GraceReissueChildRevoke,
+    }
+    for case in [
+        Case::GraceExceeded,
+        Case::ClientMismatch,
+        Case::GraceReissueAccessRevoke,
+        Case::GraceReissueChildRevoke,
+    ] {
+        let (router, pool, mock, client, issuer) = setup().await;
+        let flow = oauth::run_full_flow(&router, &pool, &client, &mock, &issuer, None).await;
+        let (_a1, c1) = rotate_ok(&router, &mock, &issuer, &flow.refresh_token).await;
+        let label = match case {
+            Case::GraceExceeded => {
+                sqlx::query("UPDATE oauth_refresh_tokens SET used_at = ? WHERE token_hash = ?")
+                    .bind(budget_book::auth::session::now_ms() - 120_000)
+                    .bind(oauth::token_hash(&flow.refresh_token))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "CREATE TRIGGER inject_fail BEFORE UPDATE OF revoked_at ON oauth_grants
+                     BEGIN SELECT RAISE(ABORT, 'injected'); END",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                "grace exceeded: grant revocation fails"
+            }
+            Case::ClientMismatch => {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO oauth_clients (client_id, metadata_json, redirect_uris_json, token_endpoint_auth_method, fetched_at, expires_at)
+                     VALUES ('https://chatgpt.com/clients/foreign', '{}', '[]', 'none', 0, 0)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "UPDATE oauth_grants SET client_id = 'https://chatgpt.com/clients/foreign' WHERE id = ?",
+                )
+                .bind(flow.grant_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "CREATE TRIGGER inject_fail BEFORE UPDATE OF revoked_at ON oauth_grants
+                     BEGIN SELECT RAISE(ABORT, 'injected'); END",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                "client mismatch: grant revocation fails"
+            }
+            Case::GraceReissueAccessRevoke => {
+                sqlx::query(
+                    "CREATE TRIGGER inject_fail BEFORE UPDATE OF revoked_at ON oauth_access_tokens
+                     BEGIN SELECT RAISE(ABORT, 'injected'); END",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                "grace reissue: paired access revocation fails"
+            }
+            Case::GraceReissueChildRevoke => {
+                sqlx::query(
+                    "CREATE TRIGGER inject_fail BEFORE UPDATE OF revoked_at ON oauth_refresh_tokens
+                     BEGIN SELECT RAISE(ABORT, 'injected'); END",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                "grace reissue: superseded child revocation fails"
+            }
+        };
+        let (status, body) = rotate(&router, &mock, &issuer, &flow.refresh_token, "").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{label}: {body}");
+        assert_eq!(body["error"], "server_error", "{label}");
+        // rolled back: the grant is untouched and R still points at C1
+        assert_eq!(grant_state(&pool, flow.grant_id).await.0, None, "{label}");
+        assert_eq!(
+            refresh_row(&pool, &flow.refresh_token).await.1.as_deref(),
+            Some(oauth::token_hash(&c1).as_slice()),
+            "{label}"
+        );
+    }
 }

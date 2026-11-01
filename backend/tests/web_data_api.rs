@@ -2060,8 +2060,14 @@ async fn analysis_breakdown_axis_metric_rows() {
     // appear in the current-period analysis
     assert_eq!(v["truncated_rows"], 1);
 
-    // no query: category x amount defaults
-    let v = body_json(c.get(&router, "/api/ledgers/1/analysis").await).await;
+    // no axis / metric: category x amount defaults. The period is pinned to
+    // the fixture month (TASK-156): the default period is the JST current
+    // month, which would make this assertion depend on the run date.
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?month=2026-10")
+            .await,
+    )
+    .await;
     assert_eq!(v["axis"], "category");
     assert_eq!(v["metric"], "amount");
     // seeded catalog has no matching category -> 未分類 axis row

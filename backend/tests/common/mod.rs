@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod auth;
+pub mod logcap;
 pub mod oauth;
 
 use std::net::SocketAddr;

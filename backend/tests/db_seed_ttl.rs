@@ -640,6 +640,104 @@ async fn ttl_deletes_auth_artifacts() {
     );
 }
 
+// [covers:db-schema.ttl-keeps-revoked-refresh-while-grant-live]
+// TASK-140 review MEDIUM-1: a revoked refresh row (a child superseded by a
+// grace reissue) is kept past its expiry while its grant is live, so that
+// presenting it stays a reuse signal; it is swept once the grant is revoked
+// or past its absolute expiry. Unrevoked rows keep the expiry + 1 day rule.
+#[tokio::test]
+async fn ttl_keeps_revoked_refresh_while_grant_live() {
+    let pool = mem_pool().await;
+    ttl_fixture(&pool).await;
+    sqlx::query(
+        "INSERT INTO oauth_clients (client_id, metadata_json, redirect_uris_json, token_endpoint_auth_method, fetched_at, expires_at)
+         VALUES ('c1', '{}', '[]', 'none', 0, ?)",
+    )
+    .bind(NOW + DAY_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // (revoked_at, absolute_expires_at) of each grant; revoked / expired
+    // grants stay within their 30-day window so the grant sweep keeps them
+    let mut grant = std::collections::HashMap::new();
+    for (name, revoked, absolute) in [
+        ("live", None, NOW + 60 * DAY_MS),
+        ("revoked", Some(NOW - DAY_MS), NOW + 60 * DAY_MS),
+        ("expired", None, NOW - DAY_MS),
+    ] {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO oauth_grants (user_id, client_id, scope, resource, created_at, absolute_expires_at, revoked_at, revoked_reason)
+             VALUES (1, 'c1', 'read', 'https://bb', 0, ?, ?, ?) RETURNING id",
+        )
+        .bind(absolute)
+        .bind(revoked)
+        .bind(revoked.map(|_| "user"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        grant.insert(name, id);
+    }
+    // (token_hash, grant, expires_at, revoked_at)
+    let rows: [(&[u8], &str, i64, Option<i64>); 5] = [
+        (
+            b"live-revoked-expired",
+            "live",
+            NOW - 2 * DAY_MS,
+            Some(NOW - 40 * DAY_MS),
+        ),
+        (b"live-unrevoked-expired", "live", NOW - 2 * DAY_MS, None),
+        (
+            b"live-revoked-valid",
+            "live",
+            NOW + DAY_MS,
+            Some(NOW - DAY_MS),
+        ),
+        (
+            b"revoked-grant-revoked-expired",
+            "revoked",
+            NOW - 2 * DAY_MS,
+            Some(NOW - 40 * DAY_MS),
+        ),
+        (
+            b"expired-grant-revoked-expired",
+            "expired",
+            NOW - 2 * DAY_MS,
+            Some(NOW - 40 * DAY_MS),
+        ),
+    ];
+    for (hash, g, expires, revoked) in rows {
+        sqlx::query(
+            "INSERT INTO oauth_refresh_tokens (token_hash, grant_id, created_at, expires_at, revoked_at)
+             VALUES (?, ?, 0, ?, ?)",
+        )
+        .bind(hash)
+        .bind(grant[g])
+        .bind(expires)
+        .bind(revoked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let r = run_cleanup(&pool).await;
+    assert_eq!(r.deleted_grants, 0, "every grant is inside its window");
+    let mut left: Vec<String> =
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT token_hash FROM oauth_refresh_tokens")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| String::from_utf8(h).unwrap())
+            .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec!["live-revoked-expired", "live-revoked-valid"],
+        "revoked rows of a live grant stay; the rest past expiry + 1 day go"
+    );
+    assert_eq!(r.deleted_refresh_tokens, 3);
+}
+
 // [covers:db-schema.ttl-deletes-invitations]
 #[tokio::test]
 async fn ttl_deletes_invitations() {

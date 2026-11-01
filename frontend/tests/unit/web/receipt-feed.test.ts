@@ -3,6 +3,7 @@
 // conversion table is tested in receipt-context.test.ts and the Panel's
 // labels slot in receipt-panel.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import {
   setDataApi,
   type DataApi,
@@ -96,7 +97,7 @@ async function anyReceipt(over: (id: number) => Partial<ReceiptView> = () => ({}
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
 
 describe('Feed sequence', () => {
-  it('[covers:web-receipts.feed-sequence-from-context] 文脈 query で listReceipts を呼び一覧と同じ並び', async () => {
+  it('[covers:web-receipts.feed-sequence-from-context][covers:web-receipts.feed-external-nav][covers:web-browse.feed-no-remount] 文脈 query で listReceipts を呼び一覧と同じ並び・文脈変更の内容再取得は content-swap の fade のみ（ページrootはremountなし）', async () => {
     const list = vi.spyOn(api, 'listReceipts')
     await mountApp(`/receipts/102?${CTX_QS}&store=Aマート&item=牛乳&category=食費&include_deleted=1`)
     // fixed order regardless of the filters (the list API is the source of the order)
@@ -114,9 +115,51 @@ describe('Feed sequence', () => {
 
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([[101, 102, 103]]))
-    const feed = await mountApp(`/receipts/102?${CTX_QS}`)
+    const feed = await mountApp(`/receipts/102?${CTX_QS}`, { attach: true, stubs: { transition: false } })
     expect(panelIds(feed.wrapper)).toEqual([101, 102, 103])
+    // TASK-146 §3 #5 (web-common.content-swap): the panel group lives inside
+    // the content-swap wrapper — the content refetch crosses through it
+    // while the page root stays mounted
+    const swapWrap = feed.wrapper.find('.receipt-feed .content-swap')
+    expect(swapWrap.exists()).toBe(true)
+    expect(swapWrap.element.contains(panel(feed.wrapper, 102).element)).toBe(true)
 
+    // a context change refetches the sequence and crosses the content
+    // through the wrapper's fade — the page root never remounts and never
+    // carries a transition class (web-browse.feed-no-remount's coexistence)
+    const { wrapper, router } = feed
+    let gated = false
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    // the paged implementation is captured as a PLAIN function: binding the
+    // spied method itself would capture the spy, whose mockImplementation
+    // this very line overwrites — the release would then recurse through
+    // the gated impl forever (an OOM, not an assertion)
+    const pageImpl = pagedList([[101, 102, 103]])
+    vi.spyOn(api, 'listReceipts').mockImplementation(async (...args: Parameters<typeof api.listReceipts>) => {
+      if (gated && args[1]!.from === '2026-09-01') await gate
+      return pageImpl(...args)
+    })
+    const feedRoot = document.querySelector('main.app-main .receipt-feed')
+    expect(feedRoot).not.toBe(null)
+    gated = true
+    await router.push('/receipts/102?from=2026-09-01&to=2026-09-30')
+    await flushPromises()
+    // mid-refetch: the old panels still stand (the swap key waits for the load)
+    expect(panelIds(wrapper)).toEqual([101, 102, 103])
+    release()
+    await flushPromises()
+    const kids = Array.from(swapWrap.element.children)
+    expect(kids.some((el) => el.classList.contains('page-enter-active')), 'the content fades in').toBe(true)
+    // the page root is the very same node, classless — only the wrapper moved
+    expect(document.querySelector('main.app-main .receipt-feed')).toBe(feedRoot)
+    expect(
+      Array.from(feedRoot!.classList).some(
+        (c) => c.includes('-enter-') || c.includes('-leave-') || c.startsWith('slide-'),
+      ),
+    ).toBe(false)
+    await settle()
+    expect(swapWrap.element.children).toHaveLength(1)
   })
 })
 
@@ -249,7 +292,7 @@ describe('Feed URL sync and navigation', () => {
 })
 
 describe('Feed loading', () => {
-  it('[covers:web-receipts.feed-pagination] anchor のページまで cursor 追従、4 ページで見つからなければ単票、末尾で追加取得', async () => {
+  it('[covers:web-receipts.feed-pagination][covers:web-common.appear-fade] anchor のページまで cursor 追従、4 ページで見つからなければ単票、末尾で追加取得（追加panelは出現fade）', async () => {
     // anchor on the second page
     await anyReceipt()
     const list = vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([range(201, 250), range(251, 300)]))
@@ -289,9 +332,18 @@ describe('Feed loading', () => {
     const tail = await mountApp(`/receipts/401?${CTX_QS}`)
     expect(more.mock.calls.some((c) => c[1].cursor === 'c1')).toBe(false)
     intersect(panel(tail.wrapper, 450))
-    await settle()
+    await flushPromises()
     expect(more.mock.calls.some((c) => c[1].cursor === 'c1')).toBe(true)
     expect(panelIds(tail.wrapper).slice(-4)).toEqual([450, 451, 452, 453])
+    // TASK-146 §3 #18 (web-common.appear-fade): only the APPENDED panels
+    // earn the shared appear fade; the loaded ones stay put
+    const hasAppear = (el: Element): boolean =>
+      el.className.includes('bb-appear') || el.querySelector('[class*="bb-appear"]') !== null
+    for (const id of [451, 452, 453]) {
+      expect(hasAppear(panel(tail.wrapper, id).element), `appended ${id} fades in`).toBe(true)
+    }
+    expect(hasAppear(panel(tail.wrapper, 449).element), 'the loaded panels stay put').toBe(false)
+    await settle()
   })
 
   it('[covers:web-receipts.feed-render-window] 詳細 API を呼ぶ Panel は前後 2 件まで、それ以外は min-height のプレースホルダ', async () => {

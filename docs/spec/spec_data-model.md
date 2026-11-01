@@ -24,7 +24,7 @@ budget-book の永続データ構造の正本。テーブル構成・制約・dr
 | 検索・集計 | receipt_items_fts / v_item_facts | 品目の全文検索索引、集計用ファクトビュー |
 | 監査 | audit_events | 変更前後の記録 |
 
-migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql` / `0011_register_invitations.sql`。
+migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql` / `0011_register_invitations.sql` / `0012_revoke_superseded_refresh_children.sql`。
 
 - 0001 はユーザー・家計簿（users のアカウント特定用の列を含む）。
 - 0002 は認証・認可・招待（WebAuthn、web セッション、invitations、OAuth、アカウント特定・回復依頼のテーブル、`oauth_grants.active_ledger_id` の越境防止トリガと ledger_members の所属変更トリガ）。0001 の users / ledgers / ledger_members を参照するため 0001 の後に置く。
@@ -32,6 +32,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 0009 はラベル（`ledger_labels` / `receipt_labels`、seed トリガ、既存 ledger への backfill）。
 - 0010 は一括作成（`drafts.batch_id` の追加と部分索引 `drafts_batch`。TASK-18）。
 - 0011 は登録招待（`register_invitations`。CREATE TABLE のみ。TASK-32）。
+- 0012 は既存データ補正のみ（猶予内再発行で差し替えられたが失効していなかった旧の子 refresh 行に `revoked_at` を設定。テーブル変更なし。TASK-140）。
 
 ## 3. SQLite 共通規則
 
@@ -361,7 +362,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 | 論理削除レシート | 削除から90日で物理削除（`receipt_labels` の付与も CASCADE で消える。定義 `ledger_labels` は残る） |
 | 孤立画像（receipts にも pending draft にも参照されない） | 作成から24時間経過でファイル削除 → 成功後に行削除。逆方向（行の無いファイル）は週次でディレクトリ走査。一括作成で複数 draft・レシートが共有する画像は、参照元が1つでも残る間は孤立画像にならない（既存の判定のままで成立） |
 | image_access_tokens | 期限（`expires_at`）で削除。画像の行削除時は CASCADE |
-| 認証系（auth code / access・refresh token / session / jti / ceremony） | 期限 + 1日で削除（jti・ceremony は期限で削除）。grant は失効・期限切れから30日で削除（CASCADE でトークンも削除） |
+| 認証系（auth code / access・refresh token / session / jti / ceremony） | 期限 + 1日で削除（jti・ceremony は期限で削除）。ただし失効済み（`revoked_at` 非NULL）の refresh token は、属する grant が有効（未失効かつ絶対期限内）な間は残し、grant が失効・絶対期限切れ（または grant 行なし）になってから期限 + 1日の規則で削除する（差し替え済みの旧の子の提示を reuse として検知し続けるため。TASK-140）。grant は失効・期限切れから30日で削除（CASCADE でトークンも削除） |
 | invitations | 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
 | register_invitations | invitations と同じ規則: 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
 | oauth_authorization_requests | 期限（10分）で削除 |
@@ -386,6 +387,10 @@ DELETE FROM oauth_auth_codes WHERE expires_at < :now - 86400000;
 DELETE FROM oauth_client_assertion_jtis WHERE expires_at < :now;
 DELETE FROM webauthn_ceremonies WHERE expires_at < :now;
 -- access/refresh/session も期限 + 1日で削除。grant は revoked/expired の後 30日で削除（CASCADE でトークンも消える）
+-- refresh は失効済み行を grant が有効な間は残す（TASK-140）:
+DELETE FROM oauth_refresh_tokens WHERE expires_at < :now - 86400000
+  AND (revoked_at IS NULL OR grant_id NOT IN
+       (SELECT id FROM oauth_grants WHERE revoked_at IS NULL AND absolute_expires_at > :now));
 DELETE FROM invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
                            OR (used_at IS NOT NULL AND used_at < :now - 30*86400000);
 DELETE FROM register_invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
@@ -539,16 +544,16 @@ WHERE t.token_hash = ?1 AND t.revoked_at IS NULL AND t.expires_at > ?2
 
 refresh rotation（`BEGIN IMMEDIATE` 内。client 認証と jti 登録は tx 前に完了させる）:
 
-1. token 行なし・token/grant の失効・期限切れ・`disabled_at` 非NULL・`g.client_id` と認証済み client の不一致・要求 `resource` と `g.resource` の不一致 → `invalid_grant`。`resource` は要求にある場合のみ検査し、省略時は `g.resource` とみなす。client 不一致は加えて grant を失効させ、失効を COMMIT してから `invalid_grant` を返す（それ以外は ROLLBACK）。
+1. 判定順: token 行なし・token の期限切れ（失効済みでない行）・grant の失効・grant の絶対期限切れ・`disabled_at` 非NULL → 要求 `resource` と `g.resource` の不一致 → `g.client_id` と認証済み client の不一致 → token の失効（reuse） → scope。いずれも `invalid_grant`（scope は `invalid_scope`）。`resource` は要求にある場合のみ検査し、省略時は `g.resource` とみなす。client 不一致は grant を `client_mismatch` で失効させ、token の失効（`revoked_at` 非NULL = 手順3で差し替えられた旧の子）は盗用とみなして grant を `revoked_reason='refresh_reuse'` で失効させ、いずれも失効を COMMIT してから `invalid_grant` を返す（それ以外は ROLLBACK）。失効済みの判定は期限切れより先に行い、grant が有効なら期限切れの旧の子も reuse とする（このため TTL 掃除は grant が有効な間、失効済みの refresh 行を削除しない。§12）。行・grant・user の読み取り失敗と失効 UPDATE の失敗は fail closed とする（`spec_auth.md` §4-9 手順1）。
 2. `used_at IS NULL` → 子 refresh R1 と access A1（`refresh_hash=R1`）を発行し、`used_at=now, child_hash=R1` を記録する。
-3. `used_at` から60秒以内、かつ現行の子が未使用・未失効 → 旧の子と対の access token を失効させ、新しい子を発行して `child_hash` を差し替える（`used_at` は更新しない）。生きている子は常に1本。
+3. `used_at` から60秒以内、かつ現行の子が未使用・未失効 → 旧の子の refresh 行（`revoked_at=now`）と、その子と対の access token をともに失効させ、新しい子を発行して `child_hash` を差し替える（`used_at` は更新しない）。生きている子は常に1本。差し替えた旧の子が後から提示されたら手順1で family を失効させる。
 4. それ以外（猶予超過、子が使用済み）→ grant を `revoked_reason='refresh_reuse'` で失効させ、失効を COMMIT してから `invalid_grant` を返す。
 
-失効させてからエラーを返す処理（手順1の client 不一致、手順4、認可コードの再提示）は、エラーを早期 return して tx の drop で ROLLBACK すると失効が消えるため、失効を COMMIT した後にエラーへ変換する（`spec_auth.md` §4-10）。
+失効させてからエラーを返す処理（手順1の client 不一致と token の失効、手順3の子が使用済み、手順4、認可コードの再提示）は、エラーを早期 return して tx の drop で ROLLBACK すると失効が消えるため、失効を COMMIT した後にエラーへ変換する（`spec_auth.md` §4-10）。
 
 ## 15. DDL
 
-全 migration（0001〜0011）の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。
+全 migration（0001〜0011）の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。0012 はデータ補正のみでスキーマを変えないため、連結表記に含めず末尾に別記する。
 
 ### 0001 users / ledgers
 ```sql
@@ -757,7 +762,7 @@ CREATE TABLE oauth_refresh_tokens (
   created_at   INTEGER NOT NULL,
   expires_at   INTEGER NOT NULL,                -- min(発行時刻 + 30日, grant.absolute_expires_at)
   used_at      INTEGER,                         -- 最初に rotation に使われた時刻（猶予60秒の起点。再発行で更新しない）
-  revoked_at   INTEGER,
+  revoked_at   INTEGER,                         -- 猶予内再発行で差し替えられた旧の子のみ設定（grant の失効は oauth_grants 側）
   CHECK ((used_at IS NULL) = (child_hash IS NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX oauth_refresh_tokens_grant ON oauth_refresh_tokens(grant_id);
@@ -1274,4 +1279,18 @@ CREATE TABLE register_invitations (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX register_invitations_expires ON register_invitations(expires_at);
 CREATE INDEX register_invitations_issuer_open ON register_invitations(created_by) WHERE used_at IS NULL;
+```
+
+### 0012 revoke superseded refresh children
+
+TASK-140: データ補正のみ（テーブル変更なし）。修正前の猶予内再発行で差し替えられ、失効していなかった旧の子を失効させる。直接証拠（未使用・未失効で、どの `child_hash` からも参照されず、同じ grant に参照されている未使用・未失効の先端がある）のある行だけを対象とし、rotation のない初回 token や親が削除済みの現行の子は対象外。
+
+```sql
+UPDATE oauth_refresh_tokens SET revoked_at = CAST(strftime('%s','now') AS INTEGER) * 1000
+WHERE used_at IS NULL AND revoked_at IS NULL
+  AND token_hash NOT IN (SELECT child_hash FROM oauth_refresh_tokens WHERE child_hash IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM oauth_refresh_tokens tip
+              WHERE tip.grant_id = oauth_refresh_tokens.grant_id
+                AND tip.used_at IS NULL AND tip.revoked_at IS NULL
+                AND tip.token_hash IN (SELECT child_hash FROM oauth_refresh_tokens WHERE child_hash IS NOT NULL));
 ```

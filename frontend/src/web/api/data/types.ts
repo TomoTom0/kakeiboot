@@ -1,5 +1,5 @@
 // Web-side DTOs for the auxiliary data screens (categories, stores,
-// receipts). They mirror docs/spec_mcp-tools.md 7-9 to 7-14; once the
+// receipts). They mirror docs/spec/spec_mcp-tools.md 7-9 to 7-14; once the
 // backend generates TS types with ts-rs into src/shared/types/ (spec 12),
 // replace these with the generated ones.
 

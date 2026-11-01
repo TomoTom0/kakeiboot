@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { setDataApi, type DataApi } from '@/web/api/data'
+import {
+  setDataApi,
+  type DataApi,
+  type ReceiptListQuery,
+  type ReceiptListResult,
+  type ReceiptSummary,
+} from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { ApiError } from '@/web/api/http'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
@@ -548,6 +554,54 @@ describe('CategoriesPage', () => {
     // unarchived, it is visible in the default view again
     expect(wrapper.find(sel(funId)).exists()).toBe(true)
   })
+
+  // TASK-146 §3 #20 (web-common.appear-fade): the manage screen's inline
+  // state changes — the row editor swap, the add row, the archived rows, the
+  // fold children — appear through the ONE shared fade vocabulary. Written
+  // test-first; the classes are read in the insert patch (before the rAF
+  // clears them).
+  it('[covers:web-common.appear-fade][covers:web-manage.row-editor][covers:web-manage.category-create-structural][covers:web-manage.category-group-fold][covers:web-categories.archived-hidden-by-default] 行内状態変化の出現は共通の出現fade（bb-appear）: 行editor・追加行・archived行・fold子行', async () => {
+    const ids = await catIds(true)
+    const foodId = ids.get('食費')!
+    const funId = ids.get('趣味')!
+    const { wrapper } = await mountApp('/settings/categories', { attach: true, stubs: { transition: false } })
+    const appears = (el: Element | undefined, what: string) => {
+      expect(el, `${what} renders`).toBeDefined()
+      expect(
+        Array.from(el!.classList).some((c) => c.startsWith('bb-appear')),
+        `${what} appears through the shared fade`,
+      ).toBe(true)
+    }
+
+    // the row editor (the "..." menu's 名前を変更) appears through the fade
+    await wrapper.find(`${sel(foodId)} [data-test="row-menu-${foodId}"]`).trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    appears(wrapper.find(`${sel(foodId)} .row-editor`).element, 'the row editor')
+    // Escape closes it (the existing contract)
+    await wrapper.find(`${sel(foodId)} input[aria-label="新しい名前"]`).trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect(wrapper.find(`${sel(foodId)} .row-editor`).exists()).toBe(false)
+
+    // the structural add row appears through the fade
+    await wrapper.find('[data-test="add-top"]').trigger('click')
+    appears(wrapper.find('.add-row').element, 'the add row')
+    await wrapper.find('.add-row input').trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect(wrapper.find('.add-row').exists()).toBe(false)
+
+    // the archived group comes back through the fade (show-archived ON)
+    await wrapper.find('[data-test="show-archived"]').trigger('click')
+    appears(wrapper.find(sel(funId)).element, 'the archived row')
+
+    // the fold children reappear through the fade
+    const chev = () => wrapper.find(`${sel(foodId)} [data-test="fold"]`)
+    await chev().trigger('click')
+    await settle()
+    expect(wrapper.find(`${sel(foodId)} ul.cat-children`).exists()).toBe(false)
+    await chev().trigger('click')
+    appears(wrapper.find(`${sel(foodId)} ul.cat-children`).element, 'the fold children')
+  })
 })
 
 describe('StoresPage', () => {
@@ -705,6 +759,46 @@ describe('Receipts', () => {
     const cat = p.find('[data-test="item-cat-1001"]')
     expect(cat.element.tagName).toBe('A')
     expect(cat.attributes('href')).toBe('/axes/category/1/2?month=2026-10')
+  })
+
+  // TASK-146 §3 #18 (web-common.appear-fade): the list's さらに表示 appends
+  // its rows through the shared appear-fade grammar — only the appended row
+  // moves. Written test-first (a paged list stub: page 1 holds 2 rows, the
+  // cursor page appends 1).
+  it('[covers:web-receipts.dashboard][covers:web-common.appear-fade] 一覧の「さらに表示」で append された行は出現fade（既存行は不動）', async () => {
+    const summary = (id: number, on: string): ReceiptSummary => ({
+      receipt_id: id,
+      purchased_on: on,
+      purchased_time: '18:30',
+      store_name: `店${id}`,
+      amount: 100,
+      item_count: 1,
+      has_image: false,
+      deleted_at: null,
+    })
+    const list = vi.spyOn(api, 'listReceipts').mockImplementation(
+      async (_l: number, q: ReceiptListQuery): Promise<ReceiptListResult> => ({
+        total_count: 3,
+        sum_amount: 300,
+        receipts: q.cursor ? [summary(103, '2026-10-05')] : [summary(101, '2026-10-10'), summary(102, '2026-10-08')],
+        next_cursor: q.cursor ? null : 'c1',
+      }),
+    )
+    const { wrapper } = await mountApp('/receipts')
+    expect(wrapper.findAll('[data-test^="receipt-"]')).toHaveLength(2)
+
+    await wrapper.find('[data-test="more"]').trigger('click')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ cursor: 'c1' }))
+    const rows = wrapper.findAll('[data-test^="receipt-"]')
+    expect(rows).toHaveLength(3)
+    // the grammar rides the appended row (its own class or a child's)
+    const hasAppear = (el: Element): boolean =>
+      el.className.includes('bb-appear') || el.querySelector('[class*="bb-appear"]') !== null
+    expect(hasAppear(rows[0]!.element), 'the existing rows never move').toBe(false)
+    expect(hasAppear(rows[1]!.element), 'the existing rows never move').toBe(false)
+    expect(hasAppear(rows[2]!.element), 'the appended row appears through the fade').toBe(true)
+    await settle()
+    expect(wrapper.find('[data-test="more"]').exists()).toBe(false)
   })
 
   it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {

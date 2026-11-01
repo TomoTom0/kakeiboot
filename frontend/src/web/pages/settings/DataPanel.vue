@@ -11,7 +11,7 @@ import { useSessionStore } from '../../stores/session'
 // existing URLs; this tab is the way back) and the TASK-58 data card — export
 // one own ledger as a JSON file, import an export file as a fresh ledger.
 // This is the user-facing data takeout / restore path, not the operator
-// backup (docs/deploy.md): role checks are the backend's (any membership can
+// backup (docs/ops/ops_deploy.md): role checks are the backend's (any membership can
 // export — the same data the read APIs already show; import needs a session).
 const session = useSessionStore()
 const api = useDataApi()

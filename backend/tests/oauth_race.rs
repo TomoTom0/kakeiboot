@@ -174,6 +174,17 @@ async fn concurrent_use_of_one_refresh_token() {
                 .unwrap();
         assert_eq!(revoked.is_none(), i == live_idx, "access {i}");
     }
+    // TASK-140: the child that child_hash does not point at (superseded by
+    // the grace reissue) has its refresh row revoked too; the live one not
+    for (i, child) in children.iter().enumerate() {
+        let revoked: Option<i64> =
+            sqlx::query_scalar("SELECT revoked_at FROM oauth_refresh_tokens WHERE token_hash = ?")
+                .bind(oauth::token_hash(child))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked.is_none(), i == live_idx, "refresh child {i}");
+    }
     let grant_revoked: Option<i64> =
         sqlx::query_scalar("SELECT revoked_at FROM oauth_grants WHERE id = ?")
             .bind(flow.grant_id)

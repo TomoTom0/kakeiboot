@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { authApi } from '../api/auth'
 import { getPasskey, isCancel } from '../api/webauthn'
 import { errorMessage } from '../composables/format'
+import { prefersReducedMotion } from '../composables/reducedMotion'
 import { useSessionStore } from '../stores/session'
 
 // Step-up re-authentication (spec_auth.md 2-6). The ceremony starts from a
 // button press because browsers require a user gesture for WebAuthn.
+// TASK-146 §3 #16: the open/close is an appear fade on the shared frame
+// (the backdrop fades, the dialog rides the page vocabulary inside it).
 const session = useSessionStore()
 const busy = ref(false)
 const error = ref('')
+
+// reduced motion skips the fade classes entirely (web-common.overlay-transition)
+const motion = computed(() => !prefersReducedMotion())
 
 async function confirm(): Promise<void> {
   busy.value = true
@@ -33,46 +39,58 @@ function cancel(): void {
 </script>
 
 <template>
-  <div
-    v-if="session.stepUpOpen"
-    class="dialog-backdrop"
+  <Transition
+    name="page"
+    appear
+    :css="motion"
   >
     <div
-      class="dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="stepup-title"
-      data-test="stepup-dialog"
+      v-if="session.stepUpOpen"
+      class="dialog-backdrop"
     >
-      <h2 id="stepup-title">
-        本人確認
-      </h2>
-      <p>この操作にはパスキーでの本人確認が必要です（10分間有効）。</p>
-      <p
-        v-if="error"
-        class="msg msg-error"
-        role="alert"
+      <Transition
+        name="page"
+        appear
+        :css="motion"
       >
-        {{ error }}
-      </p>
-      <div class="actions">
-        <button
-          class="btn btn-primary"
-          :disabled="busy"
-          data-test="stepup-confirm"
-          @click="confirm"
+        <div
+          class="dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="stepup-title"
+          data-test="stepup-dialog"
         >
-          パスキーで確認
-        </button>
-        <button
-          class="btn"
-          :disabled="busy"
-          data-test="stepup-cancel"
-          @click="cancel"
-        >
-          キャンセル
-        </button>
-      </div>
+          <h2 id="stepup-title">
+            本人確認
+          </h2>
+          <p>この操作にはパスキーでの本人確認が必要です（10分間有効）。</p>
+          <p
+            v-if="error"
+            class="msg msg-error"
+            role="alert"
+          >
+            {{ error }}
+          </p>
+          <div class="actions">
+            <button
+              class="btn btn-primary"
+              :disabled="busy"
+              data-test="stepup-confirm"
+              @click="confirm"
+            >
+              パスキーで確認
+            </button>
+            <button
+              class="btn"
+              :disabled="busy"
+              data-test="stepup-cancel"
+              @click="cancel"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      </Transition>
     </div>
-  </div>
+  </Transition>
 </template>

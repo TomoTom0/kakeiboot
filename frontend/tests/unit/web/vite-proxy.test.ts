@@ -43,7 +43,8 @@ describe('vite dev server', () => {
   it('[covers:web-http.dev-spa-fallback] clean URL（/ ・/receipts/101 等）を /web.html へ', () => {
     expect(configText).toContain('configureServer')
     expect(configText).toContain("req.url.replace('/index.html', '/web.html')")
-    expect(configText).toMatch(/plugins:\s*\[vue\(\), devSpaFallbackPlugin\]/)
+    // TASK-141 adds usageDocsPlugin() ahead of the pair (docs/usage ingestion)
+    expect(configText).toMatch(/plugins:\s*\[usageDocsPlugin\(\), vue\(\), devSpaFallbackPlugin\]/)
     // dead-option guard: Vite 8 silently ignores server.rewrites
     expect(configText).not.toContain('rewrites:')
   })

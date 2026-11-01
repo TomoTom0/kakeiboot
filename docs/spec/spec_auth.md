@@ -78,8 +78,8 @@ FROM users u JOIN webauthn_credentials c ON c.user_id = u.id
 WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ```
 
-- その後 `finish_discoverable_authentication` を行い、`update_credential` が Some なら `passkey_json` を更新し、`last_used_at` を更新する。
-- sign counter の逆行（保存値 > 0 かつ受信値 <= 保存値）は webauthn-rs の拒否に従いログイン失敗とし、audit に `counter_regression`（credential id 付き）を記録する。credential の自動無効化はしない。counter 逆行以外の検証失敗（署名不正・origin 不一致等）も同じ 401 とし、audit には `login_failed`（error 文言を after_json に含む）を記録する。
+- credential_id による user 解決以降（user 解決 SQL、当該 user の `passkey_json` 読み込み、`finish_discoverable_authentication`、`update_credential` が Some なら `passkey_json` 更新、`last_used_at` 更新、既存 session cookie の失効、session 発行、audit）は 1 つの `BEGIN IMMEDIATE` で行う。counter 検証は write lock の下で読んだ最新の保存値を基準とし、同一 credential の並行ログインでも保存 counter は単調増加し（巻き戻らない）、同一または逆行した counter の assertion は後から write lock を得た側が `counter_regression` で拒否される。検証失敗・mismatch の audit も同じ tx に書き、COMMIT した後に 401 を返す（COMMIT 自体が失敗した場合は 500）。ceremony の取得・削除と `identify_discoverable_authentication` は tx の前に行う（identify 失敗の `login_mismatch` audit は tx の外で記録する）。tx 内では別の DB 接続を取得しない。user の無効化（運用者 CLI `user disable`）は無効化と同じ tx で既存 session を失効させるため、無効化の直前に完了したログインの session も失効する。
+- sign counter の逆行（保存値 > 0 かつ受信値 <= 保存値）は webauthn-rs の拒否に従いログイン失敗とし、audit に `counter_regression`（credential id 付き）を記録する。credential の自動無効化はしない。counter 逆行以外の検証失敗（署名不正・origin 不一致等）も同じ 401 とし、audit には `login_failed`（error 文言を after_json に含む）を記録する。複数タブ等で counter を持つ authenticator の assertion が生成順と逆に到着した場合も同じ規則で後から write lock を得た側を拒否する（利用者は再試行する）。counter が 0 固定の authenticator（同期パスキー）は counter 検査の対象外で、並行ログインはいずれも成功する。
 - backup eligible / backup state の変化は拒否せず `passkey_json` を更新し、一覧で「同期済み / 端末内」を表示するのみ。
 - ログイン成功のたびに新しい session 行を発行する。リクエストに既存の session cookie があれば、その行は user に関わらず失効させる。
 - OAuth の途中でログインした場合、ログイン開始時に frontend が URL の `req`（authorization request ID）を送り、backend は hash して存在確認のうえ `webauthn_ceremonies.authz_request_hash` に保存する。完了時は `{next: "consent"}` だけを返し、frontend は保持している平文 `req` で `/oauth/consent?req=<R>` へ遷移する（任意 URL への遷移経路を持たない）。
@@ -286,18 +286,26 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 
 refresh（`grant_type=refresh_token`）: client 認証と jti 登録を tx 前に完了させ、`BEGIN IMMEDIATE` で `spec_data-model.md` §14 の手順 1〜4 を行う。
 
-1. 要求に `resource` がある場合のみ `g.resource` と完全一致を検査し、省略時は `g.resource` とみなす。token 行なし・token / grant の失効・期限切れ・`disabled_at` 非 NULL・resource 不一致は ROLLBACK して `invalid_grant`。`g.client_id` と認証済み client の不一致は grant を失効させ COMMIT してから `invalid_grant`。
+1. 判定順は次のとおり: token 行なし・token の期限切れ（失効済みでない行）・grant の失効・grant の絶対期限切れ・`disabled_at` 非 NULL → resource 不一致 → client 不一致 → token の失効（reuse） → scope。
+   - 要求に `resource` がある場合のみ `g.resource` と完全一致を検査し、省略時は `g.resource` とみなす。
+   - token 行なし・token の期限切れ（失効済みでない行）・grant の失効・grant の絶対期限切れ・`disabled_at` 非 NULL・resource 不一致は ROLLBACK して `invalid_grant`。
+   - `g.client_id` と認証済み client の不一致は grant を `client_mismatch` で失効させ COMMIT してから `invalid_grant`。
+   - token 行が失効済み（`revoked_at` 非 NULL。手順3で差し替えられた旧の子）は盗用とみなし、grant を `revoked_reason='refresh_reuse'` で失効させ、COMMIT してから `invalid_grant`。失効済みの判定は期限切れより先に行い、grant が有効なら期限切れの旧の子もこの扱いとする。
+   - 失効済みの旧の子を期限後も検知できるよう、TTL 掃除は grant が有効（未失効かつ絶対期限内）な間は失効済みの refresh 行を削除しない（`spec_data-model.md` §12）。
+   - token 行・grant・user の読み取りに失敗した場合は拒否する（fail closed）。失効 UPDATE が失敗した場合は ROLLBACK して `server_error`（500）とし、失効していない拒否を COMMIT しない。
 2. `used_at IS NULL`: 子 refresh と access を発行し、`used_at` と `child_hash` を設定。
-3. `used_at` から60秒以内かつ現行の子が未使用・未失効: 旧の子と対の access を失効させ、新しい子を発行して `child_hash` を差し替える。
+3. `used_at` から60秒以内かつ現行の子が未使用・未失効: 旧の子の refresh 行と、その子と対の access をともに失効させ、新しい子を発行して `child_hash` を差し替える（`used_at` は更新しない）。生きている子は常に1本。差し替えた旧の子が後から提示されたら手順1で family を失効させる（応答を受け取れずに再送した正規 client は旧の子を持たないため、検知に掛からない）。現行の子が使用済みなら手順4と同じく grant を `refresh_reuse` で失効させる。
 4. それ以外: grant を `revoked_reason='refresh_reuse'` で失効させ、COMMIT してから `invalid_grant`。
 
 rotation では grant が変わらないので、選択中 ledger（`active_ledger_id`）は維持される。
 
+`refresh_reuse` による失効は WARN ログに判別用の `kind`（`grace_exceeded`: 手順4の猶予超過 / `child_used`: 手順3で現行の子が使用済み / `superseded_child`: 手順1の差し替え済み旧の子）と `grant_id`・`client_id` を出す。token・token hash・client assertion は出さない（10-2）。
+
 ### 4-10 不正検知時の失効規則
 
-不正を検知して失効させてからエラーを返す処理（code 再提示 → `code_reuse`、refresh の猶予超過再利用 → `refresh_reuse`、refresh の client 不一致 → grant 失効）は、`BEGIN IMMEDIATE` 内で失効 UPDATE を行い、**COMMIT した後に** OAuth エラー応答を返す。
+不正を検知して失効させてからエラーを返す処理（code 再提示 → `code_reuse`、refresh の猶予超過再利用・使用済みの子を持つ親の再提示・差し替え済みの旧の子の提示 → `refresh_reuse`、refresh の client 不一致 → grant 失効）は、`BEGIN IMMEDIATE` 内で失効 UPDATE を行い、**COMMIT した後に** OAuth エラー応答を返す。
 
-- エラーを `?` で早期 return すると tx の drop で ROLLBACK され失効が消えるため、token 処理は `Outcome::{Issued(..), RejectedAfterRevocation(reason), Rejected(reason)}` のような列挙で返し、`RejectedAfterRevocation` は commit してから `invalid_grant` に変換する。
+- エラーを `?` で早期 return すると tx の drop で ROLLBACK され失効が消えるため、token 処理は `Outcome::{Issued(..), RejectedAfterCommit(reason), Rejected(reason)}` のような列挙で返し、`RejectedAfterCommit` は commit してから `invalid_grant` に変換する。
 - テストでは「エラー応答後に grant が失効していること」を必ず確認する。
 
 ### 4-11 取り消し
@@ -519,7 +527,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。invite / register の発行は web のみ（CLI では不可） |
 | `admin recovery list [--status open]` / `recovery show <R-番号>` | 回復依頼の一覧・詳細（受付日時、note、候補 user のアカウント番号・表示名・admin_note・系譜・候補の根拠と subject の first / last seen）。一覧の先頭に全体上限の超過件数を表示 |
 | `admin recovery resolve <R-番号> --user <user_id>` / `recovery reject <R-番号> [--reason]` | 帯域外の本人確認後に再登録 URL を発行して解決（`token issue --kind recovery` と同じ処理・確認）／却下 |
-| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/deploy.md`）と script（`scripts/backup/`）から利用 |
+| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/ops/ops_deploy.md`）と script（`scripts/backup/`）から利用 |
 
 確認規則（取り違え・誤操作防止）:
 
@@ -644,9 +652,9 @@ sequenceDiagram
   U->>B: POST /api/webauthn/login/finish {credential}
   B->>D: ceremony 取得・削除
   B->>B: identify_discoverable_authentication → (uuid, cred_id)
-  B->>D: users JOIN webauthn_credentials（handle・credential_id・disabled_at。不一致は 401）
-  B->>B: finish_discoverable_authentication
-  B->>D: passkey_json / last_used_at 更新、既存 session cookie の行を失効、web_sessions INSERT、audit
+  B->>D: BEGIN IMMEDIATE: users JOIN webauthn_credentials（不一致は audit を COMMIT して 401）/ passkey_json 読込
+  B->>B: finish_discoverable_authentication（失敗は audit を COMMIT して 401）
+  B->>D: passkey_json / last_used_at 更新、既存 session cookie の行を失効、web_sessions INSERT、audit、COMMIT
   B-->>U: 200 {next} + Set-Cookie __Host-bb_session
 ```
 
@@ -709,12 +717,13 @@ sequenceDiagram
   C->>B: POST /oauth/token grant_type=refresh_token, refresh_token, (resource), (scope), client 認証
   B->>B: client 認証・jti（tx 前）
   B->>B: BEGIN IMMEDIATE
-  B->>B: 手順1: 行なし・失効・期限切れ・disabled・resource 不一致 → ROLLBACK、invalid_grant
+  B->>B: 手順1: 行なし・期限切れ（失効済みでない行）・grant 失効・grant 絶対期限・disabled → resource 不一致 → ROLLBACK、invalid_grant
   B->>B: client 不一致 → grant 失効を COMMIT してから invalid_grant
+  B->>B: 失効済みの旧の子 → grant 失効（refresh_reuse）、COMMIT してから invalid_grant
   alt used_at IS NULL（手順2）
     B->>B: 子 refresh・access 発行、used_at・child_hash 設定
   else 60秒以内かつ現行の子が未使用・未失効（手順3）
-    B->>B: 旧の子と対の access を失効、新しい子を発行、child_hash 差し替え
+    B->>B: 旧の子とその対の access を失効、新しい子を発行、child_hash 差し替え
   else それ以外（手順4）
     B->>B: grant 失効（refresh_reuse）、COMMIT してから invalid_grant
   end

@@ -33,19 +33,25 @@
   --sidebar-w: 240px;
   --topbar-h: 60px;
   --feed-nav-h: 3.5rem;
-  /* TASK-105 series palette (Okabe-Ito / Paul Tol muted, numerically
-     validated by tmp/tasks/tm-105/calc_palette.py — WCAG contrast, CVD
-     separation, accent separation): the 7 id-cyclic slots plus the
+  /* TASK-105 series palette (TASK-123 swapped the values — design: tmp/
+     tasks/tm-123/design_breakdown-visual.md v5 §4-2: OKLCH band / chroma /
+     surface contrast validated by scripts/validate_palette.js, adjacent ΔE
+     preference-maximized; the slot count, the (id-1) mod 7 cycling and the
+     rest tone keep the TASK-105 mapping): the 7 id-cyclic slots plus the
      unattributed rest. The green accent stays outside the series (it is the
      total / whole / non-decomposed color; design §3) */
-  --series-1: #0072B2;
-  --series-2: #C98208;
-  --series-3: #332288;
-  --series-4: #CC79A7;
-  --series-5: #882255;
-  --series-6: #3E9BD0;
-  --series-7: #C24100;
+  --series-1: #803A0D;
+  --series-2: #C4B45D;
+  --series-3: #506204;
+  --series-4: #44BEAD;
+  --series-5: #0A6390;
+  --series-6: #A591FD;
+  --series-7: #A02D5C;
   --series-rest: #8f9a94;
+  /* TASK-123 §4-4: the stacked segments' full-perimeter outline — a
+     half-transparent ink that composes darker over light fills (the dark
+     theme's white 40% composes lighter), one token for every fill */
+  --seg-outline: rgb(0 0 0 / 0.4);
   /* ledger display palette (ledger_members.color, TASK-16): distinct from
      the label palette of TASK-17 in names and hues */
   --ledger-teal: #138a80;
@@ -95,14 +101,16 @@
     --bb-error-bg: #35201d;
     --bb-shadow: 0 1px 2px rgb(0 0 0 / 30%);
     --bb-shadow-pop: 0 12px 32px rgb(0 0 0 / 55%);
-    --series-1: #56A8E8;
-    --series-2: #EDCA75;
-    --series-3: #7A6BE5;
-    --series-4: #D998C2;
-    --series-5: #C7689B;
-    --series-6: #82C8F0;
-    --series-7: #F07048;
+    --series-1: #934149;
+    --series-2: #C6824C;
+    --series-3: #7C6C01;
+    --series-4: #279A7A;
+    --series-5: #2F9CE1;
+    --series-6: #5D64AA;
+    --series-7: #B57CB9;
     --series-rest: #5f6b65;
+    /* TASK-123 §4-4: the outline token composes LIGHTER over dark fills */
+    --seg-outline: rgb(255 255 255 / 0.4);
     --ledger-teal: #3cbfb3;
     --ledger-orange: #ec9a52;
     --ledger-pink: #e57aaa;
@@ -207,6 +215,15 @@ html.drawer-lock { overflow: hidden; }
 }
 .topbar-brand { display: inline-flex; flex: none; }
 .topbar-logo-compact { display: none; }
+/* the tabbar-外 screens' topbar ‹ (TASK-124 D3) rides between the brand and
+   the title, but the title keeps its TASK-69 center box spanning brand →
+   actions: the ‹'s own box and the topbar gap fold back out of the title's
+   left edge (the title renders underneath; the ‹ stays on top and takes the
+   press). --topbar-gap mirrors the .topbar gap at every band */
+.topbar { --topbar-gap: 0.75rem; --topbar-back-w: 44px; }
+.topbar:has(> .topbar-back) > .topbar-title {
+  margin-left: calc(-1 * (var(--topbar-back-w) + var(--topbar-gap)));
+}
 /* the title keeps one line and ellipsizes (TASK-27 §2; icon added in
    TASK-35). TASK-69 centers the title inside the box that spans
    brand → right-side cluster (filters or actions): on a wide bar the title
@@ -361,7 +378,6 @@ html.drawer-lock { overflow: hidden; }
    at every width (TASK-89): the desktop overlay closes on an outside tap
    too. Only the modal extras (inert / focus / scroll lock) stay narrow-only */
 .scrim {
-  display: none;
   position: fixed;
   top: var(--topbar-h);
   left: 0;
@@ -369,8 +385,13 @@ html.drawer-lock { overflow: hidden; }
   bottom: 0;
   z-index: 25;
   background: rgb(0 0 0 / 45%);
+  /* TASK-146 §3 #17: the scrim fades in/out instead of a display flip —
+     kept hit-through while hidden so the closed state stays inert */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
 }
-.drawer-open .scrim { display: block; }
+.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 
 .main-col { min-height: 100vh; min-width: 0; }
 
@@ -442,6 +463,16 @@ html.drawer-lock { overflow: hidden; }
    toggles the one sidebar overlay — the modal drawer below 900px, the
    plain slide at 900px+ (TASK-33 overlay unification) */
 .menu-btn { flex: none; }
+/* the tabbar-外 screens' topbar ‹ (TASK-124 D3): after .icon-btn so its 44px
+   tap target (the menu-btn's floor, icon-only, the parent's name in the
+   aria-label alone) wins the cascade at every band */
+.topbar-back {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  width: var(--topbar-back-w);
+  height: 44px;
+}
 
 /* shared popover menu (PopoverMenu.vue): the wrapper anchors the panel */
 .popover-menu { position: relative; }
@@ -500,6 +531,8 @@ html.drawer-lock { overflow: hidden; }
   inset: 0;
   z-index: 44;
   background: rgb(0 0 0 / 45%);
+  /* TASK-146 §3 #15: the anchored/sheet scrim fades with its panel */
+  transition: opacity 0.15s;
 }
 .avatar-btn {
   display: inline-flex;
@@ -565,7 +598,7 @@ html.drawer-lock { overflow: hidden; }
 @media (max-width: 899px) {
   :root { --topbar-h: 56px; }
   /* width budget (TASK-27 §2-2): 8px side padding, 6px gaps, title 1rem */
-  .topbar { gap: 6px; padding: 0 0.5rem; }
+  .topbar { gap: 6px; --topbar-gap: 6px; padding: 0 0.5rem; }
   .topbar-title { font-size: 1rem; }
   .topbar-actions { gap: 6px; }
   /* the drawer keeps the shared slide and gains the modal layer (inert /
@@ -861,6 +894,8 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   justify-content: center;
   background: rgb(0 0 0 / 50%);
   padding: 1rem;
+  /* TASK-146 §3 #16: the backdrop fades with the dialog it carries */
+  transition: opacity 0.15s;
 }
 .dialog {
   width: 100%;
@@ -940,6 +975,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   align-items: center;
   justify-content: flex-end;
   height: 100%;
+  /* TASK-131 (design §3): min-height: 0 pins the column to the .bars grid's
+     auto row — without it the row grows to the content-based min-size
+     (TASK-123's px segments) and every bar sinks below the zero baseline */
+  min-height: 0;
   gap: 4px;
   /* the column is a button (a press jumps to that month, TASK-44 §11-5):
      strip the control look so it renders as the plain bar column. The 1rem
@@ -953,22 +992,43 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   font: inherit;
   color: inherit;
   cursor: pointer;
+  /* TASK-130 (design §2-1/§2-2): the column itself is the state-emphasis
+     surface — the radius matches the focus outline's 6px, and the 0.15s
+     background fade is the row-hover grade */
+  border-radius: 6px;
+  transition: background-color 0.15s;
 }
 .bar {
   width: 100%;
   max-width: 34px;
   border-radius: 6px 6px 2px 2px;
   background: var(--bb-accent-soft);
-  transition: background-color 0.15s;
 }
-.bar-col:hover .bar { background: color-mix(in srgb, var(--bb-accent) 55%, var(--bb-accent-soft)); }
-.bar-col.current .bar { background: var(--bb-accent); }
 .bar-val {
   font-size: 0.7rem;
   color: var(--bb-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   line-height: 1;
+}
+/* TASK-130 (design §2-2): the current column's always-on emphasis is the
+   column wash — the column exists for every bucket (a 0円 month renders
+   only an empty label + the fallback bar, which is exactly how the
+   TASK-42-era bar-color rule lost its subject), and --bb-accent-soft is
+   the selected-nav "chosen" token. The label adds a foreground read on
+   non-zero buckets: weight like the week row's current, muted→fg for the
+   0.7rem size; an empty label no-ops it naturally, so both rules are
+   unconditional */
+.bar-col.current { background: var(--bb-accent-soft); }
+.bar-col.current .bar-val { font-weight: 600; color: var(--bb-fg); }
+/* TASK-130 (design §2-1): the hover wash is guarded by the hover
+   capability — on touch a tap leaves :hover stuck on the pressed column
+   (sticky hover), which would keep clobbering the current wash above.
+   A desktop-only affordance in the same column-wash grammar as the row
+   hovers and .daily-col; sourced AFTER .bar-col.current so the
+   equal-specificity overlay resolves to the hover token */
+@media (hover: hover) {
+  .bar-col:hover { background: var(--bb-hover); }
 }
 /* the trend card (TASK-100): a 2-column grid — the y-axis gutter and the
    plot — over a label row. Dense month windows (> 6 bars) fix the wrap to
@@ -1091,6 +1151,7 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   border-radius: var(--bb-radius);
   padding: 1rem 1.25rem;
   min-width: 0;
+  transition: opacity 0.15s;
 }
 /* TASK-105: the zone heading is a visible data-name title (zone-title). The
    "see the whole axis" icon link rides the heading row's right end — no
@@ -1131,27 +1192,35 @@ h3.zone-title { font-size: 0.85rem; }
 
 /* the stacked bars: segments stack bottom-up inside the column. TASK-115:
    the trim rescales the columns to the new window's niceMax — the height
-   change eases into it (segments are % heights inside, they follow for
-   free; the inline height never animates a first insertion) */
+   change eases into it (segments' explicit px heights recompute with it;
+   the inline height never animates a first insertion). TASK-123 (design
+   §4-3/§4-4, REVIEW-5 medium-2): the container carries NO radius and no
+   clip — the corner lives ONLY on the top segment's JS cap radius (its
+   border follows it), because a static 2px container radius + overflow
+   clip owned the outline below 8px widths (a 4px bar pinned back to the
+   full-semicircle pill, defeating the cap). §4-5 rule D already removed the
+   clip role: the allocation always fits, nothing needs clipping */
 .bar-stack {
   display: flex;
   flex-direction: column-reverse;
   width: 100%;
   max-width: 34px;
-  border-radius: 4px 4px 2px 2px;
-  overflow: hidden;
   transition: height 220ms cubic-bezier(.2, .7, .2, 1);
 }
-/* TASK-105: value-0 segments are omitted upstream, so every rendered segment
-   is >0 — min-height keeps the tiny ones visible and the 1px surface border
-   between adjacent segments separates same-color collisions structurally
-   (the DOM's first child is the visual bottom under column-reverse). No
-   background-color transition: the deterministic seriesColor keeps a key's
-   color constant, and an un-transitioned swap keeps the computed style in
-   step with the theme switch (the row swatches have none either) */
-.bar-seg { width: 100%; min-height: 2px; }
-.bar-seg + .bar-seg { border-top: 1px solid var(--bb-surface); }
-.bar-seg:first-child { border-radius: 4px 4px 0 0; }
+/* TASK-123 (design §4-4/§4-5 rule E): the segment separation is the
+   full-perimeter 1px outline (半透明 ink token) consumed INSIDE the
+   allocated size (border-box) — the bar's outer shape never moves. The px
+   heights, the top segment's cap radius (min(2px, width/4)) and the rule-F
+   border drop all arrive as computed inline values from the component; no
+   min-height floors and no inter-segment rules remain. No background-color
+   transition: the deterministic seriesColor keeps a key's color constant,
+   and an un-transitioned swap keeps the computed style in step with the
+   theme switch (the row swatches have none either) */
+.bar-seg {
+  width: 100%;
+  flex: none;
+  border: 1px solid var(--seg-outline);
+}
 .bar-col.stacked { position: relative; }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
@@ -1360,35 +1429,35 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
 
 /* The ranked row as one 44px line (TASK-75 §6-4, TASK-89): swatch / label /
    share % / amount / chevron on a five-track grid (TASK-105 adds the leading
-   12px series swatch). The proportional bar rides the row's bottom edge as a
-   2px gradient (--rank-fill) in the row's series color — RankedList sets
-   --rank-color via seriesColor, and rows without one (WeekRows) keep the
-   accent fallback so the bar never disappears. No standalone meter element,
-   no gap between rows for it */
+   12px series swatch). TASK-129 (design §4-2): the proportional bar rides
+   the row's bottom edge as the shared 6px DOM bar (.row-bar + .row-seg, the
+   block below) inside the absolutely-positioned .ranked-bar-track — the old
+   2px gradient and its --rank-fill variable are gone (a gradient cannot
+   carry the outline, the cap or the allocation rules). RankedList sets
+   --rank-color via seriesColor for the swatch and the bar's single segment.
+   No standalone meter element, no gap between rows for it */
 .ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ranked-row,
 .week-row {
-  --rank-fill: 0%;
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr) auto auto 12px;
   align-items: center;
   gap: 8px;
   min-height: 44px;
   padding: 0 0.5rem;
+  /* buttons shrink to content without this (anchors/spans blockify via
+     display: grid — buttons do not), and the TASK-129 absolute bar track
+     spans the row's full width, so every row kind must fill its li */
+  width: 100%;
   border-radius: 10px;
-  background-image: linear-gradient(to right, var(--rank-color, var(--bb-accent)) var(--rank-fill), transparent var(--rank-fill));
-  /* the bar spans the row's full width including the 0.5rem side paddings
-     (review L1): the default origin is padding-box, whose 100% excludes the
-     padding and leaves the bar inset from the rounded row ends */
-  background-origin: border-box;
-  background-size: 100% 2px;
-  background-position: bottom;
-  background-repeat: no-repeat;
   color: inherit;
   font: inherit;
   text-align: left;
   text-decoration: none;
 }
+/* TASK-129: the containing block of the absolutely-positioned bottom track
+   (the track spans the row's full width including the 0.5rem side paddings) */
+.ranked-row { position: relative; }
 /* link rows (RankedList `to` / `select`, TASK-74 §4-6 / TASK-65): the same
    box plus the affordances; the hover paints background-color so the share
    gradient survives. `select` rows render as <button> (in-place filter) */
@@ -1420,22 +1489,48 @@ button.week-row { border: 0; background-color: transparent; }
 }
 
 /* TASK-103: the Home month mode's week rows — one 44px full-width button
-   per week of the selected month (label + amount on a 2-cell grid; the
-   ratio bar is the ranked-row bottom gradient). The current week (the one
-   holding today) reads through weight, not color. This block MUST sit
-   after the shared `.ranked-row, .week-row` block: the same-specificity
+   per week of the selected month. TASK-123 (design §4-7): the row's inline
+   ratio bar is a DOM stacked bar now (.week-bar + .week-seg, below) — the
+   row itself paints no gradient. The current week (the one holding today)
+   reads through weight, not color. This block MUST sit after the shared
+   `.ranked-row, .week-row` block: the same-specificity
    grid-template-columns override wins by source order. */
 .week-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .week-row {
   /* the shared 4-track ranked grid overridden to the 2 cells (label,
-     amount) — the only declaration this block adds to the row itself */
+     amount) over the full-width bar track row */
   grid-template-columns: minmax(0, 1fr) auto;
-  width: 100%;           /* buttons shrink to content without this */
+  align-content: center;
+  row-gap: 3px;
   cursor: pointer;
 }
 .week-label { min-width: 0; font-variant-numeric: tabular-nums; }
 .week-row.current .week-label,
 .week-row.current .amount { font-weight: 600; }
+/* TASK-123 (design §4-7/§4-4): the week row's DOM stacked bar — a 6px-high
+   flex-row track under the label/amount line (the readable replacement for
+   the old 2px gradient). The bar's width is the week total over the SCREEN's
+   absolute scale (TASK-129 web-common.bar-scale, JS-computed px — never the
+   old max-week 100% peg). TASK-129 (web-common.row-bar-component): the bar
+   element is the ONE shared row-bar grammar both row kinds ride — .row-bar +
+   .row-seg below, defined exactly once with no per-surface forks. The ranked
+   row's bar spans the row's full width (padding included) through its own
+   absolutely-positioned track; the week row keeps this grid-row track */
+.week-bar-track { grid-column: 1 / -1; display: block; height: 6px; }
+.ranked-bar-track {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+}
+.row-bar { display: flex; height: 6px; }
+.row-seg {
+  height: 100%;
+  flex: none;
+  border: 1px solid var(--seg-outline);
+}
+.row-seg:last-child { border-radius: 0 1.5px 1.5px 0; }
 
 .detail-kpi { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; margin: 0 0 0.5rem; }
 .detail-kpi .amount { font-size: 1.5rem; }
@@ -1455,7 +1550,11 @@ button.week-row { border: 0; background-color: transparent; }
 a.sub-row { transition: background-color 0.15s; }
 a.sub-row:hover { background: var(--bb-hover); }
 
-.bar-btn { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+/* TASK-131 (design §3): the padding: 0 reset is gone — at the same
+   specificity it beat .bar-col's TASK-100 headroom (1rem top padding) on
+   source order, so the headroom had been effectively 0; .bar-col is the
+   single padding origin */
+.bar-btn { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .bar-btn:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: 2px; border-radius: 6px; }
 
 /* the receipts 絞り込み form (TASK-76, §6-3): it opens in the toolbar
@@ -1491,19 +1590,24 @@ a.sub-row:hover { background: var(--bb-hover); }
 .daily-col:hover { background: var(--bb-hover); }
 /* TASK-116 (design §3-2): the daily/weekly/monthly bar became a stacked
    container — the same segment grammar as the trend's .bar-stack (bottom =
-   first series under column-reverse, min-height 2px on >0 segments, 1px
-   surface border between neighbors), sized for this compact card: no y axis
-   or value labels. When the min heights overshoot a short bar, overflow
-   hidden clips from the TOP so the top-ranked series survives at the base */
+   first series under column-reverse), sized for this compact card: no y
+   axis or value labels. TASK-123 (§4-3/§4-4/§4-5, REVIEW-5 medium-2): the
+   container carries NO radius and no clip (the narrowest tracks here are
+   where the static 2px container radius + overflow clip recreated the pill
+   shape — the corner lives on the top segment's JS cap radius alone), and
+   the segments carry the full-perimeter 1px outline consumed inside their
+   allocated px heights (allocateStack always fits — nothing clips) */
 .daily-bar {
   display: flex;
   flex-direction: column-reverse;
   width: 100%;
-  border-radius: 3px 3px 1px 1px;
-  overflow: hidden;
 }
-.daily-seg { display: block; width: 100%; min-height: 2px; }
-.daily-seg + .daily-seg { border-top: 1px solid var(--bb-surface); }
+.daily-seg {
+  display: block;
+  width: 100%;
+  flex: none;
+  border: 1px solid var(--seg-outline);
+}
 
 .day-group + .day-group { margin-top: 0.75rem; }
 /* the day-group heading rides a 28px line (TASK-75 §6-4) over the one-line
@@ -1713,6 +1817,9 @@ a.sub-row:hover { background: var(--bb-hover); }
 /* plain scrolling (TASK-27 §5): no scroll-snap. Button / key moves land a
    panel below the sticky topbar and the feed nav via scroll-margin-top */
 .receipt-panel { scroll-margin-top: calc(var(--topbar-h) + var(--feed-nav-h) + 0.5rem); }
+/* TASK-146 §3 #5/#18: the panels' keyed group (FeedPanels) — a bare list
+   carrier for the bb-appear grammar, no bullet or indent of its own */
+.feed-list { list-style: none; margin: 0; padding: 0; }
 
 .feed-nav {
   position: sticky;
@@ -1894,34 +2001,33 @@ a.sub-row:hover { background: var(--bb-hover); }
 
 /* ------------------------------------------------------- usage (使い方) */
 
-/* numbered walkthrough steps of /usage/connect: the number as a round chip,
-   thin separators between the steps */
-.usage-steps { list-style: none; margin: 1.25rem 0 0; padding: 0; counter-reset: usage-step; }
-.usage-steps > li { position: relative; padding: 1.1rem 0 1.4rem 2.6rem; border-top: 1px solid var(--bb-border); counter-increment: usage-step; }
-.usage-steps > li:first-child { border-top: 0; }
-.usage-steps > li::before {
-  position: absolute;
-  left: 0;
-  top: 1.2rem;
-  display: grid;
-  place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 50%;
-  background: var(--bb-accent-soft);
-  color: var(--bb-accent);
-  font-size: 0.9rem;
-  font-weight: 700;
-  content: counter(usage-step);
-}
-.usage-steps h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
-.usage-steps h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+/* the Markdown-ingested document body of /usage/:topic (TASK-141): one
+   component renders every docs/usage topic. The html parts arrive as
+   generated fragments split around the widget placements, so the fragment
+   wrapper must not break the prose flow (display: contents) */
+.usage-doc { display: block; }
+.usage-doc-html { display: contents; }
+.usage-doc h1 { margin: 0.5rem 0 0.25rem; font-size: 1.35rem; }
+.usage-doc h2 { margin: 1.5rem 0 0.5rem; padding-top: 1.25rem; border-top: 1px solid var(--bb-border); font-size: 1.1rem; }
+.usage-doc h3 { margin: 1rem 0 0.25rem; font-size: 0.95rem; }
+.usage-doc p { margin: 0.5rem 0; }
+.usage-doc ul, .usage-doc ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.usage-doc li { margin: 0.25rem 0; }
+.usage-doc table { border-collapse: collapse; margin: 0.75rem 0; }
+.usage-doc th, .usage-doc td { border: 1px solid var(--bb-border); padding: 0.35rem 0.6rem; text-align: left; }
+.usage-doc th { background: var(--bb-surface-2); }
+.usage-doc a { color: var(--bb-accent); }
+
+/* walkthrough step headings: the "N. " of the heading text is split at
+   transform into a round number chip (the counter chip the former
+   ol.usage-steps drew; the number itself stays in the heading text) */
+.usage-step-no { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; margin-right: 0.4rem; border-radius: 50%; background: var(--bb-accent-soft); color: var(--bb-accent); font-size: 0.9rem; font-weight: 700; vertical-align: middle; }
 
 /* the runtime-generated connection URL: selectable code line + the copy
    control. TASK-48: the success state is the button's own icon swap
    (copy → check with a pop) — no text row joins the box, so the box keeps
    its height; the spoken confirmation is the sr-only status next to the
-   button (UsageConnectPage). The error guidance keeps its .msg row */
+   button (UsageDocument). The error guidance keeps its .msg row */
 .usage-url { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; padding: 0.65rem 0.75rem; border: 1px solid var(--bb-border); border-radius: var(--bb-radius); background: var(--bb-surface-2); }
 .usage-url .msg { flex-basis: 100%; margin: 0; }
 .usage-url code { flex: 1 1 12rem; min-width: 0; font-size: 0.95rem; }
@@ -1932,12 +2038,6 @@ a.sub-row:hover { background: var(--bb-hover); }
   60% { transform: scale(1.15); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
 }
-
-/* ChatGPT-side sub steps of step-1 (TASK-81): the numbering rides the
-   default decimal list style — no counter chip like the parent .usage-steps,
-   only a light indent and spacing so the parent/child hierarchy reads */
-.usage-substeps { margin: 0.5rem 0 0; padding-left: 1.5rem; }
-.usage-substeps li { margin: 0.25rem 0; }
 
 /* figures of the walkthrough: screenshots at a readable phone width, dashed
    placeholders until an asset is captured */
@@ -1997,6 +2097,26 @@ a.sub-row:hover { background: var(--bb-hover); }
 .slide-forward-leave-active,
 .slide-back-leave-active { position: absolute; top: 0; left: 0; width: 100%; }
 
+/* ContentSwap (TASK-146 §3 方針2): the in-screen content transition rides
+   the very slide rules above on the shell RouterView's recipe — the wrapper
+   is the relative flow anchor, the leaving pane parks absolute inside it,
+   and the horizontal overflow of the mid-swap pair stays clipped */
+.content-swap { position: relative; overflow-x: clip; min-width: 0; }
+/* the pane element the pages hand to ContentSwap: the view-stack's own
+   column rhythm moves inside it (the stack itself now holds one child) */
+.content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+
+/* the single appear-fade grammar (TASK-146 §3 遷移全数表 #18/#20): the ONE
+   shared vocabulary the appended rows (Search / the receipts list / the
+   feed's tail fetch) and the manage screens' inline state changes (the row
+   editor, the add row, the archived rows, the fold children) all ride — an
+   opacity fade in the bb-fade-in family, nothing fancier. The fade timing
+   lives on the -active pair once; the from/to pair only sets the origin */
+.bb-appear-enter-active,
+.bb-appear-leave-active { transition: opacity 0.16s ease; }
+.bb-appear-enter-from,
+.bb-appear-leave-to { opacity: 0; }
+
 /* messages (errors / notices) fade in when inserted (the copy confirmation
    moved to the button's icon swap, TASK-48) */
 @keyframes bb-fade-in {
@@ -2040,7 +2160,7 @@ a.sub-row:hover { background: var(--bb-hover); }
 @media (max-width: 520px) {
   /* width budget (TASK-27 §2-2): 4px gaps; the compact logo (mark + kb)
      replaces the full wordmark */
-  .topbar { gap: 4px; }
+  .topbar { gap: 4px; --topbar-gap: 4px; }
   .topbar-actions { gap: 4px; }
   .topbar-logo-full { display: none; }
   .topbar-logo-compact { display: inline-flex; }
@@ -2117,4 +2237,13 @@ a.sub-row:hover { background: var(--bb-hover); }
   .topbar.ledger-scoped { transition: none; }
   .ledger-chip { transition: none; }
   .cat-fold .icon { transition: none; }
+  /* TASK-146 §3: the vocabulary's new members are off as well — the scrim
+     / backdrop fades and the bb-appear grammar (the JS side skips them
+     too; these are the second guard) */
+  .scrim,
+  .popover-scrim,
+  .dialog-backdrop { transition: none; }
+  .bb-appear-enter-active,
+  .bb-appear-leave-active { transition: none; }
+  .zone { transition: none; }
 }

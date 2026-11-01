@@ -67,7 +67,9 @@ describe('LoginPage', () => {
     const b = await mountApp('/login')
     await b.wrapper.find('[data-test="login"]').trigger('click')
     await settle()
-    expect(b.router.currentRoute.value.fullPath).toBe('/')
+    // the navigation target is the path: the keys-less entry to / carries
+    // the store's period on the query (the TASK-124 URL sync's write-back)
+    expect(b.router.currentRoute.value.path).toBe('/')
   })
 
   it('[covers:web-shell.atomic-mount] login 完了は me 確定後に遷移し shell が即時（me 取得は1回）', async () => {

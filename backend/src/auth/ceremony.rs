@@ -696,6 +696,7 @@ pub struct LoginFinishOutcome {
     pub next: Option<&'static str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn login_finish(
     pool: &SqlitePool,
     webauthn: &Webauthn,
@@ -704,6 +705,7 @@ pub async fn login_finish(
     credential: &PublicKeyCredential,
     old_session: Option<&[u8; TOKEN_LEN]>,
     now: i64,
+    test_hooks: &crate::test_hooks::TestHooks,
 ) -> Result<LoginFinishOutcome, LoginFinishError> {
     let mut conn = pool.acquire().await.map_err(anyhow::Error::from)?;
     let Some((_, authz_hash, state_json)) =
@@ -731,23 +733,42 @@ pub async fn login_finish(
             return Err(LoginFinishError::Mismatch);
         }
     };
+
+    // From the owner resolution on, everything runs in one BEGIN IMMEDIATE
+    // transaction (spec 2-4, TASK-147): the user / passkey reads, the
+    // verification against the stored sign counter, the credential update,
+    // the carried-cookie revocation, the new session and the audit row. The
+    // counter is checked against the latest stored value under the write
+    // lock, so concurrent logins with one credential never roll it back.
+    // Failure audits are written in the same transaction and committed
+    // before the 401. Inside the transaction nothing acquires another pool
+    // connection (that would self-deadlock until busy_timeout).
+    // test-only pause point (feature `test-hooks`; no-op otherwise): just
+    // ahead of taking the write lock (TASK-147 sign-counter race tests).
+    test_hooks.pause_login_before_write_lock().await;
+    let mut tx = conn
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(anyhow::Error::from)?;
     let row: Option<(i64, Vec<u8>)> = sqlx::query_as(
         "SELECT u.id, u.webauthn_user_handle FROM users u
          JOIN webauthn_credentials c ON c.user_id = u.id
          WHERE c.credential_id = ? AND u.disabled_at IS NULL",
     )
     .bind(&cred_id)
-    .fetch_optional(&mut *conn)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(anyhow::Error::from)?;
     let Some((user_id, stored_handle)) = row else {
-        mismatch_audit(&mut conn, Some((&uuid, &cred_id)), now).await?;
+        mismatch_audit(&mut tx, Some((&uuid, &cred_id)), now).await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
         return Err(LoginFinishError::Mismatch);
     };
     let handle_matches = stored_handle.as_slice() == uuid.as_bytes();
-    let creds = load_passkeys(&mut conn, user_id).await?;
+    let creds = load_passkeys(&mut tx, user_id).await?;
     if creds.is_empty() {
-        mismatch_audit(&mut conn, Some((&uuid, &cred_id)), now).await?;
+        mismatch_audit(&mut tx, Some((&uuid, &cred_id)), now).await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
         return Err(LoginFinishError::Mismatch);
     }
     let discoverable: Vec<DiscoverableKey> =
@@ -773,7 +794,7 @@ pub async fn login_finish(
                 "login_failed"
             };
             super::audit(
-                &mut conn,
+                &mut tx,
                 "web",
                 "webauthn_credential",
                 cred_row_id,
@@ -787,17 +808,14 @@ pub async fn login_finish(
             )
             .await
             .map_err(anyhow::Error::from)?;
+            tx.commit().await.map_err(anyhow::Error::from)?;
             return Err(LoginFinishError::Authentication);
         }
     };
 
-    // one BEGIN IMMEDIATE transaction covers the whole success path: the
-    // credential update, the carried-cookie revocation, the new session and
-    // the audit row land together (or not at all).
-    let mut tx = conn
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(anyhow::Error::from)?;
+    // success path: credential update (from the creds read above, under the
+    // write lock), carried-cookie revocation, new session and audit land
+    // together (or not at all).
     update_credential_after_auth(&mut tx, user_id, &cred_id, &creds, &result, now).await?;
 
     // a carried session cookie is revoked regardless of its user (spec 2-4).
@@ -894,6 +912,11 @@ async fn load_passkeys(
 }
 
 /// Persist `update_credential` results (spec 2-4) and `last_used_at`.
+///
+/// The caller passes `creds` read inside the same `BEGIN IMMEDIATE`
+/// transaction as `conn` (TASK-147): the stored `passkey_json` is
+/// overwritten whole from that snapshot, so a snapshot read before the
+/// write lock could roll the sign counter back.
 async fn update_credential_after_auth(
     conn: &mut SqliteConnection,
     user_id: i64,

@@ -215,7 +215,7 @@ describe('search page: receipts tab', () => {
     })
   })
 
-  it('[covers:web-search.receipts] さらに表示: next_cursor があれば続きを page へ append（cursor pagination）', async () => {
+  it('[covers:web-search.receipts][covers:web-common.appear-fade] さらに表示: next_cursor があれば続きを page へ append（cursor pagination）・追加行のみ出現fade', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const list = vi.spyOn(api, 'listReceipts').mockImplementation(
       async (_l: number, q: ReceiptListQuery): Promise<ReceiptListResult> => ({
@@ -229,9 +229,24 @@ describe('search page: receipts tab', () => {
     expect(wrapper.findAll('[data-test="search-row"]')).toHaveLength(1)
 
     await wrapper.find('[data-test="search-more"]').trigger('click')
-    await settle()
+    await flushPromises()
+    await nextTick()
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ q: '牛乳', cursor: 'c1' }))
-    expect(wrapper.findAll('[data-test="search-row"]')).toHaveLength(2)
+    const rows = wrapper.findAll('[data-test="search-row"]')
+    expect(rows).toHaveLength(2)
+    // TASK-146 §3 #18 (web-common.appear-fade): only the APPENDED row earns
+    // the shared appear-fade grammar; the existing row stays put. The row's
+    // grammar class rides the <li> the TransitionGroup keys — the
+    // [data-test="search-row"] link sits inside it, so the row element is
+    // reached through closest (the link's own class or a descendant stays
+    // the other accepted carriers)
+    const hasAppear = (el: Element): boolean =>
+      el.className.includes('bb-appear') ||
+      el.querySelector('[class*="bb-appear"]') !== null ||
+      el.closest('li[class*="bb-appear"]') !== null
+    expect(hasAppear(rows[0]!.element), 'the existing row never moves').toBe(false)
+    expect(hasAppear(rows[1]!.element), 'the appended row appears through the fade').toBe(true)
+    await settle()
     expect(wrapper.find('[data-test="search-more"]').exists()).toBe(false)
   })
 

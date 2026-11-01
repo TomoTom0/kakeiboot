@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { setDataApi, type DataApi, type StatsRow } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import RankedList from '@/web/components/RankedList.vue'
-import { ME, cleanup, mockFetch, mountApp, setMediaMatches, settle } from './helpers'
+import { ME, cleanup, mockFetch, mountApp, patchTrackWidth, setMediaMatches, settle } from './helpers'
 
 let api: DataApi
 
@@ -125,6 +125,41 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     expect(rest.find('.amount').text()).toBe('600円')
     expect(rest.text()).not.toContain('円円')
     expect(rest.element.tagName).not.toBe('A')
+  })
+
+  // TASK-146 §3 #6 (web-common.content-swap): the list screens' content
+  // transition fires at the load COMMIT — mid-refetch the old content stays
+  // dimmed with the swap key unmoved, the commit then slides back for a step
+  // into the past. Written test-first.
+  it('[covers:web-common.content-swap] 期間stepの内容遷移は load 確定時に発火（再取得中は旧内容の dim・確定で slide-back）', async () => {
+    let gated = false
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      if (gated) await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/categories', { attach: true, stubs: { transition: false } })
+    const swapEl = () => wrapper.find('.view-stack .content-swap')
+    expect(swapEl().exists()).toBe(true)
+    // step back through the period dialog; the re-fetch is held at the gate
+    gated = true
+    await wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    release()
+    await flushPromises()
+    const kids = Array.from(swapEl().element.children)
+    // into the past: the from date moved down, so the entering content
+    // slides in from the left
+    expect(kids.some((el) => el.classList.contains('slide-back-enter-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('slide-back-leave-active'))).toBe(true)
+    await settle()
+    expect(swapEl().element.children).toHaveLength(1)
+    expect(wrapper.find('.period-label').text()).toBe('2026年9月の支出')
   })
 })
 
@@ -486,6 +521,9 @@ describe('ReceiptsPage (dashboard)', () => {
     // null-key aggregate row, when present, paints the rest grey
     expect(cashRow.find('.ranked-swatch').exists()).toBe(true)
     expect(cashRow.attributes('style')).toContain('--rank-color: var(--series-4)')
+    // TASK-129: the button rows (in-place filter branch) carry the same DOM
+    // bar as the link rows — the shared component serves every row branch
+    expect(cashRow.find('.ranked-bar-track .row-bar .row-seg').exists()).toBe(true)
     await cashRow.trigger('click')
     await settle()
     expect(router.currentRoute.value.query.payment_method).toBe('cash')
@@ -530,6 +568,12 @@ describe('ReceiptsPage (dashboard)', () => {
   // TASK-116 (design §3-2): the bars stack their series — recorded buckets
   // carry .daily-seg children painted with the seriesColor tokens, zero
   // buckets keep the height-0% .daily-bar element with no segments.
+  // TASK-123: the assembly is top-3 +「ほか」(web-common.stack-dimension-
+  // rules — proven in trend-window.test.ts's 7-series fixture) and the
+  // segment grammar gains the outline / corner / allocation rules; the mock
+  // month holds at most two series per bucket so the counts below stay, and
+  // the paint-level outline/radius checks live in styles.test.ts +
+  // verify.spec.ts (jsdom cannot compute stylesheet rules).
   it('[covers:web-receipts.trend-card-granularity] 推移カードは期間の長さで日別・週別・月別（62日超でも消えない）・棒は系列の積み上げ', async () => {
     const title = (w: W) => w.find('[data-test="daily"] h2').text()
     const cols = (w: W) => w.findAll('[data-test="daily"] .daily-col')
@@ -604,16 +648,20 @@ describe('ReceiptsPage (dashboard)', () => {
     await wrapper.find('[data-test="item"]').setValue('牛乳')
     await wrapper.find('[data-test="filters"]').trigger('submit')
     await settle()
-    // TASK-57 A16: the period key survives the URL rewrite alongside from/to
+    // TASK-57 A16 + TASK-124 (review MEDIUM-3): the period key survives the
+    // URL rewrite, and the URL sync's swap settles the query self-consistent
+    // — the month mode's key only; the from/to pair the filter sync writes
+    // for the feed round trip is dropped right after (the mode key is the
+    // truth, D2-4; a reload restores the month mode off month= alone)
     expect(router.currentRoute.value.query.month).toBe('2026-09')
-    expect(router.currentRoute.value.query.from).toBe('2026-09-01')
-    expect(router.currentRoute.value.query.to).toBe('2026-09-30')
+    expect(router.currentRoute.value.query.from).toBeUndefined()
+    expect(router.currentRoute.value.query.to).toBeUndefined()
     cleanup()
     setDataApi(api)
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     // a fresh mount of that URL (the literal form of the asserted query)
     // restores the month mode
-    const again = await mountApp('/receipts?item=%E7%89%9B%E4%B9%B3&from=2026-09-01&to=2026-09-30&month=2026-09')
+    const again = await mountApp('/receipts?item=%E7%89%9B%E4%B9%B3&month=2026-09')
     expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
   })
 
@@ -858,7 +906,9 @@ describe('Dashboard label filter (TASK-17/26/44, TASK-101)', () => {
 describe('RankedList row rendering (TASK-74 stage 4)', () => {
   // Component-level mount with a memory router: the list pages do not wire
   // `to` until stage 5, so the link branch needs a direct prop here.
-  async function mountList(props: { rows: StatsRow[]; to?: (row: StatsRow) => { path: string } | null }) {
+  // TASK-129: the component takes the screen-level `scale` prop (the bar
+  // length is value/scale × track — no more list-local max).
+  async function mountList(props: { rows: StatsRow[]; to?: (row: StatsRow) => { path: string } | null; scale: number }) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/x/:id', name: 'x', component: { template: '<div />' } }],
@@ -881,7 +931,7 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
       { keys: [null], labels: ['その他'], value: 100, share: 0.1 },
     ]
     const to = (r: StatsRow) => (typeof r.keys[0] === 'number' ? { path: `/x/${r.keys[0]}` } : null)
-    const w = await mountList({ rows, to })
+    const w = await mountList({ rows, to, scale: 1000 })
 
     // a row whose `to` resolves: an anchor to the location with the trailing
     // chevron (aria-hidden svg)
@@ -921,7 +971,7 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     expect(other.find('.ranked-diff').exists()).toBe(false)
 
     // no `to` prop at all (the payments breakdown): every row is a span
-    const w2 = await mountList({ rows })
+    const w2 = await mountList({ rows, scale: 1000 })
     expect(w2.find('[data-test="row-食費"]').element.tagName).toBe('SPAN')
     expect(w2.find('[data-test="row-食費"]').find('svg').exists()).toBe(false)
 
@@ -929,6 +979,77 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
     for (const ww of [w, w2]) {
       expect(ww.find('.ranked-row[aria-pressed]').exists()).toBe(false)
       expect(ww.findAll('button').length).toBe(0)
+    }
+  })
+
+  // TASK-129 (web-common.row-bar-component + web-common.bar-scale): the
+  // row's proportional bar is a DOM bar through the shared component now —
+  // one .row-seg in the row's series color inside the absolutely-positioned
+  // track, its px width = value / scale × the measured track (the width
+  // patch below pins every element to 300px, so 550/1000 → 165px), the 2px
+  // bottom gradient and its --rank-fill variable are gone, and a zero-value
+  // row draws no bar at all. Written test-first against the gradient rows.
+  it('[covers:web-common.row-bar-component][covers:web-common.bar-scale] 行barは共通DOM bar（.row-bar+.row-seg・width=value/scale×track・--rank-fill廃止・ゼロ行はbarなし）', async () => {
+    const restore = patchTrackWidth(300)
+    try {
+      const rows: StatsRow[] = [
+        { keys: [11], labels: ['食費'], value: 550, share: 0.58 },
+        { keys: [null], labels: ['その他'], value: 100 },
+        { keys: [4], labels: ['ゼロ'], value: 0 },
+      ]
+      const w = await mountList({ rows, scale: 1000 })
+      const track = (label: string) => w.find(`[data-test="row-${label}"] .ranked-bar-track`)
+      // the link row: the absolute-positioned track carries the shared bar
+      // with ONE segment in the row's seriesColor (key 11 → slot 4, the
+      // same token the swatch reads), 550/1000 × 300 = 165px wide
+      const foodSeg = track('食費').find('.row-bar .row-seg')
+      expect(track('食費').exists()).toBe(true)
+      expect(foodSeg.exists()).toBe(true)
+      expect(foodSeg.attributes('style') ?? '').toContain('background: var(--series-4)')
+      const widthOf = (s: ReturnType<W['find']>) =>
+        Number.parseFloat(/width:\s*([\d.]+)px/.exec(s.attributes('style') ?? '')?.[1] ?? 'NaN')
+      expect(widthOf(foodSeg)).toBeCloseTo(165, 1)
+      // the null-key row: rest grey, its own value/scale width (100 → 30px)
+      const restSeg = track('その他').find('.row-bar .row-seg')
+      expect(restSeg.attributes('style') ?? '').toContain('background: var(--series-rest)')
+      expect(widthOf(restSeg)).toBeCloseTo(30, 1)
+      // one common scale: the length ratio equals the value ratio
+      expect(widthOf(foodSeg) / widthOf(restSeg)).toBeCloseTo(550 / 100, 4)
+      // a zero-value row draws no bar element at all
+      expect(w.find('[data-test="row-ゼロ"] .row-bar').exists()).toBe(false)
+      // the gradient era is gone: no --rank-fill anywhere, the bar is not a
+      // background-image (the row style carries only --rank-color)
+      for (const r of w.findAll('.ranked-row')) {
+        expect(r.attributes('style') ?? '', 'no --rank-fill').not.toContain('--rank-fill')
+        expect(r.attributes('style') ?? '', 'no inline background-image').not.toContain('background-image')
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  // TASK-129 (web-common.bar-scale, the CategoriesPage wiring): the screen
+  // scale comes from the aggregation of the screen's own bars (the ranking
+  // rows' values here — 食費550・日用品398 → barScale(550)=1000), NOT the
+  // list-local max=100% the gradient used to paint. Track pinned to 300px.
+  it('[covers:web-common.bar-scale][covers:web-layout.ranked-row-single-line] /categories のランキング行barは画面単位scale（食費550/1000・日用品398/1000）で描かれる', async () => {
+    const restore = patchTrackWidth(300)
+    try {
+      const { wrapper } = await mountApp('/categories?month=2026-10')
+      const rows = wrapper.findAll('[data-test="ranking"] .ranked-row')
+      expect(rows.length).toBeGreaterThanOrEqual(2)
+      const widthOf = (i: number) =>
+        Number.parseFloat(/width:\s*([\d.]+)px/.exec(rows[i]!.find('.row-seg').attributes('style') ?? '')?.[1] ?? 'NaN')
+      // the mock month's ranking: 食費 550 (id 1) tops 日用品 398 (id 4);
+      // screen scale = barScale(550) = 1000 → 550/1000×300 and 398/1000×300
+      expect(rows[0]!.find('.ranked-label').text()).toBe('食費')
+      expect(widthOf(0)).toBeCloseTo((550 / 1000) * 300, 1)
+      expect(rows[1]!.find('.ranked-label').text()).toBe('日用品')
+      expect(widthOf(1)).toBeCloseTo((398 / 1000) * 300, 1)
+      // the lengths share one scale: value ratio = length ratio
+      expect(widthOf(0) / widthOf(1)).toBeCloseTo(550 / 398, 4)
+    } finally {
+      restore()
     }
   })
 })

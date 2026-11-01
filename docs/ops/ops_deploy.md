@@ -10,7 +10,7 @@
 | config | `configs/stg` | `configs/prod` |
 | listen port | `configs/<env>/app.toml` `[server] port`（正本。現在 stg=40282・prod=40283） | 同左 |
 | systemd unit | `kakeiboot-stg.service`（active） | `kakeiboot-prod.service`（active・enabled） |
-| 外部公開 | cf-tunnel（`https://kakeiboot-stg.scioj.com`） | prod開始時に設定 |
+| 外部公開 | cf-tunnel（`https://kakeiboot-stg.scioj.com`） | cf-tunnel（`https://kakeiboot.scioj.com`） |
 
 運用dirの構成:
 
@@ -26,7 +26,7 @@
 - backendはconfig内の相対path（`var/...`・`frontend/dist`等）を config dirの2階層上（= 運用dir自身）をrootとして解決する（`backend/src/config.rs`）。このため `configs/<env>/` の階層は上記構成から変えないこと
 - migrations は binary に埋め込み（`sqlx::migrate!`）のため配布不要。tool description等もcompile時埋込み
 - unit file: `~/.config/systemd/user/kakeiboot-{stg,prod}.service`。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
-- backup用unit file: `~/.config/systemd/user/kakeiboot-backup@.{service,timer}`（template 1組で stg/prod 両用。repo正本は `scripts/systemd/`。`ExecStart` = `<運用dir>/bin/kakeiboot-backup.sh <env>`）。user configのためdeploy対象外（導入手順は「backupの導入・検証」節）
+- backup用unit file: `~/.config/systemd/user/kakeiboot-backup@.{service,timer}`（template 1組で stg/prod 両用）。repo正本は `scripts/systemd/kakeiboot-backup@.service.in`（`{{deploy_root}}` placeholder入り。timerはpathを含まないためrender対象外）で、`mise run units:install` が `configs/deploy.toml` の `deploy_root` 値でrenderした実体をuser config dir（無ければ作成）へ配布する（`ExecStart` = `<deploy_root>/<env>/bin/kakeiboot-backup.sh <env>`）。user configのためdeploy対象外（導入手順は「backupの導入・検証」節）
 - `Environment=` の設定は不要（port・path等は configs/<env>/*.toml が正本。`RUST_LOG` を設定すれば `[log] filter` を上書きできる）
 
 ## deploy先の設定（configs/deploy.toml）
@@ -59,6 +59,8 @@ key仕様（フラットkeyのみ。未知keyはscriptがerror〔backend config�
 | backup images mirror | `<deploy_root>/backups/<env>/images/` |
 | last_success marker | `<deploy_root>/backups/<env>/last_success` |
 
+backup script（`scripts/backup/kakeiboot-backup.sh`）内の `SRC`（= 運用dir）・`DEST`（= backup root）もこの表と同一規則で、実pathをscriptに書かず配布位置から導出する: script自身（`bin/kakeiboot-backup.sh`）の2階層上が `<deploy_root>`（deploy配布契約 `<deploy_root>/<env>/bin/kakeiboot-backup.sh` 由来。repo正本を直接実行した場合も実行元の配置dir基準で動き、誤環境への書込が起きない）。
+
 `scripts/deploy/kakeiboot_ops.py` が `configs/deploy.toml`（と `configs/deploy.local.toml`）を読み、`transport` に従って全操作の実行経路を切り替える。mise.tomlはdeploy.tomlを読まない。
 
 ### local override（configs/deploy.local.toml）
@@ -86,6 +88,7 @@ transport = "local"
 | service操作 | `mise run stg:service -- status` / `mise run prod:service -- is-active` |
 | backup手動実行 | `mise run stg:backup` / `mise run prod:backup`（timerと同一のoneshot unit。完了まで待つ） |
 | backup状態確認 | `mise run stg:backup-status` / `mise run prod:backup-status`（last_success・世代dir一覧・timer・前回実行結果。**週1回**確認する） |
+| backup unit配布 | `mise run units:install`（unit正本 `.in` を `deploy_root` でrenderしuser config dir作成・配布・`daemon-reload`まで。unitは `%i` template 1組でenv非依存のため接頭は `units:`。導入手順は「backupの導入・検証」節） |
 
 処理本体は `scripts/deploy/kakeiboot_ops.py`（miseタスクはthin wrapper）:
 
@@ -99,7 +102,10 @@ mise run stg:deploy -- --dry-run
 mise run stg:backup-status -- --dry-run
 mise run exec-stg -- --dry-run admin user list
 mise run stg:service -- --dry-run status
+mise run units:install -- --dry-run
 ```
+
+`units:install --dry-run` はrender後のunit内容（`{{deploy_root}}` 置換済み）に続けて実行予定の `$ <command>` 行を表示し、dir作成・file作成・配布・reloadは行わない（renderに使う `deploy_root` 値も出力される。plan中のrender済みfile pathは表示用であり、実行時は `tmp/units-*` の一時dirにstagingされる）
 
 `--` はmise自身のflagとタスクへの引数の区切りとして1個だけ使う。`--` を挟まない `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈される
 
@@ -196,11 +202,11 @@ stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpacka
 
 1. `mise run stg:deploy`（binary〔`admin backup` 入〕と `bin/kakeiboot-backup.sh` を配布。ssh経由）
 2. backup先dir作成（運用機上）: `ssh gt430 'mkdir -p <deploy_root>/backups/{stg,prod}'`（`{stg,prod}` はremote shellのbrace expansion。script側でも `$DEST` を作るが、明示手順として残す）
-3. unit配置（user config dirはdeploy配布対象外のため手動）: `scp scripts/systemd/kakeiboot-backup@.service scripts/systemd/kakeiboot-backup@.timer gt430:.config/systemd/user/ && ssh gt430 systemctl --user daemon-reload`
+3. unit配置: `mise run units:install`（repo正本 `scripts/systemd/kakeiboot-backup@.service.in` を `configs/deploy.toml` の `deploy_root` でrenderし、user config dirを作成の上render済みserviceとtimerをrsync・`systemctl --user daemon-reload` まで一括実行。`.in` は `{{deploy_root}}` placeholder入りのため直接scp禁止）。配布後は `ssh gt430 systemctl --user cat kakeiboot-backup@stg.service` で内容ベース確認: `WorkingDirectory=` / `ExecStart=` の2行が `<deploy_root>/%i`・`<deploy_root>/%i/bin/kakeiboot-backup.sh %i`（deploy.tomlの解決値）と一致すること・既存行に差分が無いこと（初回差し替え時の期待差分は `.in` 冒頭のcomment行のみ）
 4. timer有効化: `ssh gt430 systemctl --user enable --now kakeiboot-backup@stg.timer`（ssh非対話実行で `systemctl --user` がXDG_RUNTIME_DIR不在により失敗する環境では `ssh gt430 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user ...'` の形式を使う）
 5. 初回実行と確認: `mise run stg:backup` を実行し、(1) journal（`ssh gt430 journalctl --user -u kakeiboot-backup@stg`）に各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在（`mise run stg:backup-status`） (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）
 
-なおweb設定画面のデータtabの書き出し・取り込み（`spec_mcp-tools.md` §12）は**利用者向けのデータ持ち出し・復帰**であり、運用backup（認証系・全ledgerを含む全体像・世代管理）の代替にはならない。
+なおweb設定画面のデータtabの書き出し・取り込み（`docs/spec/spec_mcp-tools.md` §12）は**利用者向けのデータ持ち出し・復帰**であり、運用backup（認証系・全ledgerを含む全体像・世代管理）の代替にはならない。
 
 ## prodの運用
 

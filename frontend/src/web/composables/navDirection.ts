@@ -6,7 +6,8 @@
 // the Transition name is already the incoming navigation's when the pages
 // swap (D28 review 指摘8).
 import { ref, type Ref } from 'vue'
-import type { NavigationFailure, RouteLocationNormalized } from 'vue-router'
+import type { NavigationFailure, RouteLocationNormalized, RouteLocationRaw, Router } from 'vue-router'
+import { prefersReducedMotion } from './reducedMotion'
 
 export type NavDirection = 'forward' | 'back' | 'none'
 export type NavKind = 'push' | 'pop' | 'replace'
@@ -33,6 +34,17 @@ export function setNavIntent(intent: 'back' | null): void {
   navIntent = intent
 }
 
+/** The up-navigation press (TASK-74 §3-2 案B for PageHead, shared by the
+ * topbar ‹ since TASK-124 D3): a plain push to the parent route with the
+ * one-shot back intent — not router.back(), so a direct link climbs too and
+ * the slide always plays backwards though the history position moves
+ * forward. The push is keys-less, so the shared period/labels ride along
+ * through the URL sync's "keys-less entry keeps the store" rule. */
+export function pushToParent(router: Router, to: RouteLocationRaw): void {
+  setNavIntent('back')
+  void router.push(to)
+}
+
 /** Scroll top parked by scrollBehavior until the incoming page is ready. */
 export const pendingRestore: Ref<number | null> = ref(null)
 
@@ -41,13 +53,6 @@ let lastPosition: number | null = null
 function historyPosition(): number | null {
   const state = window.history.state as { position?: unknown } | null
   return typeof state?.position === 'number' ? state.position : null
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
 }
 
 /**

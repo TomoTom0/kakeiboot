@@ -19,6 +19,7 @@ import { useDataApi, type AnalysisAxis, type AnalysisFilters, type AnalysisTrend
 import type { StackedBar } from '../components/TrendBars.vue'
 import { errorMessage } from './format'
 import { monthEnd, shiftMonth } from './period'
+import { prefersReducedMotion } from './reducedMotion'
 import { trendGranularity, type TrendGranularity } from './trend'
 // TASK-116 (design §3-0): the assembly moved to shared/lib as the pure
 // stackedOf the four stack sites share (trend window / week rows / Receipts
@@ -148,12 +149,14 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
    *  clears the whole set so a return re-issues */
   const prefetchIssued = new Set<string>()
 
-  /** the stacked assembly as a pure function of a result (§3-1): top-5
+  /** the stacked assembly as a pure function of a result (§3-1): top-3
    *  series + the residual「ほか」(seriesColor mapping, value-0 segments
    *  omitted) — the slide concatenation and the committed window share it.
    *  TASK-116: the body lives in shared/lib stackedOf (res.axis keys the
    *  color mapping — always this composable's own axis, the query echoes
-   *  it) */
+   *  it). TASK-123: the fetch keeps limit=5 while the FRONTEND assembly
+   *  slices to the top 3 (ranks 4-5 and the sub-5% members fold into
+   *  「ほか」) — the allocation lives in the view components */
 
   const stacked = computed<StackedBar[]>(() => {
     if (slide.value) return slide.value.bars
@@ -200,16 +203,11 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
   let lastDone: string | null = null
   const keyOf = (a: { l: number; query: AnalysisTrendQuery }): string => JSON.stringify([a.l, a.query])
 
-  /** prefers-reduced-motion skips the slide itself: the commit swaps the
-   *  window instantly (§3-3; the CSS block is the second guard). globalThis,
-   *  not window — this scope's `window` is the composable's computed tuple
-   *  and would shadow the DOM global into an always-false read */
+  /** a reduce preference skips the slide itself: the commit swaps the
+   *  window instantly (§3-3; the CSS block is the second guard). The probe
+   *  lives in reducedMotion.ts since TASK-146 §3 (one shared read) */
   function reducedMotion(): boolean {
-    return (
-      typeof globalThis !== 'undefined' &&
-      typeof globalThis.matchMedia === 'function' &&
-      globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
-    )
+    return prefersReducedMotion()
   }
 
   /** assemble the old+new concatenation (§3-1): prev parks the new window

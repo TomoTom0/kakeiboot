@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useAttrs } from 'vue'
 import { usePopover } from '../composables/popover'
+import { prefersReducedMotion } from '../composables/reducedMotion'
 
 // Shared popover menu (TASK-16 items 3/6, TASK-27 §4): one component for
 // the ledger switcher and the top-right account menu. Open/close, the
@@ -9,6 +10,8 @@ import { usePopover } from '../composables/popover'
 // (it receives `open` for aria-expanded); the default slot renders the
 // items with their own roles (menuitem / menuitemradio) and receives
 // `close` for explicit closing. Arrow keys move between [role^="menuitem"].
+// TASK-146 §3 #15: the open/close is an appear fade (the page vocabulary)
+// — the one Transition covers every menu use.
 const open = defineModel<boolean>('open', { default: false })
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -49,6 +52,9 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 defineOptions({ inheritAttrs: false })
+
+// reduced motion skips the fade classes entirely (web-common.overlay-transition)
+const motion = computed(() => !prefersReducedMotion())
 </script>
 
 <template>
@@ -68,14 +74,20 @@ defineOptions({ inheritAttrs: false })
         :open="open"
       />
     </div>
-    <div
-      v-if="open"
-      ref="panelEl"
-      class="menu popover-panel"
-      role="menu"
-      v-bind="panelAttrs"
+    <Transition
+      name="page"
+      appear
+      :css="motion"
     >
-      <slot :close="close" />
-    </div>
+      <div
+        v-if="open"
+        ref="panelEl"
+        class="menu popover-panel"
+        role="menu"
+        v-bind="panelAttrs"
+      >
+        <slot :close="close" />
+      </div>
+    </Transition>
   </div>
 </template>

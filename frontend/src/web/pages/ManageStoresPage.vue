@@ -243,7 +243,11 @@ function doMerge(): Promise<void> {
     >
       {{ info }}
     </p>
-    <ul
+    <!-- TASK-146 §3 #20: the row editor swap appears / vanishes through the
+         shared bb-appear grammar (the chevron / menu contracts unchanged) -->
+    <TransitionGroup
+      name="bb-appear"
+      tag="ul"
       class="rows"
       data-test="stores"
     >
@@ -259,53 +263,55 @@ function doMerge(): Promise<void> {
             {{ s.category ?? 'カテゴリなし' }} / レシート <span data-test="receipt-count">{{ s.receipt_count }}</span> 件 / 最終 {{ s.last_purchased_on ?? '-' }}
           </span>
         </div>
-        <div
-          v-if="editing !== null && editing.id === s.store_id"
-          class="row-editor"
-        >
-          <input
-            v-model="editing.name"
-            type="text"
-            aria-label="店名"
-            data-test="edit-name"
-            @keydown.enter.prevent="saveEdit"
-            @keydown.esc.prevent="cancelEditor"
+        <Transition name="bb-appear">
+          <div
+            v-if="editing !== null && editing.id === s.store_id"
+            class="row-editor"
           >
-          <select
-            v-model="editing.category"
-            aria-label="店カテゴリ"
-            data-test="edit-category"
-            @keydown.enter.prevent="saveEdit"
-            @keydown.esc.prevent="cancelEditor"
-          >
-            <option :value="null">
-              なし
-            </option>
-            <option
-              v-for="p in categoryPaths"
-              :key="p"
-              :value="p"
+            <input
+              v-model="editing.name"
+              type="text"
+              aria-label="店名"
+              data-test="edit-name"
+              @keydown.enter.prevent="saveEdit"
+              @keydown.esc.prevent="cancelEditor"
             >
-              {{ p }}
-            </option>
-          </select>
-          <IconButton
-            icon="check"
-            label="保存"
-            variant="primary"
-            :disabled="busy"
-            test="edit-save"
-            @click="saveEdit"
-          />
-          <IconButton
-            icon="close"
-            label="やめる"
-            :disabled="busy"
-            @click="cancelEditor"
-          />
-        </div>
+            <select
+              v-model="editing.category"
+              aria-label="店カテゴリ"
+              data-test="edit-category"
+              @keydown.enter.prevent="saveEdit"
+              @keydown.esc.prevent="cancelEditor"
+            >
+              <option :value="null">
+                なし
+              </option>
+              <option
+                v-for="p in categoryPaths"
+                :key="p"
+                :value="p"
+              >
+                {{ p }}
+              </option>
+            </select>
+            <IconButton
+              icon="check"
+              label="保存"
+              variant="primary"
+              :disabled="busy"
+              test="edit-save"
+              @click="saveEdit"
+            />
+            <IconButton
+              icon="close"
+              label="やめる"
+              :disabled="busy"
+              @click="cancelEditor"
+            />
+          </div>
+        </Transition>
         <RowMenu
-          v-else
+          v-if="!(editing !== null && editing.id === s.store_id)"
           :items="editItems"
           :ariaLabel="`${s.name}の操作`"
           :test="`row-menu-${s.store_id}`"
@@ -320,7 +326,7 @@ function doMerge(): Promise<void> {
           {{ statusOf(s.store_id)!.text }}
         </p>
       </li>
-    </ul>
+    </TransitionGroup>
   </section>
 
   <details

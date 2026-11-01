@@ -34,11 +34,12 @@
 // Test-first again: the cache / prefetch / slide expectations are red until
 // the composable / component revisions land.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import TrendWindow from '@/web/components/TrendWindow.vue'
 import type { StackedBar } from '@/web/components/TrendBars.vue'
+import { allocateStack } from '@/shared/lib/stackedBars'
 import { setDataApi, type AnalysisAxis, type AnalysisTrendQuery, type AnalysisTrendResult, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { useTrendWindow } from '@/web/composables/trendWindow'
@@ -388,50 +389,183 @@ describe('useTrendWindow (composable, TASK-104)', () => {
   // TASK-105 (web-home.trend-window description revised — the window /
   // offset / fetch expectations above and below stay untouched, design
   // §4-1): the stacked assembly reads `seriesColor(s.key, axis)` instead of
-  // the old PALETTE array — for this fixture's series keys 0..4 the colors
-  // become ['var(--series-7)', 'var(--series-1)', 'var(--series-2)',
-  // 'var(--series-3)', 'var(--series-4)'] (key 0: (0-1 mod 7 + 7) % 7 = 6)
-  // and the residual「ほか」segment var(--series-rest); value-0 series
-  // segments are omitted from the assembly (the zero bucket below then
-  // holds only the >0 series); the PALETTE constant itself is gone from
-  // trendWindow.ts.
-  it('[covers:web-home.trend-window] stacked組立はcomposable集約: series上位5+残余「ほか」segment+色はseriesColor(s.key, axis)写像（残余は--series-rest・値0セグメント省略・ゼロ窓は残余なし）', async () => {
-    // seven series in the endpoint's total order: the top five keep their
-    // seriesColor slot, the tail (20 + 10) folds into the grey rest segment
+  // the old PALETTE array. TASK-123 (design §4-1 / §4-5,
+  // web-common.stack-dimension-rules): the assembly is top-3 + the residual
+  // 「ほか」now — the fetch stays limit=5 (the contract) and the FRONTEND
+  // slices to the top 3, so ranks 4-5 fold into「ほか」; a sub-5%-of-bucket
+  // segment folds into「ほか」per bucket as well. The PALETTE constant
+  // itself is gone from trendWindow.ts (TASK-105, unchanged).
+  it('[covers:web-home.trend-window][covers:web-common.stack-dimension-rules] stacked組立はcomposable集約: series上位3+残余「ほか」（4-5位と5%未満はbucket毎に合算・fetch limit=5は不変）+色はseriesColor写像（残余は--series-rest・値0セグメント省略・ゼロ窓は残余なし）', async () => {
+    // seven series in the endpoint's total order (the fetch keeps returning
+    // the top-5 contract shape): the top THREE keep their seriesColor slot,
+    // the rest folds into the grey rest segment.
+    // bucket 2026-05: s0..s2 = 70/60/50 (all >= 5% of 280) stay, ranks 4-7
+    //   (40+30+20+10) fold into「ほか」100
+    // bucket 2026-06: all zero -> no segment at all
+    // bucket 2026-07: total 74; s2=3 is 4.1% < 5% -> folds into「ほか」
+    //   (74-70=4), leaving [s0 40, s1 30, ほか 4]
+    const vals = (v: number[]): (number | null)[] => v
     const res: AnalysisTrendResult = {
       axis: 'category',
       metric: 'amount',
       granularity: 'month',
       period: { from: '2026-05-01', to: '2026-10-31', label: '' },
-      buckets: ['2026-05', '2026-06'],
-      series: [70, 60, 50, 40, 30, 20, 10].map((v, i) => ({
-        key: i,
-        label: `s${i}`,
-        values: [v, 0],
-        total: v,
-      })),
-      bucket_totals: [280, 0],
+      buckets: ['2026-05', '2026-06', '2026-07'],
+      series: [
+        { key: 0, label: 's0', values: vals([70, 0, 40]), total: 110 },
+        { key: 1, label: 's1', values: vals([60, 0, 30]), total: 90 },
+        { key: 2, label: 's2', values: vals([50, 0, 3]), total: 53 },
+        { key: 3, label: 's3', values: vals([40, 0, 0]), total: 40 },
+        { key: 4, label: 's4', values: vals([30, 0, 0]), total: 30 },
+        { key: 5, label: 's5', values: vals([20, 0, 0.5]), total: 20.5 },
+        { key: 6, label: 's6', values: vals([10, 0, 0.5]), total: 10.5 },
+      ],
+      bucket_totals: [280, 0, 74],
       truncated_rows: 0,
     }
     vi.spyOn(api, 'getAnalysisTrend').mockResolvedValue(res)
     const win = await mountWindow()
     expect(win.result.value).toBe(res)
     type Seg = StackedBar['segments'][number]
-    expect(win.stacked.value.map((c: StackedBar) => c.key)).toEqual(['2026-05', '2026-06'])
+    expect(win.stacked.value.map((c: StackedBar) => c.key)).toEqual(['2026-05', '2026-06', '2026-07'])
+    // top-3 +「ほか」: ranks 4-7 (100) fold into the rest segment
     const segs = win.stacked.value[0]!.segments
-    expect(segs.map((s: Seg) => s.label)).toEqual(['s0', 's1', 's2', 's3', 's4', 'ほか'])
+    expect(segs.map((s: Seg) => s.label)).toEqual(['s0', 's1', 's2', 'ほか'])
     expect(segs.map((s: Seg) => s.color)).toEqual([
       'var(--series-7)', // key 0: ((0-1) mod 7 + 7) % 7 = 6
       'var(--series-1)',
       'var(--series-2)',
-      'var(--series-3)',
-      'var(--series-4)',
       'var(--series-rest)',
     ])
-    expect(segs.at(-1)!.value).toBe(30)
+    expect(segs.at(-1)!.value).toBe(100)
+    // a sub-5% top-3 member folds into「ほか」in ITS bucket only: s2=3 of
+    // the 74 total (4.1%) joins the residual (4), the other buckets keep it
+    const fold = win.stacked.value[2]!.segments
+    expect(fold.map((s: Seg) => s.label)).toEqual(['s0', 's1', 'ほか'])
+    expect(fold.map((s: Seg) => s.value)).toEqual([40, 30, 4])
     // a zero bucket renders no segment at all: every top series holds 0 and
     // the omitted value-0 assembly leaves the column empty (no rest either)
     expect(win.stacked.value[1]!.segments.map((s: Seg) => s.label)).toEqual([])
+  })
+
+  // TASK-123 (design §4-5, web-common.stack-dimension-rules): the dimension
+  // allocation as ONE pure function the four stack sites render — written
+  // test-first, the contract IS this test (frontend/src/shared/lib/
+  // stackedBars.ts gains `allocateStack(segments, length)` alongside
+  // stackedOf; `length` is the bar's full allocation size — px for the web
+  // bars/rows, viewBox units for the widget). Rules: A (the full length
+  // splits by value ratio, no gap subtraction), B (an allocated size below
+  // the outline-inclusive minimum 3 folds into「ほか」smallest-first and the
+  // remainder is re-split), C (while min x N still exceeds the length, fold
+  // the smallest non-「ほか」segment; if even one series +「ほか」does not
+  // fit, draw the FIRST series alone as the single-color bar), F (a bar
+  // shorter than 3 itself keeps the data-ratio outline and drops the
+  // outline — fill only).
+  it('[covers:web-common.stack-dimension-rules] allocateStack: 規則A（全寸法を値比率配分・合計=length）・規則B（最小寸法3未満はほかへ合算）・規則C（段階的合算→第一系列単色）・規則F（bar全体3未満は縁取りなし）', () => {
+    const seg = (label: string, value: number, color = `var(--series-${label})`) => ({ label, value, color })
+    // (a) rule A — the plain ratio split: sizes follow the values and close
+    // over the full length exactly
+    const plain = allocateStack([seg('a', 60), seg('b', 30), { ...seg('ほか', 10, 'var(--series-rest)') }], 100)
+    expect(plain.map((s) => s.label)).toEqual(['a', 'b', 'ほか'])
+    expect(plain.map((s) => s.size)).toEqual([60, 30, 10])
+    expect(plain.reduce((a, s) => a + s.size, 0)).toBe(100)
+    expect(plain.every((s) => s.outline)).toBe(true)
+    // (b) rule B — the sub-minimum segments (c 2px, ほか 1px of 100) fold
+    // into「ほか」smallest-first; the survivors all clear the 3px minimum
+    const folded = allocateStack([seg('a', 70), seg('b', 27), seg('c', 2), { ...seg('ほか', 1, 'var(--series-rest)') }], 100)
+    expect(folded.map((s) => s.label)).toEqual(['a', 'b', 'ほか'])
+    expect(folded.map((s) => s.value)).toEqual([70, 27, 3])
+    expect(folded.map((s) => s.size)).toEqual([70, 27, 3])
+    // (c) rule C — min 3 x 4 = 12 exceeds the 10px bar: the smallest
+    // non-「ほか」(c 20) folds into「ほか」and the three survivors fit
+    const tight = allocateStack([seg('a', 40), seg('b', 30), seg('c', 20), { ...seg('ほか', 10, 'var(--series-rest)') }], 10)
+    expect(tight.map((s) => s.label)).toEqual(['a', 'b', 'ほか'])
+    expect(tight.map((s) => s.size)).toEqual([4, 3, 3])
+    expect(tight.every((s) => s.size >= 3)).toBe(true)
+    // (c-terminal) — even one series +「ほか」cannot fit a 5px bar
+    // (min 3 x 2 = 6 > 5): the FIRST series alone becomes the single-color
+    // bar (not the residual — the top-ranked series is the data's face)
+    const single = allocateStack([seg('a', 40), seg('b', 35), { ...seg('ほか', 25, 'var(--series-rest)') }], 5)
+    expect(single.map((s) => s.label)).toEqual(['a'])
+    expect(single[0]!.size).toBe(5)
+    expect(single[0]!.color).toBe('var(--series-a)')
+    expect(single[0]!.outline).toBe(true)
+    // (f) rule F — a bar shorter than 3 itself keeps the data ratio (the
+    // outline would leave the fill under 1px): fill only, sizes by value
+    const tiny = allocateStack([seg('a', 60), seg('b', 40)], 2)
+    expect(tiny.map((s) => s.label)).toEqual(['a', 'b'])
+    expect(tiny.map((s) => s.outline)).toEqual([false, false])
+    expect(tiny[0]!.size).toBeCloseTo(1.2, 6)
+    expect(tiny[1]!.size).toBeCloseTo(0.8, 6)
+    expect(tiny.reduce((a, s) => a + s.size, 0)).toBeCloseTo(2, 6)
+    // the boundary: exactly 3 keeps the outline (F fires BELOW 3 only)
+    expect(allocateStack([seg('a', 100)], 3).every((s) => s.outline)).toBe(true)
+  })
+
+  // TASK-129 (design §4-5, web-common.stack-dimension-rules): the
+  // composition mode for the composition-ratio bars (ShareBar) — rules A/B/F
+  // apply, rule C does NOT (dropping the residual to stretch the first
+  // series would paint amounts the data never had): a series that cannot
+  // clear the minimum stays fill-only at its data ratio instead of
+  // collapsing. The residual identity is the `rest` FLAG now (the
+  // label-string「ほか」test is gone) and a fold the allocator creates
+  // carries the caller-supplied name. Written test-first.
+  it('[covers:web-common.stack-dimension-rules] composition モード: 規則A/B/F適用・規則C不適用（過密でも単色化しない）・rest フラグ識別（ラベル「その他」へ合流・総和保存）・rest.label での新設', () => {
+    const seg = (label: string, value: number, color = `var(--series-${label})`, rest = false) => ({ label, value, color, rest })
+    const opts = { mode: 'composition', rest: { label: 'その他' } } as const
+    // (a) rules A — the plain composition split closes over the length
+    const plain = allocateStack([seg('a', 60), seg('b', 40)], 100, opts)
+    expect(plain.map((s) => s.label)).toEqual(['a', 'b'])
+    expect(plain.map((s) => s.size)).toEqual([60, 40])
+    expect(plain.every((s) => s.outline)).toBe(true)
+    // (b) rule B — the sub-minimum series folds into the EXISTING
+    // rest-flagged segment (label「その他」, the flag — not the label —
+    // decides): the value MOVES (sum preserved), re-split, all >= 3. A
+    // rest-flagged segment under the minimum itself never folds away
+    const folded = allocateStack([seg('a', 70), seg('b', 27), seg('c', 2), seg('その他', 1, 'var(--series-rest)', true)], 100, opts)
+    expect(folded.map((s) => s.label)).toEqual(['a', 'b', 'その他'])
+    expect(folded.map((s) => s.value)).toEqual([70, 27, 3])
+    expect(folded.map((s) => s.size)).toEqual([70, 27, 3])
+    expect(folded.every((s) => s.outline)).toBe(true)
+    // (c) rule C does NOT fire in composition: a bar where even the folded
+    // composition cannot clear the minimum keeps EVERY series at its data
+    // ratio — the sub-minimum survivor drops its outline (the rule-F usage)
+    // instead of the stack mode's first-series single-color collapse. The
+    // SAME input in the default stack mode proves the contrast.
+    const tight = [seg('a', 4), seg('b', 3), seg('その他', 3, 'var(--series-rest)', true)]
+    const comp = allocateStack(tight, 5, opts)
+    expect(comp.map((s) => s.label)).toEqual(['a', 'その他'])
+    expect(comp.map((s) => s.value)).toEqual([4, 6]) // b folded in, sum kept
+    expect(comp.map((s) => s.size).reduce((x, y) => x + y, 0)).toBeCloseTo(5, 6)
+    const aSeg = comp[0]!
+    expect(aSeg.size).toBeCloseTo(2, 6)
+    expect(aSeg.outline).toBe(false) // under the minimum → fill only
+    expect(comp[1]!.size).toBeCloseTo(3, 6)
+    expect(comp[1]!.outline).toBe(true)
+    const stackSame = allocateStack(tight, 5)
+    expect(stackSame.map((s) => s.label)).toEqual(['a']) // rule C terminal
+    expect(stackSame[0]!.size).toBe(5)
+    // (f) rule F — the whole bar under 3 keeps the data ratio, fill only
+    const tiny = allocateStack([seg('a', 60), seg('b', 40)], 2, opts)
+    expect(tiny.map((s) => s.outline)).toEqual([false, false])
+    expect(tiny[0]!.size).toBeCloseTo(1.2, 6)
+    // (d) rest creation: folding with NO rest-flagged segment creates one
+    // carrying the caller's name (the allocator never invents one) — two
+    // sub-minimum folds accumulate enough to clear the minimum themselves
+    const created = allocateStack([seg('a', 920), seg('b', 30), seg('c', 29)], 96, opts)
+    expect(created.map((s) => s.label)).toEqual(['a', 'その他'])
+    expect(created.map((s) => s.value)).toEqual([920, 59])
+    expect(created.map((s) => s.size)[1]).toBeGreaterThanOrEqual(3)
+    const named = allocateStack([seg('a', 920), seg('b', 30), seg('c', 29)], 96, { mode: 'composition', rest: { label: 'ほか' } })
+    expect(named.map((s) => s.label)).toEqual(['a', 'ほか'])
+    // the flag — not the label — decides: a「ほか」-labeled segment WITHOUT
+    // the flag is an ordinary series (it folds INTO the created rest like
+    // any other), and the default stack mode keeps creating「ほか」
+    const unflagged = allocateStack([seg('a', 70), seg('b', 27), seg('ほか', 2, 'var(--series-rest)')], 100, opts)
+    expect(unflagged.map((s) => s.label)).toEqual(['a', 'b', 'その他'])
+    expect(unflagged.map((s) => s.value)).toEqual([70, 27, 2])
+    const stackDefault = allocateStack([seg('a', 70), seg('b', 27), seg('c', 2)], 100)
+    expect(stackDefault.map((s) => s.label)).toEqual(['a', 'b', 'ほか'])
   })
 
   it('[covers:web-home.trend-window-floor] 全0打ち切り: ページ送り先のoffset=6窓は記録があれば有効のまま・offset=12の全0窓でprev disable・nextでoffset=6へ復帰・初期窓（offset=0）の全0ではdisableしない', async () => {
@@ -1017,6 +1151,81 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     expect(bars.style.transform, 'the interrupted slide never re-applies its target').toBe('')
     w.unmount()
   })
+
+  // TASK-158 (web-common.content-swap #14改訂): the windowKey-keyed chart fade
+  // is REMOVED. Its designed fire site — a windowKey change with no pane swap
+  // — does not exist in the real wiring: a window move rides the slide, a
+  // label/ledger switch keeps the key (the window is range-derived), the
+  // AxisDetail first commit lands before TrendWindow mounts (the pages'
+  // v-if on win.result), and every mode/range change bumps the pane's
+  // committedKey on all four screens — the pane's ContentSwap transition is
+  // the chart's single motion. The keyed remount instead faded visibly in
+  // BOTH race orders of a period step (the trend window commits independently
+  // of the page load — the reported 「グラフを移動すると色が消える」). A
+  // windowKey change now swaps the chart's content IN PLACE: TrendBars is
+  // never re-keyed, the v-if gate alone waits for the first window.
+  it('[covers:web-common.content-swap] #14改訂(TASK-158): windowKey変化（単独・slide中とも）はchartのfadeなし・即時差替え（.bars DOM不変）・初回挿入も無演出（移動の演出はslide/paneのみ）', async () => {
+    const OLD = monthsBetween('2026-05-01', '2026-10-31')
+    const NEXT = monthsBetween('2026-04-01', '2026-09-30')
+    const PAGED = monthsBetween('2025-11-01', '2026-04-30')
+    const w = mount(TrendWindow, {
+      props: {
+        nav: true,
+        canPrev: true,
+        canNext: false,
+        windowKey: '2026-05-01..2026-10-31',
+        stacked: OLD.map(col),
+        granularity: 'month',
+        span: ['2026-05-01', '2026-10-31'] as [string, string],
+        current: null,
+      },
+      global: { stubs: { transition: false } },
+    })
+    // the fade classes would ride the TrendBars ROOT (.hscroll — the old
+    // Transition child); [data-test="trend"] is the .bars row inside it
+    const charts = () => w.findAll('.hscroll')
+    const noFade = () =>
+      charts().every((el) =>
+        Array.from(el.element.classList).every((c) => !c.includes('-enter-') && !c.includes('-leave-')),
+      )
+    // the first insertion paints instantly: no appear on the chart (the
+    // pane's motion, when one runs, is the single performance)
+    expect(charts()).toHaveLength(1)
+    expect(noFade()).toBe(true)
+
+    // a windowKey-only change (a period-move commit — the trend fetch lands
+    // around the pane's own): the content swaps in place. The old keyed fade
+    // would remount TrendBars (two .hscroll nodes mid-fade, page-enter/leave
+    // classes) — none of that
+    const barsEl = w.find('[data-test="trend"]').element
+    await w.setProps({
+      windowKey: '2026-04-01..2026-09-30',
+      stacked: NEXT.map(col),
+      span: ['2026-04-01', '2026-09-30'] as [string, string],
+    })
+    await nextTick()
+    expect(charts()).toHaveLength(1)
+    expect(noFade()).toBe(true)
+    expect(w.find('[data-test="trend"]').element).toBe(barsEl)
+    // the new window's content actually landed in the surviving DOM (the
+    // in-place swap is visible in the bars, not swallowed)
+    expect(w.find('[data-test="trend"]').find('.bar-col').attributes('data-test')).toBe(`bar-${NEXT[0]}`)
+
+    // a window move (the slide carries a new windowKey with it — the
+    // cache-hit commit lands the key synchronously): the slide is the ONLY
+    // motion — no fade classes fire and the .bars DOM node is not remounted
+    const S: SlideLike = { dir: 'prev', bars: [...PAGED, ...NEXT].map(col), axisWindows: [PAGED, NEXT] }
+    await w.setProps({ slide: S, stacked: S.bars, windowKey: '2025-11-01..2026-04-30' })
+    await nextTick()
+    expect(charts()).toHaveLength(1)
+    expect(noFade()).toBe(true)
+    // the transformed .bars element (the slide's subject) is the very same
+    // DOM node — a keyed remount would break the slide's DOM reuse
+    const afterBars = w.find('[data-test="trend"]')
+    expect(afterBars.element).toBe(barsEl)
+    expect(afterBars.classes()).toContain('is-sliding')
+    w.unmount()
+  })
 })
 
 describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
@@ -1197,5 +1406,67 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     // undefined from/to keys)
     expect({ ...prefetch![1], from: undefined, to: undefined }).toEqual({ ...display![1], from: undefined, to: undefined })
     expect(prefetch![1].to).toBe('2026-04-30')
+  })
+
+  // TASK-158 regression (web-common.content-swap): a period step's trend
+  // fetch runs independently of the page load (the composable's flush:'sync'
+  // focus watch issues it at the press) and can commit BEFORE the pane — the
+  // removed windowKey-keyed fade fired in exactly that gap (and again after
+  // the pane settled when the order flipped), blanking the chart on every
+  // period move (the reported グラフを移動すると色が消える). The gate holds the
+  // page's analysis fetch so the trend commit lands first by construction:
+  // the chart stays motionless (same .bars node, zero fade classes) and the
+  // pane's slide is the move's only motion.
+  it('[covers:web-common.content-swap][covers:web-home.trend-window] 期間stepの並走（trend fetchがpane commitより先に確定）: chartはfadeせずbars DOM不変・確定時のpane slideが唯一の演出', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    let gated = false
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      if (gated) await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/', { attach: true, stubs: { transition: false } })
+    const charts = () => wrapper.findAll('[data-test="trend-card"] .hscroll')
+    const bars = () => wrapper.find('[data-test="trend-card"] [data-test="trend"]')
+    const noFade = () =>
+      charts().every((el) =>
+        Array.from(el.element.classList).every((c) => !c.includes('-enter-') && !c.includes('-leave-')),
+      )
+    expect(noFade()).toBe(true)
+    const before = bars().element
+
+    // step into November through the period dialog: the page's load() parks
+    // at the gate while the composable's own month-window fetch commits at
+    // once — the race, deterministically ordered (trend first)
+    gated = true
+    await wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await settle()
+    // mid-race: the reload is still pending (dim, the two-stage render) and
+    // the chart already committed the new window (2026-06..11) — in place,
+    // un-remounted, no fade classes of its own
+    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(bars().findAll('.bar-col').map((b) => b.attributes('data-test'))).toEqual(
+      monthsBetween('2026-06-01', '2026-11-30').map((m) => `bar-${m}`),
+    )
+    expect(charts()).toHaveLength(1)
+    expect(noFade()).toBe(true)
+    expect(bars().element).toBe(before)
+
+    // the pane commit is the single motion of the move: the step's
+    // slide-forward fires on the pane children; the chart (inside the fresh
+    // pane) keeps no classes of its own
+    release()
+    await flushPromises()
+    const kids = Array.from(wrapper.find('.view-stack .content-swap').element.children)
+    expect(kids.some((el) => el.classList.contains('slide-forward-enter-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('slide-forward-leave-active'))).toBe(true)
+    expect(noFade()).toBe(true)
+    await settle()
+    expect(wrapper.find('.view-stack .content-swap').element.children).toHaveLength(1)
+    expect(wrapper.find('.period-label').text()).toBe('2026年11月の支出')
   })
 })

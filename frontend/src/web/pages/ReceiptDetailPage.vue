@@ -7,10 +7,10 @@ import {
   type ReceiptSummary,
 } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
-import LabelPicker from '../components/LabelPicker.vue'
-import ReceiptPanel from '../components/ReceiptPanel.vue'
+import ContentSwap from '../components/ContentSwap.vue'
+import FeedPanels from '../components/FeedPanels.vue'
 import { useLedger } from '../composables/ledger'
-import { monthEnd, shortDate } from '../composables/period'
+import { monthEnd } from '../composables/period'
 import { usePageReady } from '../composables/usePageReady'
 import {
   contextKeyOf,
@@ -55,6 +55,12 @@ const fallbackNote = ref(false)
 const loadError = ref(false)
 const effectiveCtx = ref<ReceiptListQuery>({})
 const loadingMore = ref(false)
+// TASK-146 §3 #5: the panels' committed key — bumped when a sequence
+// refetch settles (a context / period / ledger change). The panel group
+// crosses through the ContentSwap fade; the page root never remounts
+// (web-browse.feed-no-remount). The tail fetch (maybeLoadMore) leaves it
+// alone: the appended panels appear through the bb-appear grammar instead.
+const committedKey = ref('')
 let loadSeq = 0
 /** generation of the latest move (the loadSeq recipe, TASK-19 2-7): a
  * compensation whose loaded-wait resolves after its move was superseded
@@ -92,10 +98,6 @@ const positionText = computed(() => {
 const atStart = computed(() => currentIdx.value <= 0)
 const atEnd = computed(() => currentIdx.value < 0 || currentIdx.value >= sequence.value.length - 1)
 
-function inWindow(i: number): boolean {
-  return i >= winStart.value && i <= winEnd.value
-}
-
 function panelEl(id: number): HTMLElement | null {
   return feedEl.value?.querySelector(`[data-test="receipt-panel-${id}"]`) ?? null
 }
@@ -128,6 +130,7 @@ function setSingle(id: number, withNote: boolean): void {
   currentId.value = id
   fallbackNote.value = withNote
   total.value = 1
+  committedKey.value = `single|${id}|${String(withNote)}`
 }
 
 /** Load the context sequence until the anchor receipt is on a page (max 4). */
@@ -149,6 +152,7 @@ async function loadSequence(l: number, ctx: ReceiptListQuery, anchor: number): P
         sequence.value = all
         total.value = res.total_count
         nextCursor.value = res.next_cursor
+        committedKey.value = `${l}|${JSON.stringify(ctx)}|${anchor}`
         // TASK-61: another path (goTo / route watch / IO's handleCurrent)
         // may have taken currentId while the list was in flight — the
         // anchor must not clobber it (the moveSeq capture-at-bump the
@@ -600,36 +604,28 @@ function goBack(): void {
     >
       レシート一覧の取得に失敗しました。時間をおいて再読み込みしてください。
     </p>
-    <template
-      v-for="(s, i) in sequence"
-      :key="s.receipt_id"
+    <!-- TASK-146 §3 #5/#18: the panel group crosses through the shared
+         content transition when a sequence refetch settles (a fade — the
+         page root stays mounted), while the tail fetch's appended panels
+         appear through the bb-appear grammar alone (the loaded ones stay
+         put); the loaded-id scroll moves are the smooth-scroll vocabulary
+         and never pass through here -->
+    <ContentSwap
+      :swap-key="committedKey"
+      dir="swap"
     >
-      <article
-        class="receipt-panel"
-        :data-test="`receipt-panel-${s.receipt_id}`"
-        :style="inWindow(i) ? undefined : { minHeight: '18rem' }"
-      >
-        <ReceiptPanel
-          v-if="inWindow(i) && activeLedger !== null"
-          :ledger-id="activeLedger"
-          :receipt-id="s.receipt_id"
-          @editing-change="(v) => onEditingChange(s.receipt_id, v)"
-          @loaded="onPanelLoaded(s.receipt_id)"
-        >
-          <!-- TASK-17: immediate label toggles in the viewing panel. The slot
-               props carry the panel's receipt, the ledger, editability and
-               applyReceipt; deletions and restores keep the panel in place. -->
-          <template #labels="labelProps">
-            <LabelPicker v-bind="labelProps" />
-          </template>
-        </ReceiptPanel>
-        <p
-          v-else
-          class="receipt-panel-placeholder muted small"
-        >
-          {{ shortDate(s.purchased_on) }} {{ s.store_name ?? '店名なし' }}
-        </p>
-      </article>
-    </template>
+      <div class="content-pane">
+        <!-- the panels ride their own component (FeedPanels) so the pane's
+             slot stays a static single element — the windowing and every
+             scroll / IO decision stays here -->
+        <FeedPanels
+          :sequence="sequence"
+          :window-ids="windowIds"
+          :active-ledger="activeLedger"
+          @editing-change="onEditingChange"
+          @loaded="onPanelLoaded"
+        />
+      </div>
+    </ContentSwap>
   </div>
 </template>

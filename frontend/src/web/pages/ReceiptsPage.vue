@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import LabelDots from '@/shared/components/LabelDots.vue'
-import { parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
+import type { Label, LabelColor } from '@/shared/labels'
 import { useDataApi, type AnalysisResult, type AnalysisTrendResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import AppearList from '../components/AppearList.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
+import ContentSwap from '../components/ContentSwap.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
 import PopoverPanel from '../components/PopoverPanel.vue'
@@ -13,11 +15,12 @@ import RankedList from '../components/RankedList.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { usePageReady } from '../composables/usePageReady'
+import { usePeriodMove } from '../composables/periodMove'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { axisMonthLabels, dayLabel, monthLabel, periodDays, shortDate, shortTime } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
 import { bucketSpan, spanGranularity } from '../composables/trend'
-import { stackedOf } from '@/shared/lib/stackedBars'
+import { allocateStack, barScale, stackedOf } from '@/shared/lib/stackedBars'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
@@ -31,7 +34,6 @@ const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
 const { markReady } = usePageReady()
-period.fromQuery(route.query)
 const rootEl = ref<HTMLElement | null>(null)
 
 const s = (v: unknown) => (typeof v === 'string' ? v : '')
@@ -49,20 +51,13 @@ const filters = reactive({
   includeDeleted: includeDeletedQuery === '1' || includeDeletedQuery === 'true',
   labelColors: [] as LabelColor[],
 })
-// Label filter truth (TASK-17 design 2-5 L3): the URL "labels" key. When it
-// is absent, adopt the period store's shared dashboard filter (Home /
-// Categories / Stores) into the URL. A deep link's labels are also written
-// back into the store so the topbar chip shows the selection the list is
-// actually filtering with (TASK-44 §11-3). Later changes arrive from the
-// topbar label chip through watch(period.labelQuery) below.
-const urlLabels = route.query.labels
-if ('labels' in route.query) {
-  filters.labelColors = parseLabelQuery(Array.isArray(urlLabels) ? (urlLabels[0] as string) : urlLabels)
-  period.setLabelColors(filters.labelColors)
-} else if (period.labelColors.length > 0) {
-  filters.labelColors = [...period.labelColors]
-  void router.replace({ query: listQueryToContext(listQuery()) })
-}
+// Label filter truth (TASK-17 design 2-5 L3): the URL "labels" key, kept in
+// step with the shared store by the shell-level URL sync (TASK-124 D2) —
+// which imports a deep link's labels into the store (and the keys-less
+// entry the other way round) before this page sets up, so reading the store
+// here covers both entries. Later changes arrive from the topbar label chip
+// through watch(period.labelQuery) below.
+filters.labelColors = [...period.labelColors]
 const draft = reactive({ ...filters, labelColors: [...filters.labelColors] })
 const filtersOpen = ref(false)
 
@@ -76,6 +71,11 @@ const payments = ref<AnalysisResult | null>(null)
 const trendRes = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
+
+// TASK-146 §3: the pane's committed key (bumped at the load commit) and the
+// move's direction off the shared period store
+const committedKey = ref('')
+const move = usePeriodMove(committedKey)
 // first load finished at least once: until then the screen shows the
 // skeleton; later reloads keep the grid and dim it (TASK-39 D)
 const loaded = ref(false)
@@ -131,6 +131,9 @@ async function load(id?: number): Promise<void> {
     nextCursor.value = list.next_cursor
     payments.value = pm
     trendRes.value = tr
+    // the pane's committed identity: the query (period + every filter) as it
+    // was answered, so the content transition fires here — never at the press
+    committedKey.value = `${l}|${JSON.stringify(listQuery())}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -171,11 +174,10 @@ async function more(): Promise<void> {
 const ledgerId = useLedger((id) => load(id))
 watch(() => period.range, () => void load())
 // the label filter moved to the topbar center bar (TASK-44 §11-3): its
-// dialog writes the shared store, this page follows and keeps the labels=
-// URL in sync (L3) while re-querying
+// dialog writes the shared store, this page follows it into the list (the
+// labels= URL itself is the shell-level URL sync's, TASK-124 D2-5)
 watch(() => period.labelQuery, (colors) => {
   filters.labelColors = [...(colors ?? [])]
-  syncQuery()
   void load()
 })
 
@@ -219,11 +221,20 @@ function togglePayment(method: PaymentMethod): void {
 }
 
 function syncQuery(): void {
-  // keep the period and the filters in the URL: rows link back into the feed
-  // with this same context. The period key (month= / week= / year=) rides
-  // alongside from/to so a reload/deep link restores the mode (TASK-57 A16 —
-  // the feed round trip itself stays range-based, CONTEXT_FIELDS)
-  void router.replace({ query: { ...listQueryToContext(listQuery()), ...period.urlQuery } })
+  // keep the filters and the feed-round-trip context in the URL: rows link
+  // back into the feed with this same context. The period mode keys and
+  // labels= belong to the shell-level URL sync (TASK-124 D2-5) — the replace
+  // starts from the current query so their present values ride along, and
+  // from/to (the range's derived value, D2-4) lands here for the feed round
+  // trip (a reload/deep link restores the mode off the mode key, TASK-57 A16)
+  const context = listQueryToContext(listQuery())
+  delete context.labels
+  const query: LocationQueryRaw = { ...route.query, ...context }
+  // a dropped filter key must leave the URL too — the spread above only adds
+  for (const k of ['store', 'item', 'category', 'payment_method', 'include_deleted']) {
+    if (!(k in context)) delete query[k]
+  }
+  void router.replace({ query })
 }
 
 const activeFilters = computed(() =>
@@ -297,15 +308,54 @@ const paymentRows = computed<StatsRow[]>(() => {
   return out
 })
 
+// TASK-129 (web-common.bar-scale): the screen's ONE absolute scale — the max
+// over the payment ranking rows' values (the screen's row bars; the daily
+// zone stays on its own basis until TASK-126 wires it in).
+const screenScale = computed(() => barScale(Math.max(0, ...paymentRows.value.map((r) => r.value))))
+
 /** TASK-55/A8: the trend card follows the period's length — day (<=62 days,
  *  e.g. a month's 31 bars), Monday-anchored weeks (63..366) or months — so it
  *  never disappears on long periods. TASK-116 (design §3-2): the bars stack
- *  their series — stackedOf (shared) assembles each bucket's segments (top-5
- *  + the residual「ほか」) off the same getAnalysisTrend fetch. */
+ *  their series — stackedOf (shared) assembles each bucket's segments (top-3
+ *  + the residual「ほか」) off the same getAnalysisTrend fetch. TASK-123
+ *  (design §4-4/§4-5): the segments carry explicit px heights off the shared
+ *  allocateStack (the .daily-bars track is a fixed 110px, so the bar's px
+ *  length is the raw value ratio x 110 — no min floors, no top clip), the
+ *  full-perimeter 1px outline (border-box inner consumption; rule F drops it
+ *  inline) and the top segment's cap radius off the measured column width. */
 const trendGran = computed(() => spanGranularity(...period.range))
 const trendTitle = computed(() =>
   trendGran.value === 'day' ? '日別の支出' : trendGran.value === 'week' ? '週別の支出' : '月別の支出',
 )
+/** the .daily-bars track's fixed height (styles.css) — the allocation's px
+ * basis; the columns' measured width feeds the corner cap */
+const DAILY_TRACK_H = 110
+const dailyBarsEl = ref<HTMLElement | null>(null)
+const dailyColW = ref(0)
+let dailyRo: ResizeObserver | null = null
+function measureDaily(): void {
+  const col = dailyBarsEl.value?.querySelector('.daily-col') ?? null
+  dailyColW.value = col ? col.clientWidth : 0
+}
+onMounted(() => {
+  measureDaily()
+  if (typeof ResizeObserver === 'undefined') return
+  dailyRo = new ResizeObserver(measureDaily)
+  if (dailyBarsEl.value) dailyRo.observe(dailyBarsEl.value)
+})
+// TASK-146 §3 (ContentSwap 導入に伴う局所stateの確認事項3): the pane's
+// commit remounts the .daily-bars element, so the observer must follow the
+// ref — a mount-time-only observe would keep watching the detached old node
+watch(dailyBarsEl, (el, prev) => {
+  if (el === prev) return
+  measureDaily()
+  if (el) dailyRo?.observe(el)
+  if (prev) dailyRo?.unobserve(prev)
+})
+onBeforeUnmount(() => {
+  dailyRo?.disconnect()
+  dailyRo = null
+})
 const trendCols = computed(() => {
   const res = trendRes.value
   if (!res) return []
@@ -324,22 +374,28 @@ const trendCols = computed(() => {
   }
   return res.buckets.map((key, i) => {
     const value = totals[i] ?? 0
-    const total = value
+    const ratio = value > 0 ? value / max : 0
+    // the stack's px length and its % height are the same raw ratio — the
+    // allocation's sizes close over the px length exactly (§4-5 rule A)
+    const length = ratio * DAILY_TRACK_H
+    const allocated = value > 0 ? allocateStack(stacked[i]?.segments ?? [], length) : []
+    const segTotal = allocated.reduce((a, s) => a + s.value, 0)
     return {
       key,
       value,
-      height: value ? Math.max(Math.round((value / max) * 100), 3) : 0,
+      height: value ? ratio * 100 : 0,
       title: title(key, value),
-      // TrendBars' BarView math: the segment share of the BAR height with
-      // the 1% floor for positive values, and the hover share title
-      segments: (stacked[i]?.segments ?? []).map((s) => ({
+      segments: allocated.map((s, j) => ({
         ...s,
-        segHeight: total > 0 ? Math.max((s.value / total) * 100, s.value > 0 ? 1 : 0) : 0,
-        pct: total > 0 ? Math.round((s.value / total) * 100) : null,
+        segHeight: s.size,
+        top: j === allocated.length - 1,
+        pct: segTotal > 0 ? Math.round((s.value / segTotal) * 100) : null,
       })),
     }
   })
 })
+/** the top segment's corner radius: the cap arithmetic min(2px, width/4) */
+const dailyRadius = computed(() => Math.min(2, dailyColW.value / 4))
 const trendAxis = computed(() => {
   const cols = trendCols.value
   if (cols.length === 0) return null
@@ -469,167 +525,191 @@ const groups = computed(() => {
       class="view-stack"
       :class="{ loading }"
     >
-      <section
-        class="card kpi"
-        data-test="summary"
+      <!-- TASK-146 §3: the content transition fires at the load commit -->
+      <ContentSwap
+        :swap-key="committedKey"
+        :dir="move.dir.value"
       >
-        <p class="kpi-head">
-          <span class="label">{{ period.label }}の支出</span>
-          <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
-        </p>
-        <p class="kpi-sub">
-          レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }}
-        </p>
-      </section>
-
-      <div class="dash-cols">
-        <div class="col-main">
+        <div class="content-pane">
           <section
-            class="zone"
-            data-test="daily"
+            class="card kpi"
+            data-test="summary"
           >
-            <div class="zone-head">
-              <h2 class="zone-title">
-                {{ trendTitle }}
-              </h2>
-            </div>
-            <div
-              class="daily-bars"
-              :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
-            >
-              <span
-                v-for="c in trendCols"
-                :key="c.key"
-                class="daily-col"
-                :title="c.title"
-              >
-                <!-- TASK-116 (design §3-2): the bar is a stacked container —
-                     column-reverse puts the first (top) series at the base;
-                     a zero bucket keeps the height-0 element with no
-                     segments (the same drawing as before: no visible bar) -->
-                <span
-                  class="daily-bar"
-                  :style="{ height: `${c.height}%` }"
-                >
-                  <span
-                    v-for="(seg, i) in c.segments"
-                    :key="i"
-                    class="daily-seg"
-                    :style="{ height: `${seg.segHeight}%`, background: seg.color }"
-                    :title="`${seg.label} ${formatYen(seg.value)}${seg.pct !== null ? `（${seg.pct}%）` : ''}`"
-                  />
-                </span>
-              </span>
-            </div>
-            <div
-              v-if="trendAxis"
-              class="axis-ends muted small"
-            >
-              <span>{{ trendAxis.first }}</span>
-              <span v-if="trendAxis.last">{{ trendAxis.last }}</span>
-            </div>
-          </section>
-        </div>
-
-        <div class="col-side">
-          <section
-            class="zone zone--list"
-            data-test="payments"
-          >
-            <div class="zone-head">
-              <h2 class="zone-title">
-                支払方法
-              </h2>
-            </div>
-            <!-- TASK-65: a row press toggles the payment filter in place (the
-                 null-key aggregates stay inert rows) -->
-            <RankedList
-              v-if="paymentRows.length > 0"
-              :rows="paymentRows"
-              :select="onPaymentRow"
-            />
-            <p
-              v-else
-              class="muted empty"
-            >
-              この期間の記録はありません。
+            <p class="kpi-head">
+              <span class="label">{{ period.label }}の支出</span>
+              <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
+            </p>
+            <p class="kpi-sub">
+              レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }}
             </p>
           </section>
-        </div>
-      </div>
 
-      <section
-        class="zone"
-        data-test="receipts"
-      >
-        <div class="zone-head">
-          <h2 class="zone-title">
-            レシート
-          </h2>
-        </div>
-        <p
-          v-if="!loading && receipts.length === 0"
-          class="empty-state"
-          data-test="empty"
-        >
-          <AppIcon
-            name="chat"
-            :size="28"
-          />
-          該当するレシートはありません。ChatGPT でレシートの写真を送ると記録されます。
-        </p>
-        <div
-          v-for="g in groups"
-          :key="g.date"
-          class="day-group"
-        >
-          <div class="day-head">
-            <span>{{ g.date ? dayLabel(g.date) : '日付なし' }}</span>
-            <span class="amount muted">{{ formatYen(g.total) }}</span>
-          </div>
-          <ul class="recent-list">
-            <li
-              v-for="r in g.rows"
-              :id="`receipt-${r.receipt_id}`"
-              :key="r.receipt_id"
-              :data-test="`receipt-${r.receipt_id}`"
-            >
-              <RouterLink
-                :to="{ path: `/receipts/${r.receipt_id}`, query: listQueryToContext(listQuery()) }"
-                class="recent-row receipt-row"
-                :class="{ deleted: r.deleted_at }"
+          <div class="dash-cols">
+            <div class="col-main">
+              <section
+                class="zone"
+                data-test="daily"
               >
-                <!-- the day head carries the date (TASK-63/57): the row's
+                <div class="zone-head">
+                  <h2 class="zone-title">
+                    {{ trendTitle }}
+                  </h2>
+                </div>
+                <div
+                  ref="dailyBarsEl"
+                  class="daily-bars"
+                  :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
+                >
+                  <span
+                    v-for="c in trendCols"
+                    :key="c.key"
+                    class="daily-col"
+                    :title="c.title"
+                  >
+                    <!-- TASK-116 (design §3-2): the bar is a stacked container —
+                     column-reverse puts the first (top) series at the base;
+                     a zero bucket keeps the height-0 element with no
+                     segments (the same drawing as before: no visible bar).
+                     TASK-123: explicit px segment heights off allocateStack,
+                     the full-perimeter 1px outline (rule F drops it inline)
+                     and the top segment's cap radius -->
+                    <span
+                      class="daily-bar"
+                      :style="{ height: `${c.height}%` }"
+                    >
+                      <span
+                        v-for="(seg, i) in c.segments"
+                        :key="i"
+                        class="daily-seg"
+                        :style="{
+                          height: `${seg.segHeight}px`,
+                          background: seg.color,
+                          ...(seg.outline ? {} : { border: 'none' }),
+                          ...(seg.top ? { borderRadius: `${dailyRadius}px ${dailyRadius}px 0 0` } : {}),
+                        }"
+                        :title="`${seg.label} ${formatYen(seg.value)}${seg.pct !== null ? `（${seg.pct}%）` : ''}`"
+                      />
+                    </span>
+                  </span>
+                </div>
+                <div
+                  v-if="trendAxis"
+                  class="axis-ends muted small"
+                >
+                  <span>{{ trendAxis.first }}</span>
+                  <span v-if="trendAxis.last">{{ trendAxis.last }}</span>
+                </div>
+              </section>
+            </div>
+
+            <div class="col-side">
+              <section
+                class="zone zone--list"
+                data-test="payments"
+              >
+                <div class="zone-head">
+                  <h2 class="zone-title">
+                    支払方法
+                  </h2>
+                </div>
+                <!-- TASK-65: a row press toggles the payment filter in place (the
+                 null-key aggregates stay inert rows) -->
+                <RankedList
+                  v-if="paymentRows.length > 0"
+                  :rows="paymentRows"
+                  :select="onPaymentRow"
+                  :scale="screenScale"
+                />
+                <p
+                  v-else
+                  class="muted empty"
+                >
+                  この期間の記録はありません。
+                </p>
+              </section>
+            </div>
+          </div>
+
+          <section
+            class="zone"
+            data-test="receipts"
+          >
+            <div class="zone-head">
+              <h2 class="zone-title">
+                レシート
+              </h2>
+            </div>
+            <p
+              v-if="!loading && receipts.length === 0"
+              class="empty-state"
+              data-test="empty"
+            >
+              <AppIcon
+                name="chat"
+                :size="28"
+              />
+              該当するレシートはありません。ChatGPT でレシートの写真を送ると記録されます。
+            </p>
+            <div
+              v-for="g in groups"
+              :key="g.date"
+              class="day-group"
+            >
+              <div class="day-head">
+                <span>{{ g.date ? dayLabel(g.date) : '日付なし' }}</span>
+                <span class="amount muted">{{ formatYen(g.total) }}</span>
+              </div>
+              <!-- AppearList (review MED2): a "さらに表示" page can open a
+                   NEW day group whose rows appear through the same grammar,
+                   while the pane rebuild of a period step mounts with the
+                   rows silent — the pane's motion is the one motion -->
+              <AppearList class="recent-list">
+                <li
+                  v-for="r in g.rows"
+                  :id="`receipt-${r.receipt_id}`"
+                  :key="r.receipt_id"
+                  :data-test="`receipt-${r.receipt_id}`"
+                >
+                  <RouterLink
+                    :to="{ path: `/receipts/${r.receipt_id}`, query: listQueryToContext(listQuery()) }"
+                    class="recent-row receipt-row"
+                    :class="{ deleted: r.deleted_at }"
+                  >
+                    <!-- the day head carries the date (TASK-63/57): the row's
                      column is the time; the 日付なし group shows '-' too -->
-                <span class="recent-date">{{ g.date ? shortTime(r.purchased_time) : '-' }}</span>
-                <span
-                  class="recent-store truncate"
-                  data-test="store-name"
-                >{{ r.store_name ?? '店名なし' }}</span>
-                <span
-                  class="row-labels"
-                  data-test="row-labels"
-                ><span
-                  v-if="r.deleted_at"
-                  class="badge badge-danger"
-                >削除済み</span><LabelDots
-                  :labels="r.labels ?? []"
-                  compact
-                /></span>
-                <span class="amount">{{ formatYen(r.amount) }}</span>
-              </RouterLink>
-            </li>
-          </ul>
+                    <span class="recent-date">{{ g.date ? shortTime(r.purchased_time) : '-' }}</span>
+                    <span
+                      class="recent-store truncate"
+                      data-test="store-name"
+                    >{{ r.store_name ?? '店名なし' }}</span>
+                    <span
+                      class="row-labels"
+                      data-test="row-labels"
+                    ><span
+                      v-if="r.deleted_at"
+                      class="badge badge-danger"
+                    >削除済み</span><LabelDots
+                      :labels="r.labels ?? []"
+                      compact
+                    /></span>
+                    <span class="amount">{{ formatYen(r.amount) }}</span>
+                  </RouterLink>
+                </li>
+              </AppearList>
+            </div>
+            <!-- TASK-146 §3 #18: the appended rows appear through the shared
+             bb-appear grammar — the loaded rows never move -->
+            <button
+              v-if="nextCursor"
+              class="btn more-btn"
+              data-test="more"
+              @click="more"
+            >
+              さらに表示
+            </button>
+          </section>
         </div>
-        <button
-          v-if="nextCursor"
-          class="btn more-btn"
-          data-test="more"
-          @click="more"
-        >
-          さらに表示
-        </button>
-      </section>
+      </ContentSwap>
     </div>
   </div>
 </template>

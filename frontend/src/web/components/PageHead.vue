@@ -2,14 +2,16 @@
 import { useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import AppIcon from './AppIcon.vue'
-import { setNavIntent } from '../composables/navDirection'
+import { pushToParent } from '../composables/navDirection'
 
 // The detail pages' heading row (TASK-74 §4-5): ‹ (a push to the parent
 // route — not router.back(), so a direct link can still climb), the kind
 // label (with the parent's name beside it on a subcategory page), the name,
 // the total at the right end and the "..." menu slot. The ‹ sets the
 // one-shot back intent right before its push so the slide plays backwards
-// even though the history position moves forward (§3-2).
+// even though the history position moves forward (§3-2) — the press itself
+// is the shared pushToParent (TASK-124 D3 lifted it so the topbar ‹ keeps
+// the same semantics).
 const props = defineProps<{
   kindLabel: string
   title: string
@@ -23,8 +25,7 @@ const props = defineProps<{
 const router = useRouter()
 
 function goBack(): void {
-  setNavIntent('back')
-  void router.push(props.parentTo)
+  pushToParent(router, props.parentTo)
 }
 </script>
 

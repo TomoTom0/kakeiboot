@@ -50,6 +50,23 @@ pub async fn auth_setup_file() -> (Router, SqlitePool, tempfile::TempDir) {
     (router, pool, dir)
 }
 
+/// [`auth_setup_file`] with test hooks installed on the AppState (TASK-147:
+/// deterministic interleaving of concurrent requests; the hook fields exist
+/// only with the `test-hooks` feature that `mise run backend:test` enables).
+pub async fn auth_setup_file_with_hooks(
+    hooks: budget_book::test_hooks::TestHooks,
+) -> (Router, SqlitePool, tempfile::TempDir) {
+    let cfg = super::repo_config();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db::connect_file(&dir.path().join("race.sqlite"), &cfg.app.database)
+        .await
+        .expect("file db");
+    let mut state = AppState::new(&cfg, pool.clone()).expect("app state");
+    state.test_hooks = hooks;
+    let router = app::router(&cfg, state, CancellationToken::new());
+    (router, pool, dir)
+}
+
 /// Cookie-keeping client whose credentials live in a SoftPasskey.
 pub struct Client {
     auth: WebauthnAuthenticator<SoftPasskey>,

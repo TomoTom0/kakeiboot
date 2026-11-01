@@ -1,5 +1,5 @@
 //! Shared serde DTOs. The canonical type list lives in
-//! docs/spec_mcp-tools.md section 7-1; this module defines the subset needed
+//! docs/spec/spec_mcp-tools.md section 7-1; this module defines the subset needed
 //! by the draft lifecycle (spec_data-model.md section 7). MCP tool I/O types
 //! (DraftView etc.) are added in TASK-9.
 

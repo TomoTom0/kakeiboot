@@ -8,7 +8,8 @@ import LedgerSwitcher from './components/LedgerSwitcher.vue'
 import PopoverMenu from './components/PopoverMenu.vue'
 import StepUpDialog from './components/StepUpDialog.vue'
 import TopbarFilterBar from './components/TopbarFilterBar.vue'
-import { direction } from './composables/navDirection'
+import { direction, navKind, pushToParent } from './composables/navDirection'
+import { useBrowsingUrlSync } from './composables/useBrowsingUrlSync'
 import { markReady, notifyPageEntered, PAGE_READY_KEY, resetPageReady } from './composables/usePageReady'
 import { useSessionStore } from './stores/session'
 
@@ -61,6 +62,40 @@ const section = computed<SectionName | ''>(() => {
   return typeof s === 'string' && s in SECTION_TITLES ? (s as SectionName) : ''
 })
 const ledgerScoped = computed(() => route.meta.ledgerScoped === true)
+
+// The shell-level URL sync of the browsing state (TASK-124 D2): the period
+// mode keys and labels= of the `meta.browsingSync` routes live in the URL,
+// imported on every navigation that carries them and written back as a
+// guarded replace — one place for all the browsing pages.
+useBrowsingUrlSync()
+
+// --- the tabbar-外 screens' topbar ‹ (TASK-124 D3) -------------------------------
+// Every screen outside the bottom tabbar (search, the settings panels, the
+// manage screens, apps, usage) climbs to its parent section through a ‹ in
+// the topbar — the parent map is one static table here in the shell; the
+// browsing five, the axis detail (its PageHead ‹) and the feed (its 一覧
+// link) keep their existing navigation.
+const TOPBAR_BACK: Record<string, { to: string; label: string }> = {
+  search: { to: '/', label: 'ホーム' },
+  'settings-general': { to: '/', label: 'ホーム' },
+  'settings-auth': { to: '/', label: 'ホーム' },
+  'settings-data': { to: '/', label: 'ホーム' },
+  'settings-others': { to: '/', label: 'ホーム' },
+  'manage-categories': { to: '/settings/data', label: 'データ' },
+  'manage-stores': { to: '/settings/data', label: 'データ' },
+  'manage-labels': { to: '/settings/data', label: 'データ' },
+  apps: { to: '/settings', label: '設定' },
+  usage: { to: '/settings/others', label: 'その他' },
+  'usage-topic': { to: '/settings/others', label: 'その他' },
+}
+const topbarBack = computed(() => {
+  const name = route.name
+  return typeof name === 'string' ? (TOPBAR_BACK[name] ?? null) : null
+})
+function goTopbarBack(): void {
+  const back = topbarBack.value
+  if (back) pushToParent(router, back.to)
+}
 // The topbar center filter bar (TASK-44 §11-3/11-6): only on the browsing
 // routes that opted in via route.meta.filters, and only while the user can
 // actually view a ledger (no membership -> no shared filters to show).
@@ -163,15 +198,22 @@ watch(navKey, () => {
 
 // --- shell page transition (TASK-74 §4-3) --------------------------------------
 // The shell RouterView slides by the navigation direction: forward enters
-// from the right, back from the left, and a 'none' direction (tab switches,
-// every replace) skips the CSS machinery entirely. The key is the first path
-// segment: the feed rewrites its URL while scrolling without remounting, the
-// settings tabs all share 'settings' (so the shell never remounts and their
-// inner fade lives on), and only a real component change (list -> detail)
-// swaps — same key, different component still transitions.
-const transitionName = computed(() =>
-  direction.value === 'forward' ? 'slide-forward' : direction.value === 'back' ? 'slide-back' : '',
-)
+// from the right, back from the left. A 'none' direction is not a motionless
+// one since TASK-146 §3 #2: a push/pop that cannot settle a direction (the
+// same-depth tab switches, the depth-less routes — /settings, apps, usage,
+// manage-*) fades through the page vocabulary, and only a replace (the
+// feed's scrolling id rewrite, a chip ×, a period change — history-free
+// display-maintaining operations) skips the CSS machinery entirely. The key
+// is the first path segment: the feed rewrites its URL while scrolling
+// without remounting, the settings tabs all share 'settings' (so the shell
+// never remounts and their inner fade lives on), and only a real component
+// change (list -> detail) swaps — same key, different component still
+// transitions.
+const transitionName = computed(() => {
+  if (direction.value === 'forward') return 'slide-forward'
+  if (direction.value === 'back') return 'slide-back'
+  return navKind.value === 'push' || navKind.value === 'pop' ? 'page' : ''
+})
 const pageKey = computed(() => route.path.split('/')[1] ?? '')
 function onAfterEnter(): void {
   notifyPageEntered()
@@ -247,6 +289,22 @@ async function logout(): Promise<void> {
             class="topbar-logo topbar-logo-compact"
           />
         </RouterLink>
+        <!-- the tabbar-外 climb (TASK-124 D3): right after the brand, right
+             before the title — never next to the menu button. Icon-only; the
+             parent's name lives in the aria-label alone -->
+        <button
+          v-if="topbarBack"
+          type="button"
+          class="icon-btn topbar-back"
+          :aria-label="`${topbarBack.label}へ戻る`"
+          data-test="topbar-back"
+          @click="goTopbarBack"
+        >
+          <AppIcon
+            name="chevron-left"
+            :size="22"
+          />
+        </button>
         <h1
           v-if="section !== 'home'"
           class="topbar-title"
@@ -392,6 +450,7 @@ async function logout(): Promise<void> {
         </aside>
         <div
           class="scrim"
+          aria-hidden="true"
           @click="closeDrawer"
         />
         <div

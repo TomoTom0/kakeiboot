@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import type { NavigationFailure, RouteLocationNormalized } from 'vue-router'
-import { direction, pendingRestore, setNavIntent, updateDirection } from '@/web/composables/navDirection'
+import { direction, navKind, pendingRestore, setNavIntent, updateDirection } from '@/web/composables/navDirection'
 import { markReady, notifyPageEntered, resetPageReady } from '@/web/composables/usePageReady'
 import { useSessionStore } from '@/web/stores/session'
 import { cleanup, ME, mockFetch, mountApp, scrollMocks, setReducedMotion, settle } from './helpers'
@@ -71,11 +71,16 @@ describe('atomic transitions (TASK-39)', () => {
     expect(app.indexOf('<Transition')).toBeLessThan(app.indexOf('v-if="showShell'))
     // the shell RouterView: the slide name follows the navigation direction
     // and a 'none' direction keeps the CSS machinery off entirely (no mode:
-    // both pages move at once), keyed by the first path segment
+    // both pages move at once), keyed by the first path segment.
+    // TASK-146 §3 #2: transitionName looks at navKind TOO — a direction-less
+    // PUSH (same-depth tabs, depth-less routes) fades instead of skipping,
+    // only a replace stays classless
     expect(app).toContain(':name="transitionName"')
     expect(app).toContain(":css=\"transitionName !== ''\"")
     expect(app).toMatch(/<component\s+:is="Component"\s+:key="pageKey"/)
     expect(app).toContain('@after-enter')
+    const nameCalc = app.slice(app.indexOf('transitionName'), app.indexOf('pageKey'))
+    expect(nameCalc).toContain('navKind')
     const settings = src('pages/SettingsPage.vue')
     expect(settings.match(/name="page"/g)).toHaveLength(1)
     expect(settings).toContain('mode="out-in"')
@@ -342,6 +347,27 @@ describe('navDirection rules (TASK-74)', () => {
     at(13)
     nav({ name: 'manage-categories' }, { name: 'settings-general' })
     expect(direction.value).toBe('none')
+    // TASK-146 §3 #2: 'none' no longer means "no motion" — a direction-less
+    // navigation still records its KIND, and App.vue maps a none + push/pop
+    // to the page fade (only a replace stays classless). The kind is the
+    // source the fade mapping reads.
+    at(14)
+    nav({ name: 'stores', depth: 1 }, { name: 'receipts', depth: 1 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    at(15)
+    nav({ name: 'receipts', depth: 1 }, { name: 'settings-general' })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    at(16)
+    nav({ name: 'manage-categories' }, { name: 'receipts', depth: 1 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    // a replace keeps neither direction nor kind-based motion
+    at(16)
+    nav({ name: 'receipts', depth: 1 }, { name: 'receipt', depth: 2 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('replace')
   })
 })
 
@@ -416,6 +442,82 @@ describe('shell slide transition (TASK-74)', () => {
     expect(pages).toHaveLength(1)
     expect(pages[0]?.classList.contains('receipt-feed')).toBe(true)
     expect(Array.from(pages[0]!.classList).some((c) => c.startsWith('slide-'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Direction-less push fade (TASK-146 §3 遷移全数表 #2): a push whose direction
+// cannot settle — same-depth tab switches and depth-less routes (the settings
+// tree, apps, usage, manage-*) — used to render with NO motion (:css=false).
+// transitionName now reads navKind as well: a none + push/pop navigation
+// fades through the page vocabulary, and only a replace stays classless.
+
+describe('direction-less push fade (TASK-146)', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '')
+    cleanup()
+  })
+
+  /** the app-main children of the current swap, keyed by their motion class */
+  const pages = (): Element[] => Array.from(document.querySelectorAll('main.app-main > *'))
+
+  it('[covers:web-shell.page-transition][covers:web-browse.transition-direction] 同depth(1)同士のpush（/receipts→/categories）は fade（page-enter-active/page-leave-active）で遷移', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/categories')
+    await flushPromises()
+    // direction-less but a push: the fade vocabulary carries the swap. (The
+    // navKind source itself is pinned by the rules test above — the browsing
+    // screens' URL-sync writeBack issues a replace right behind every push,
+    // so reading the ref here would observe that follow-up instead.)
+    expect(direction.value).toBe('none')
+    const entering = pages().find((el) => el.classList.contains('page-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering?.classList.contains('page-enter-from')).toBe(true)
+    const leaving = pages().find((el) => el.classList.contains('page-leave-active'))
+    expect(leaving).toBeDefined()
+    expect(entering?.classList.contains('view-page')).toBe(true)
+    await settle()
+    expect(pages().filter((el) => el.classList.contains('view-page'))).toHaveLength(1)
+  })
+
+  it('[covers:web-shell.page-transition] depth未設定route（/settings/general）へのpushも fade で遷移する（none+push は無演出でない）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/settings/general')
+    await flushPromises()
+    expect(direction.value).toBe('none')
+    const entering = pages().find((el) => el.classList.contains('page-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering?.classList.contains('settings-layout')).toBe(true)
+    await settle()
+    // and back out to a depth route slides as usual (pop -> back)
+    window.history.replaceState({ position: 0 }, '')
+    await router.back()
+    await flushPromises()
+    const back = pages().find((el) => el.classList.contains('slide-back-enter-active'))
+    expect(back).toBeDefined()
+  })
+
+  it('[covers:web-browse.reduced-motion] reduced-motion では方向なしpushのfadeも無効（classなし・即時入れ替え）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    setReducedMotion(true)
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/categories')
+    await settle()
+    expect(direction.value).toBe('none')
+    const current = pages()
+    expect(current).toHaveLength(1)
+    expect(current[0]?.classList.contains('view-page')).toBe(true)
+    expect(
+      Array.from(current[0]!.classList).some((c) => c.startsWith('page-') || c.startsWith('slide-')),
+    ).toBe(false)
   })
 })
 

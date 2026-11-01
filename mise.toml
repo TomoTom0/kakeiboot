@@ -22,7 +22,7 @@ depends = ["backend:build", "frontend:build"]
 
 [tasks."backend:test"]
 description = "Run backend unit and integration tests"
-run = "cargo test --workspace"
+run = "cargo test --workspace --features budget-book/test-hooks"
 
 [tasks."frontend:test"]
 description = "Run frontend unit tests (vitest)"
@@ -61,6 +61,7 @@ description = "rustfmt check and clippy (warnings are errors)"
 run = [
   "cargo fmt --all -- --check",
   "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo clippy --workspace --all-targets --features budget-book/test-hooks -- -D warnings",
 ]
 
 [tasks."frontend:lint"]
@@ -93,7 +94,7 @@ depends = ["dev:backend", "dev:frontend"]
 
 # stg/prod operations: thin wrappers over scripts/deploy/kakeiboot_ops.py (TASK-118).
 # The runtime dir root and the execution transport (local vs ssh to the runtime
-# host) come from configs/deploy.toml; see docs/deploy.md. The work repo only
+# host) come from configs/deploy.toml; see docs/ops/ops_deploy.md. The work repo only
 # runs dev otherwise.
 
 [tasks."stg:deploy"]
@@ -127,7 +128,10 @@ usage = "arg \"<verb...>\""
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod ${usage_verb}"
 
 # backup (TASK-83): daily systemd user timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
-# （deployで配布）。詳細は docs/deploy.md。
+# （deployで配布）。詳細は docs/ops/ops_deploy.md。
+# unit fileは .in 正本を render して配布（TASK-119）: units:install が
+# kakeiboot-backup@.service.in の {{deploy_root}} を configs/deploy.toml で置換し、
+# render済みserviceとtimerを user config dir へrsync・daemon-reload する（env非依存）。
 
 [tasks."stg:backup"]
 description = "stg backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
@@ -144,3 +148,7 @@ run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status 
 [tasks."prod:backup-status"]
 description = "prod backup状態確認（last_success・世代dir一覧・timer・前回実行結果）"
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status --env prod"
+
+[tasks."units:install"]
+description = "backup unitをuser config dirへ配布（.in正本をdeploy_rootでrender → rsync → daemon-reload。unitはenv非依存のため接頭はunits:）"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py install-units"

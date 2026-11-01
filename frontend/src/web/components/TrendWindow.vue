@@ -52,6 +52,21 @@ const root = ref<HTMLElement | null>(null)
 /** true while the transform parks on its initial value or resets — the
  *  .no-anim class keeps those steps transitionless */
 const noAnim = ref(false)
+
+// TASK-158 (web-common.content-swap #14改訂): the windowKey-keyed chart fade
+// is REMOVED. Its designed fire site — a windowKey change with no pane swap —
+// does not exist in the real wiring: a window move rides the slide, a
+// label/ledger switch keeps the key (the window is range-derived), the
+// AxisDetail first commit lands before this component mounts (the pages'
+// v-if on win.result), and every mode/range change bumps the pane's
+// committedKey on all four screens — the pane's ContentSwap transition is
+// the chart's single motion. The keyed remount instead faded visibly in
+// BOTH race orders of a period step (this chart's windowKey commits
+// independently of the page load: before the pane, or after it settled) —
+// the reported 「グラフを移動すると色が消える」. A windowKey change now
+// swaps the chart's content in place: TrendBars is never re-keyed (the
+// slide's DOM reuse holds on every path), the v-if gate alone waits for the
+// first window.
 let watchdog = 0
 let reported = false
 let attached: HTMLElement | null = null

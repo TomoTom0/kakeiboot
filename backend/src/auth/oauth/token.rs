@@ -427,18 +427,26 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
         Err(e) => return db_error(e),
     };
 
-    // (used_at, child_hash, grant_id) of the token; then grant + user state
-    let row: Option<RefreshRow> = sqlx::query_as(
-        "SELECT used_at, child_hash, grant_id FROM oauth_refresh_tokens WHERE token_hash = ?",
+    // (used_at, child_hash, grant_id, revoked_at, expires_at) of the token;
+    // then grant + user state. A failing SELECT is a rejection (fail closed).
+    let row: Option<RefreshRow> = match sqlx::query_as(
+        "SELECT used_at, child_hash, grant_id, revoked_at, expires_at
+         FROM oauth_refresh_tokens WHERE token_hash = ?",
     )
     .bind(&token_hash)
     .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(None);
-    let Some((used_at, child_hash, grant_id)) = row else {
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "refresh token lookup failed");
+            None
+        }
+    };
+    let Some((used_at, child_hash, grant_id, t_revoked, t_expires)) = row else {
         return Outcome::Rejected(OAuthError::invalid_grant());
     };
-    let grant: Option<GrantRow> = sqlx::query_as(
+    let grant: Option<GrantRow> = match sqlx::query_as(
         "SELECT g.user_id, g.scope, g.resource, g.absolute_expires_at, g.revoked_at,
                     g.client_id, g.created_at, g.active_ledger_id
              FROM oauth_grants g WHERE g.id = ?",
@@ -446,29 +454,39 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
     .bind(grant_id)
     .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(None);
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "refresh grant lookup failed");
+            None
+        }
+    };
     let Some((g_user, g_scope, g_resource, g_absolute, g_revoked, g_client, _g_created, _g_active)) =
         grant
     else {
         return Outcome::Rejected(OAuthError::invalid_grant());
     };
-    let token_ok: Option<i64> = sqlx::query_scalar(
-        "SELECT expires_at FROM oauth_refresh_tokens WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
-    )
-    .bind(&token_hash)
-    .bind(now)
-    .fetch_optional(&mut *tx)
-    .await
-    .unwrap_or(None);
     let user_enabled: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL")
+        match sqlx::query_scalar("SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL")
             .bind(g_user)
             .fetch_optional(&mut *tx)
             .await
-            .unwrap_or(None);
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // fail closed: an unreadable user state rejects the refresh
+                tracing::error!(error = %e, "refresh user lookup failed");
+                None
+            }
+        };
 
-    // step 1 (spec_data-model.md section 14)
-    if token_ok.is_none() || g_revoked.is_some() || g_absolute <= now || user_enabled.is_none() {
+    // step 1 (spec_auth.md 4-9, spec_data-model.md section 14). Order:
+    // expiry of a non-revoked row / grant revoked / grant expired / user
+    // disabled -> resource mismatch -> client mismatch -> revoked token
+    // (reuse) -> scope. A revoked row is checked before its expiry (an
+    // expired superseded child is still reuse while the grant is valid).
+    let token_expired = t_revoked.is_none() && t_expires <= now;
+    if token_expired || g_revoked.is_some() || g_absolute <= now || user_enabled.is_none() {
         return Outcome::Rejected(OAuthError::invalid_grant());
     }
     if let Some(res) = &requested_resource
@@ -478,18 +496,18 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
     }
     if g_client != client_id {
         // revoke the grant, COMMIT, then reject
-        let _ = sqlx::query(
-            "UPDATE oauth_grants SET revoked_at = ?, revoked_reason = 'client_mismatch'
-             WHERE id = ? AND revoked_at IS NULL",
-        )
-        .bind(now)
-        .bind(grant_id)
-        .execute(&mut *tx)
-        .await;
+        if let Err(e) = revoke_grant(&mut tx, grant_id, now, "client_mismatch").await {
+            return db_error(e);
+        }
         if let Err(e) = tx.commit().await {
             return db_error(e);
         }
         return Outcome::RejectedAfterCommit("client_mismatch");
+    }
+    if t_revoked.is_some() {
+        // only step 3 sets oauth_refresh_tokens.revoked_at: this is a child
+        // superseded by a grace reissue -> theft signal, revoke the family
+        return revoke_for_reuse(tx, grant_id, client_id, now, "superseded_child").await;
     }
     // scope must narrow (spec 4-9 / 4-8)
     let new_scope = match &requested_scope {
@@ -545,37 +563,47 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
             let Some(child) = child_hash else {
                 return db_error(sqlx::Error::RowNotFound);
             };
-            let child_ok: Option<i64> = sqlx::query_scalar(
+            let child_ok: Option<i64> = match sqlx::query_scalar(
                 "SELECT 1 FROM oauth_refresh_tokens
                  WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL",
             )
             .bind(&child)
             .fetch_optional(&mut *tx)
             .await
-            .unwrap_or(None);
+            {
+                Ok(r) => r,
+                Err(e) => return db_error(e),
+            };
             if child_ok.is_none() {
                 // the child was already used: theft signal (step 4)
-                let _ = sqlx::query(
-                    "UPDATE oauth_grants SET revoked_at = ?, revoked_reason = 'refresh_reuse'
-                     WHERE id = ? AND revoked_at IS NULL",
-                )
-                .bind(now)
-                .bind(grant_id)
-                .execute(&mut *tx)
-                .await;
-                if let Err(e) = tx.commit().await {
-                    return db_error(e);
-                }
-                return Outcome::RejectedAfterCommit("refresh_reuse");
+                return revoke_for_reuse(tx, grant_id, client_id, now, "child_used").await;
             }
-            // revoke the access tokens paired with the old child, reissue
-            let _ = sqlx::query(
+            // supersede the old child: revoke its access tokens and its own
+            // refresh row (only live child per family; presenting it later is
+            // reuse, step 1), then reissue
+            if let Err(e) = sqlx::query(
                 "UPDATE oauth_access_tokens SET revoked_at = ? WHERE refresh_hash = ? AND revoked_at IS NULL",
             )
             .bind(now)
             .bind(&child)
             .execute(&mut *tx)
-            .await;
+            .await
+            {
+                return db_error(e);
+            }
+            match sqlx::query(
+                "UPDATE oauth_refresh_tokens SET revoked_at = ?
+                 WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(&child)
+            .execute(&mut *tx)
+            .await
+            {
+                Ok(r) if r.rows_affected() == 1 => {}
+                Ok(_) => return db_error(sqlx::Error::RowNotFound),
+                Err(e) => return db_error(e),
+            }
             let pair = match issue_pair(&mut tx, grant_id, now, g_absolute, &state.auth).await {
                 Ok(p) => p,
                 Err(e) => return db_error(e),
@@ -603,20 +631,51 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
         }
         Some(_) => {
             // step 4: grace exceeded -> revoke the family
-            let _ = sqlx::query(
-                "UPDATE oauth_grants SET revoked_at = ?, revoked_reason = 'refresh_reuse'
-                 WHERE id = ? AND revoked_at IS NULL",
-            )
-            .bind(now)
-            .bind(grant_id)
-            .execute(&mut *tx)
-            .await;
-            if let Err(e) = tx.commit().await {
-                return db_error(e);
-            }
-            Outcome::RejectedAfterCommit("refresh_reuse")
+            revoke_for_reuse(tx, grant_id, client_id, now, "grace_exceeded").await
         }
     }
+}
+
+/// Revoke a grant (`revoked_reason = reason`) inside the caller's
+/// transaction. A failing UPDATE is returned to the caller (fail closed:
+/// never commit a rejection whose revocation did not happen).
+async fn revoke_grant(
+    conn: &mut SqliteConnection,
+    grant_id: i64,
+    now: i64,
+    reason: &'static str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE oauth_grants SET revoked_at = ?, revoked_reason = ?
+         WHERE id = ? AND revoked_at IS NULL",
+    )
+    .bind(now)
+    .bind(reason)
+    .bind(grant_id)
+    .execute(conn)
+    .await
+    .map(|_| ())
+}
+
+/// Theft signal in refresh(): revoke the family with `refresh_reuse`, COMMIT,
+/// then reject (spec_auth.md 4-10). `kind` tells the paths apart in the WARN
+/// line (grace_exceeded / child_used / superseded_child); only grant_id and
+/// client_id are logged, never a token, its hash or the client assertion.
+async fn revoke_for_reuse(
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    grant_id: i64,
+    client_id: &str,
+    now: i64,
+    kind: &'static str,
+) -> Outcome {
+    if let Err(e) = revoke_grant(&mut tx, grant_id, now, "refresh_reuse").await {
+        return db_error(e);
+    }
+    if let Err(e) = tx.commit().await {
+        return db_error(e);
+    }
+    tracing::warn!(kind, grant_id, client_id, "refresh_reuse: grant revoked");
+    Outcome::RejectedAfterCommit("refresh_reuse")
 }
 
 /// oauth_grants columns for the refresh flow: (user_id, scope, resource,
@@ -632,8 +691,9 @@ type GrantRow = (
     Option<i64>,
 );
 
-/// oauth_refresh_tokens columns: (used_at, child_hash, grant_id).
-type RefreshRow = (Option<i64>, Option<Vec<u8>>, i64);
+/// oauth_refresh_tokens columns: (used_at, child_hash, grant_id, revoked_at,
+/// expires_at).
+type RefreshRow = (Option<i64>, Option<Vec<u8>>, i64, Option<i64>, i64);
 
 /// Insert an access + refresh token pair for a grant.
 async fn issue_pair(
