@@ -9,6 +9,15 @@
 // carries period keys only while scope=period, and the tabbar-外 screens get
 // the topbar ‹ (a parentTo push with the up semantics). These stay red until
 // the implementation lands.
+//
+// TASK-145 (the review LOW pair, test-first against
+// tmp/tasks/tm-145/design_search-carry.md v1): the /search period-keys rule
+// holds on BOTH write sides — the dialog run() carries q only (D1-1), a
+// /search?month= inflow is stripped by the first write-back even with no
+// labels diff (D1-2), and the scope toggle seats the keys only when narrowing
+// (D1-3); the axis detail page does not re-query on the write-back echo
+// (D2) and its parent link rides the live route query (D2-2). The new cases
+// stay red until the implementation lands.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocationQuery } from 'vue-router'
 import { setDataApi, type DataApi } from '@/web/api/data'
@@ -236,6 +245,106 @@ describe('browsing URL sync: import rules (TASK-124 D2-1/D2-2/D2-3)', () => {
     await m.router.replace({ path: '/', query: { month: '2026-10' } })
     await settle()
     expect(replace).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('search URL keys on both write sides (TASK-145 D1)', () => {
+  it('[covers:web-search.url-scope-all-period-keys] 検索 dialog 実行（run）の流入は q と labels のみ（carry する期間 keys は載らない）', async () => {
+    const m = await mountApp('/receipts?month=2026-09&labels=red')
+    await m.wrapper.find('[data-test="filter-search"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="search-dialog-input"]').setValue('牛乳')
+    // the run rides the form submit (the button is type="submit"; jsdom does
+    // not synthesize submit from a click — the filter-bar recipe)
+    await m.wrapper.find('form.search-dialog').trigger('submit')
+    await settle()
+    expect(q(m).q).toBe('牛乳')
+    // the landing is a keys-less entry: the shell sync writes the labels ...
+    expect(q(m).labels).toBe('red')
+    // ... and the period keys never ride while scope=all (the run carries q
+    // only, D1-1 — the store's period reaches /search through the store
+    // continuation, not the URL)
+    expect(q(m).month).toBeUndefined()
+    expect(q(m).from).toBeUndefined()
+    expect(q(m).to).toBeUndefined()
+  })
+
+  it('[covers:web-search.url-scope-all-period-keys] 期間 keys 付き流入（/search?month= 直リンク）は取り込み後に writeBack が keys を落とす（labels 差分なしでも）', async () => {
+    const m = await mountApp('/search?month=2026-09&q=牛乳')
+    // the URL's period was imported — the deep link drives the store ...
+    const store = usePeriodStore()
+    expect(store.month).toBe('2026-09')
+    // ... and the first write-back strips the stray period keys even with NO
+    // labels diff (labels unselected): the replace must fire on the stray
+    // PERIOD_KEY alone, or the deleted keys would read as "no diff" and the
+    // stale bookmark shape would survive (D1-2, review MED1)
+    expect(q(m).month).toBeUndefined()
+    expect(q(m).from).toBeUndefined()
+    expect(q(m).to).toBeUndefined()
+    expect(q(m).q).toBe('牛乳')
+  })
+
+  it('[covers:web-search.scope-toggle-period-keys] scope 切替: period→all で期間 keys が消え・all→period でのみ載る', async () => {
+    // period -> all: the toggle adds nothing (dropPeriodQuery's result stands)
+    const scoped = await remount('/search?q=牛乳&scope=period&month=2026-10')
+    await scoped.wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(q(scoped).q).toBe('牛乳')
+    expect(q(scoped).scope).toBeUndefined()
+    expect(q(scoped).month).toBeUndefined()
+    expect(q(scoped).week).toBeUndefined()
+    expect(q(scoped).year).toBeUndefined()
+    expect(q(scoped).from).toBeUndefined()
+    expect(q(scoped).to).toBeUndefined()
+
+    // all -> period: the only direction that seats the store's current keys
+    const plain = await remount('/search?q=牛乳')
+    await plain.wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(q(plain).scope).toBe('period')
+    expect(q(plain).month).toBe('2026-10')
+  })
+})
+
+describe('axis detail: the write-back echo and the parent link (TASK-145 D2/D2-2)', () => {
+  it('[covers:web-browse.url-echo-no-double-init] keys 無し流入の writeBack echo では初回取得は request 種別ごと1回（二重 init なし）', async () => {
+    const stats = vi.spyOn(api, 'getAnalysis')
+    const recent = vi.spyOn(api, 'listReceipts')
+    const catalog = vi.spyOn(api, 'getCatalog')
+    const m = await mountApp('/axes/category/1')
+    // the echo landed: the keys-less entry wrote the store's month back
+    expect(q(m).month).toBe('2026-10')
+    // one load only — counted PER REQUEST KIND (a normal single load of the
+    // category top still issues two analyses: the cross (store axis) and the
+    // own (category axis), so "one getAnalysis" would under-count; review LOW4)
+    expect(stats.mock.calls.filter(([, p]) => p.axis === 'store')).toHaveLength(1)
+    expect(stats.mock.calls.filter(([, p]) => p.axis === 'category')).toHaveLength(1)
+    expect(recent).toHaveBeenCalledTimes(1)
+    // catalog.load's in-flight dedupe holds across the whole landing
+    expect(catalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('[covers:web-browse.axis-parent-to-reactive] 軸詳細の ‹ の遷移先指定は現在の期間・labels を運ぶ（parentTo そのものを検証・古値を運ばない）', async () => {
+    // the period move ALONE (a label move mixed in would hand the narrowed
+    // watch another init that refreshes the snapshot): the ‹ press passes its
+    // parentTo to router.push as-is, and the PUSH ARGUMENT — not the landing
+    // URL, which the parent screen's own write-back would patch up from the
+    // store — is what shows a stale query (review LOW)
+    const a = await mountApp('/axes/category/1?month=2026-10')
+    await stepPeriod(a) // the store and the URL: month 2026-09
+    const pushA = vi.spyOn(a.router, 'push')
+    await a.wrapper.find('.page-head [data-test="page-back"]').trigger('click')
+    await settle()
+    expect(pushA).toHaveBeenCalledWith({ path: '/categories', query: { month: '2026-09' } })
+
+    // the label move alone, through the same direct check: the link rides the
+    // live query on both dimensions
+    const b = await remount('/axes/category/1?month=2026-10')
+    await toggleLabel(b, 'red')
+    const pushB = vi.spyOn(b.router, 'push')
+    await b.wrapper.find('.page-head [data-test="page-back"]').trigger('click')
+    await settle()
+    expect(pushB).toHaveBeenCalledWith({ path: '/categories', query: { month: '2026-10', labels: 'red' } })
   })
 })
 

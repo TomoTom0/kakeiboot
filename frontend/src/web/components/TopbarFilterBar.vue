@@ -9,7 +9,7 @@ import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 import { firstString } from '../composables/receiptContext'
-import { formatLabelQuery, labelAriaList, type Label, type LabelColor } from '@/shared/labels'
+import { labelAriaList, type Label, type LabelColor } from '@/shared/labels'
 
 // The topbar center filter bar (TASK-44 §11, stage 1a; TASK-41 stage 1b;
 // two chips since TASK-101): the always-on period and search chips between
@@ -96,16 +96,13 @@ function run(): void {
     // the period / labels / tab keys of the URL stand
     void router.replace({ query: { ...route.query, q: q || undefined } })
   } else {
-    // from any other page: carry the current period and labels so the
-    // "{period.label}のみ" scope chip can narrow at once (§11-3)
-    void router.push({
-      path: '/search',
-      query: {
-        ...(q ? { q } : {}),
-        ...period.urlQuery,
-        ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
-      },
-    })
+    // from any other page: q only (TASK-145 D1-1 — the run carries nothing
+    // else over the URL). The landing is a keys-less entry: the store
+    // continuation hands /search the same period / labels, the shell URL
+    // sync writes labels= at once, and the period keys ride the URL only
+    // while scope=period — the "{period.label}のみ" chip narrows from the
+    // store, so the at-once narrowing survives without the URL carry
+    void router.push({ path: '/search', query: q ? { q } : {} })
   }
 }
 </script>

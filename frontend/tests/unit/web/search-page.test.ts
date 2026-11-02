@@ -423,20 +423,22 @@ describe('search page: URL restore', () => {
     await settle()
     expect(router.currentRoute.value.query).toEqual({ q: '牛乳' })
 
-    // scope=period fills in the store's current period keys; back to all
-    // removes only the scope key
+    // scope=period fills in the store's current period keys (the ONLY
+    // direction that seats them — TASK-145 D1-3); back to all drops the
+    // period keys too (next=all keeps dropPeriodQuery's result: no
+    // seat-then-strip round trip on our own transition)
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query).toEqual({ q: '牛乳', scope: 'period', month: '2026-10' })
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
-    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', month: '2026-10' })
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳' })
 
     // an empty commit clears q and keeps the rest
     await wrapper.find('[data-test="search-input"]').setValue('')
     await wrapper.find('[data-test="search-input"]').trigger('keydown', { key: 'Enter' })
     await settle()
-    expect(router.currentRoute.value.query).toEqual({ month: '2026-10' })
+    expect(router.currentRoute.value.query).toEqual({})
   })
 })
 

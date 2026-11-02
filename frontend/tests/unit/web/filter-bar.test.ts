@@ -387,7 +387,7 @@ describe('topbar search chip (TASK-41 1b)', () => {
     expect(chip().find('.chip-label-q').exists()).toBe(false)
   })
 
-  it('[covers:web-search.topbar-entry] 他ページからの実行: 現在の期間とラベルを引継ぎ /search?q= へ遷移し dialog は閉じる', async () => {
+  it('[covers:web-search.topbar-entry] 他ページからの実行: q のみを渡して /search へ遷移（labels は着地後の shell 同期・期間 keys は載らない）し dialog は閉じる', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
     const { wrapper, router } = await mountApp('/receipts')
     // 2026-10 (the default) + label red selected through the search dialog's
@@ -414,12 +414,16 @@ describe('topbar search chip (TASK-41 1b)', () => {
     expect(submitBtn.attributes('type')).toBe('submit')
     await wrapper.find('form.search-dialog').trigger('submit')
     await settle()
-    // the dialog closed and the app moved to /search carrying the period and labels
+    // the dialog closed and the app moved to /search with q only — the run
+    // carries nothing else (TASK-145 D1-1): the landing is a keys-less entry,
+    // the shell URL sync writes the labels back, and the period keys never
+    // ride while scope=all (the store's period reaches /search through the
+    // store continuation instead)
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(chip().attributes('aria-expanded')).toBe('false')
     expect(push).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.path).toBe('/search')
-    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', month: '2026-10', labels: 'red' })
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', labels: 'red' })
   })
 
   it('[covers:web-search.topbar-entry] /search 内の実行は replace で q のみ差し替え・draft は開くたび現在 q で初期化・空実行で q を外す', async () => {

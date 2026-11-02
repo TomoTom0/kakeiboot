@@ -18,7 +18,9 @@
 // current values differ from the store, so an import that agrees with the
 // store and the echo of our own replace never issue another navigation.
 // /search writes the period keys only while scope=period (D1 — with
-// scope=all the period never affects the results).
+// scope=all the period never affects the results) and drops a stray
+// inflow's period keys on the first write-back (TASK-145 D1-2 — the rule
+// holds on both write sides: never written, never kept).
 //
 // The feed (/receipts/:id) is outside both directions by construction: its
 // routes carry no `browsingSync` (D2-3 — reusing meta.filters would sweep it
@@ -68,7 +70,8 @@ export function useBrowsingUrlSync(): void {
     if (!isTarget()) return
     const next: LocationQueryRaw = { ...route.query }
     const owned: string[] = ['labels']
-    if (writesPeriod()) {
+    const writes = writesPeriod()
+    if (writes) {
       // swap the whole mode-key set on every target route alike: the new
       // mode's key only, every other mode's key dropped (month= never
       // lingers next to year=, and a from/to pair the /receipts filter sync
@@ -77,12 +80,23 @@ export function useBrowsingUrlSync(): void {
       for (const k of PERIOD_KEYS) delete next[k]
       Object.assign(next, period.urlQuery)
       owned.push(...PERIOD_KEYS)
+    } else {
+      // /search with scope=all never writes the period keys — and never
+      // keeps them either (TASK-145 D1-2): a stray inflow that carries them
+      // (an old bookmark, a shared /search?month= link) is stripped at the
+      // first write-back, so the rule holds on both write sides
+      for (const k of PERIOD_KEYS) delete next[k]
     }
     delete next.labels
     if (period.labelColors.length > 0) next.labels = formatLabelQuery(period.labelColors)
     // diff guard: an import that agrees with the URL, or the echo of our own
-    // replace, stops here — no navigation is issued
-    if (ownedKeysMatch(next, route.query, owned)) return
+    // replace, stops here — no navigation is issued. The guard compares the
+    // owned keys only, and on the strip side above the period keys are not
+    // owned — so a PERIOD_KEY the current URL still holds counts as a diff
+    // on its own: with no labels diff the deletion alone would read as "no
+    // diff" and the stale bookmark shape would survive (review MED1)
+    const strayPeriodKeys = !writes && PERIOD_KEYS.some((k) => k in route.query)
+    if (ownedKeysMatch(next, route.query, owned) && !strayPeriodKeys) return
     void router.replace({ query: next })
   }
 

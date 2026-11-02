@@ -142,13 +142,15 @@ function setTab(next: 'receipts' | 'items'): void {
 
 function toggleScope(): void {
   const next = scope.value === 'period' ? 'all' : 'period'
-  // the toggle itself re-seats the store's current period keys in the URL's
-  // fresh shape (the legacy TASK-41 behavior — back to all drops only the
-  // scope key); keeping them current from here on is the URL sync's, which
+  // the toggle seats the store's current period keys ONLY on the narrowing
+  // direction (TASK-145 D1-3): back to all, dropPeriodQuery's result stands
+  // — no seat-then-strip round trip on our own transition (a stray old-URL
+  // shape is the shell write-back's to correct, not this replace's);
+  // keeping the seated keys current from then on is the URL sync's, which
   // writes them only while scope=period (TASK-124 D1)
   const rest = dropPeriodQuery({ ...route.query, scope: undefined })
   void router.replace({
-    query: { ...rest, ...(next === 'period' ? { scope: 'period' } : {}), ...period.urlQuery },
+    query: { ...rest, ...(next === 'period' ? { scope: 'period', ...period.urlQuery } : {}) },
   })
 }
 

@@ -89,12 +89,14 @@ const kind = computed<AxisKind>(() => {
 })
 
 // --- subject resolution --------------------------------------------------------
-/** Resolved view of the route; null until the catalog / stores answered. */
+/** Resolved view of the route; null until the catalog / stores answered.
+ *  The ‹ climb's destination is the resolved parent PATH only — the query
+ *  rides the live route through the parentTo computed below (D2-2). */
 const view = ref<null | {
   title: string
   sub?: string
   parentName?: string
-  parentTo?: RouteLocationRaw
+  parentPath?: string
   backLabel: string
   /** the subject filter of every query */
   subject: AnalysisFilters
@@ -120,7 +122,7 @@ async function resolveRoute(l: number): Promise<boolean> {
         subject: { category: '未分類' },
         subjectChip: 'カテゴリ: 未分類',
         backLabel: 'カテゴリ一覧',
-        parentTo: { path: '/categories', query: { ...route.query } },
+        parentPath: '/categories',
       }
       return true
     }
@@ -142,7 +144,7 @@ async function resolveRoute(l: number): Promise<boolean> {
         subject: { category: catalog.pathOf('item', topId) ?? node.name },
         subjectChip: `カテゴリ: ${node.name}`,
         backLabel: 'カテゴリ一覧',
-        parentTo: { path: '/categories', query: { ...route.query } },
+        parentPath: '/categories',
         topId,
         subId: null,
       }
@@ -171,7 +173,7 @@ async function resolveRoute(l: number): Promise<boolean> {
       subjectChip: `カテゴリ: ${subNode.name}`,
       parentName: topNode.name,
       backLabel: 'カテゴリ一覧',
-      parentTo: { path: `/axes/category/${topId}`, query: { ...route.query } },
+      parentPath: `/axes/category/${topId}`,
       topId,
       subId,
     }
@@ -191,7 +193,7 @@ async function resolveRoute(l: number): Promise<boolean> {
       subject: { store_id: id },
       subjectChip: `店: ${found.name}`,
       backLabel: '店一覧',
-      parentTo: { path: '/stores', query: { ...route.query } },
+      parentPath: '/stores',
     }
     return true
   }
@@ -206,7 +208,7 @@ async function resolveRoute(l: number): Promise<boolean> {
       subject: { item_query: name },
       subjectChip: `品目: ${name}`,
       backLabel: 'ホーム',
-      parentTo: { path: '/', query: { ...route.query } },
+      parentPath: '/',
     }
     return true
   }
@@ -217,7 +219,7 @@ async function resolveRoute(l: number): Promise<boolean> {
       subject: { label_colors: [color as LabelColor] },
       subjectChip: `ラベル: ${labelTitle(color)}`,
       backLabel: 'ホーム',
-      parentTo: { path: '/', query: { ...route.query } },
+      parentPath: '/',
     }
     return true
   }
@@ -228,10 +230,20 @@ async function resolveRoute(l: number): Promise<boolean> {
     subject: { payment_method: method },
     subjectChip: `支払: ${PAYMENT_LABEL[method]}`,
     backLabel: 'ホーム',
-    parentTo: { path: '/', query: { ...route.query } },
+    parentPath: '/',
   }
   return true
 }
+
+/** The ‹ climb's destination (D2-2): the resolved parent path with the LIVE
+ *  route query. The shell URL sync keeps month=/labels= current, and the
+ *  re-query watch below no longer re-resolves the view on its write-back
+ *  echo — so a snapshot taken at resolve time could hold the period from
+ *  before the move. Deriving the query here makes the climb carry the
+ *  current values whenever it is pressed. */
+const parentTo = computed<RouteLocationRaw | null>(() =>
+  view.value?.parentPath === undefined ? null : { path: view.value.parentPath, query: { ...route.query } },
+)
 
 const storeRow = ref<StoreRow | null>(null)
 
@@ -437,9 +449,24 @@ async function init(id?: number): Promise<void> {
 }
 // same-component param changes (top -> sub, the ‹ climb, an axis move)
 // reload through here — the page never remounts on its own routes. The
-// label filter rides along too: the shell-level URL sync (TASK-124 D2)
-// writes the store's move into labels=, the fullPath change lands here
-watch([() => period.range, () => route.fullPath], () => void init())
+// sources are the re-query's real inputs only (TASK-145 D2): the period,
+// the label filter, the path (a params change) and the cross-filter query
+// keys load's extraFilters reads. The shell URL sync's write-back echo
+// (period keys / labels landing on the URL) moves none of them — the store
+// continuation keeps the values — so a keys-less landing no longer
+// double-fires init; missing= and other redirect-only keys are no re-query
+// factor and rightly fire nothing.
+watch(
+  [
+    () => period.range,
+    () => period.labelQuery,
+    () => route.path,
+    () => categoryQuery.value,
+    () => storeIdQuery.value,
+    () => storeCategoryQuery.value,
+  ],
+  () => void init(),
+)
 
 // --- derived --------------------------------------------------------------------
 const totals = computed(() => cross.value?.totals ?? null)
@@ -625,7 +652,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
         :title="view.title"
         :total="totals ? formatYen(totals.amount) : undefined"
         :sub="view.sub"
-        :parent-to="view.parentTo ?? { path: '/' }"
+        :parent-to="parentTo ?? { path: '/' }"
         :back-label="view.backLabel"
         :parent="view.parentName"
       >
