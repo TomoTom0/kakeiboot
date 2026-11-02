@@ -518,7 +518,7 @@ GROUP BY 1, 2;
 | oauth_grants | 同意 + refresh token family。認可コードの交換成功時に作成する。絶対期限90日。family 失効 = `revoked_at`。同じ (user_id, client_id, resource) の有効な旧 grant は新 grant 作成と同じ tx で `revoked_reason='superseded'` で失効。`active_ledger_id` は MCP の選択中 ledger（作成時は旧 grant から引き継ぎ、なければ `users.default_ledger_id`、所属が無ければ NULL）。`last_used_at` は Bearer 検証時に5分間隔で更新 |
 | oauth_auth_codes | hash 保存、60秒、1回限り。同意 POST では `grant_id` NULL で作成し、交換成功時に grant を作成して `grant_id` を設定する。使用済みコードの再提示で `grant_id` の grant を失効（失効を COMMIT してからエラー） |
 | oauth_access_tokens | hash 保存、期限1時間（grant の絶対期限を超えない）。`refresh_hash` に同時発行の refresh token を持つ |
-| oauth_refresh_tokens | hash 保存、スライディング30日（`expires_at = min(発行時刻 + 30日, grant.absolute_expires_at)`）。`parent_hash` / `child_hash` / `used_at` で rotation を管理（`used_at` と `child_hash` は同時に設定） |
+| oauth_refresh_tokens | hash 保存、スライディング30日（`expires_at = min(発行時刻 + 30日, grant.absolute_expires_at)`）。`child_hash` / `used_at` で rotation を管理（`used_at` と `child_hash` は同時に設定）。`parent_hash` は未使用（常に NULL。TASK-153） |
 | oauth_client_assertion_jtis | PK(client_id, jti)。INSERT 衝突 = 再利用として拒否 |
 | user_subject_hashes | 認証済み tools/call の `openai/subject` の hash と user の対応（運用者の特定用の手がかり。認可には使わない）。`last_seen_at` は1時間以上経過時のみ更新 |
 | recovery_requests | MCP tool `request_recovery` の回復依頼。受付番号 `request_number`、`status`（open / resolved / rejected）、subject hash、IP hash（24時間で NULL 化）、note（追記は連結）。subject hash ごとに open は1件（部分 UNIQUE） |
@@ -757,7 +757,7 @@ CREATE INDEX oauth_access_tokens_expires ON oauth_access_tokens(expires_at);
 CREATE TABLE oauth_refresh_tokens (
   token_hash   BLOB    PRIMARY KEY,
   grant_id     INTEGER NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
-  parent_hash  BLOB,                            -- rotation 元（初回は NULL）
+  parent_hash  BLOB,                            -- 未使用（常に NULL。TASK-153）
   child_hash   BLOB,                            -- この token の使用で発行した現行の子（猶予内再発行で差し替え）
   created_at   INTEGER NOT NULL,
   expires_at   INTEGER NOT NULL,                -- min(発行時刻 + 30日, grant.absolute_expires_at)
