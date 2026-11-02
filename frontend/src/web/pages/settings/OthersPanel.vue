@@ -17,7 +17,7 @@ import AppIcon from '../../components/AppIcon.vue'
       <AppIcon name="help" />
       <span class="settings-manage-link-text">
         <strong>使い方</strong>
-        <span class="muted small">ChatGPT との接続手順と使い方のトピック一覧</span>
+        <span class="muted small">接続の手順と使い方のトピック一覧</span>
       </span>
     </RouterLink>
   </section>

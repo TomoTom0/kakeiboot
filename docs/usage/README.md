@@ -11,7 +11,7 @@ kakeiboot の利用者向け文書の索引（開発者向け）。各トピッ�
 | order | ファイル | 内容 |
 |---|---|---|
 | 1 | [usage_getting-started.md](usage_getting-started.md) | kakeiboot の概要、登録、ログイン、既定の家計簿 |
-| 2 | [usage_connect.md](usage_connect.md) | ChatGPT への接続、許可する内容、90日の期限、接続の管理 |
+| 2 | [usage_connect.md](usage_connect.md) | ChatGPT・Claude への接続、許可する内容、90日の期限、接続の管理 |
 | 3 | [usage_send-receipt.md](usage_send-receipt.md) | レシートの送付（複数枚を含む）、内容の確認と修正、登録、破棄 |
 | 4 | [usage_browse.md](usage_browse.md) | ホーム・レシート・カテゴリ・店の見方、期間の切替、詳細、検索 |
 | 5 | [usage_edit-receipt.md](usage_edit-receipt.md) | レシートの修正・削除・復元、ラベルの付け外し |

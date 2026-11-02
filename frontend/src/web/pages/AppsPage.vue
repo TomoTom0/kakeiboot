@@ -80,7 +80,7 @@ function switchLedger(g: Grant): Promise<void> {
 <template>
   <section class="card">
     <p class="muted small">
-      ChatGPT などから kakeiboot に接続している一覧です。家計簿の切替はその接続でのみ有効で、web 画面の表示には影響しません。
+      ChatGPT や Claude から kakeiboot に接続している一覧です。家計簿の切替はその接続でのみ有効で、web 画面の表示には影響しません。
     </p>
     <p
       v-if="error"
@@ -122,7 +122,7 @@ function switchLedger(g: Grant): Promise<void> {
       class="more"
       data-test="usage-link"
     >
-      ChatGPTとの接続方法を見る
+      接続方法を見る
     </RouterLink>
     <ul
       v-else
@@ -191,7 +191,7 @@ function switchLedger(g: Grant): Promise<void> {
         </div>
         <div class="actions">
           <template v-if="revokingId === g.id">
-            <span class="small">この接続を解除しますか？ ChatGPT から再度接続するまで利用できなくなります。</span>
+            <span class="small">この接続を解除しますか？ {{ g.client_display }} から再度接続するまで利用できなくなります。</span>
             <button
               class="btn btn-danger"
               :disabled="busy"

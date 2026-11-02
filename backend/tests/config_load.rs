@@ -380,6 +380,64 @@ fn register_ttl_hours_config() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// TASK-149: claude.ai joins the CIMD host / redirect allowlists. Review LOW6:
+// the plain validity checks pass with ChatGPT alone, so the entries are
+// asserted per environment, explicitly.
+
+// [covers:auth-config.cimd-hosts-allowlist-both-services]
+// [covers:auth-config.redirect-allowlist-both-callbacks]
+#[test]
+fn claude_allowlist_entries_in_every_env() {
+    let tomls = env_auth_tomls();
+    assert_eq!(tomls.len(), 3, "dev / stg / prod");
+    for (env, text) in &tomls {
+        // the new list values stay valid config (parse + resolve)
+        let file = budget_book::config::parse_auth(text)
+            .unwrap_or_else(|e| panic!("configs/{env}/auth.toml must parse: {e}"));
+        let resolved = file
+            .auth
+            .resolve("/mcp")
+            .unwrap_or_else(|e| panic!("configs/{env}/auth.toml must resolve: {e}"));
+
+        // hosts: both services, exact entries
+        assert!(
+            resolved
+                .oauth
+                .cimd_allowed_hosts
+                .iter()
+                .any(|h| h == "chatgpt.com"),
+            "{env}: cimd_allowed_hosts must contain chatgpt.com"
+        );
+        assert!(
+            resolved
+                .oauth
+                .cimd_allowed_hosts
+                .iter()
+                .any(|h| h == "claude.ai"),
+            "{env}: cimd_allowed_hosts must contain claude.ai"
+        );
+
+        // redirect URIs: both callbacks
+        assert!(
+            resolved
+                .oauth
+                .redirect_uri_allowlist
+                .iter()
+                .any(|u| u == "https://chatgpt.com/connector_platform_oauth_redirect"),
+            "{env}: redirect_uri_allowlist must contain the chatgpt.com callback"
+        );
+        assert!(
+            resolved
+                .oauth
+                .redirect_uri_allowlist
+                .iter()
+                .any(|u| u == "https://claude.ai/api/mcp/auth_callback"),
+            "{env}: redirect_uri_allowlist must contain the claude.ai callback"
+        );
+    }
+}
+
 // [covers:app-config.data-io]
 #[test]
 fn data_io_section_in_every_env() {

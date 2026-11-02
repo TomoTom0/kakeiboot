@@ -94,7 +94,7 @@ async function decide(decision: 'allow' | 'deny'): Promise<void> {
         class="msg msg-error"
         data-test="expired"
       >
-        この接続要求は無効か期限切れです。ChatGPT からもう一度接続してください。
+        この接続要求は無効か期限切れです。もう一度接続してください。
       </p>
       <div
         v-else-if="info"
@@ -142,7 +142,7 @@ async function decide(decision: 'allow' | 'deny'): Promise<void> {
           class="muted small"
           data-test="ledger-note"
         >
-          接続後に ChatGPT から家計簿を切り替えられます。
+          接続後に {{ info.client_display }} から家計簿を切り替えられます。
         </p>
         <div class="actions actions-fill">
           <button

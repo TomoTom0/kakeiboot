@@ -380,7 +380,7 @@ const recentQuery = computed(() => {
                     name="chat"
                     :size="28"
                   />
-                  <p>ChatGPT でレシートの写真を送ると、ここに記録されます。</p>
+                  <p>ChatGPT や Claude でレシートの写真を送ると、ここに記録されます。</p>
                 </div>
                 <ul
                   v-else

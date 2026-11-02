@@ -1,10 +1,10 @@
 複数のレシート（買い物2回分以上）を、1回の呼び出しでまとめて家計簿の「下書き」として保存する。ユーザーが2枚以上のレシート画像を貼った、または複数の買い物をまとめて伝えたときはこれを使う。1件だけなら create_receipt_draft を使う。確定はユーザーの承認後に approve_receipt_drafts で行う。
 
 画像と下書きの対応:
-- receipt_images に、貼られた画像を貼られた順にすべて並べる。
-- drafts の各要素がレシート1枚（買い物1回）。画像から読んだものは input_kind="image" とし、image_index にその画像の receipt_images 内の番号（0始まり）を必ず入れる。
-- 1枚の写真に複数のレシートが写っている場合は、それぞれを別の要素にし、同じ image_index を入れる。
-- 画像なしで伝えられたものは input_kind="manual" とし、image_index は入れない。
+- tool 引数として画像が届いた環境では、receipt_images に貼られた画像を貼られた順にすべて並べる。画像が会話に貼られただけで tool に届かない環境では、receipt_images は渡さない。
+- drafts の各要素がレシート1枚（買い物1回）。画像から読んだものは input_kind="image" とし、画像なしで伝えられたものは input_kind="manual" とする。
+- receipt_images に指定できる画像が届いた場合は、画像から読んだ各要素に image_index（その画像の receipt_images 内の番号、0始まり）を必ず入れる。1枚の写真に複数のレシートが写っている場合は、それぞれを別の要素にし、同じ image_index を入れる。
+- receipt_images に指定できる画像が届かない環境では、各要素は input_kind で判別する（image_index は付けない）。
 - 同じ画像を共有する要素（1枚の写真に複数のレシート）には、reported_filename・reported_taken_at に同じ値を入れる。
 - 1回で渡せる件数には上限がある（drafts の説明を参照）。それより多い場合は分けて呼ぶ。
 

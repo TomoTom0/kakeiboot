@@ -129,12 +129,14 @@ describe('UsageConnectPage (/usage/connect)', () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/usage/connect')
     // the three step headings from usage_connect.md, in document order (the
-    // exact container markup is up to the ingestion — the headings are prose)
+    // exact container markup is up to the ingestion — the headings are prose;
+    // TASK-149 D3: service-agnostic, the per-service registration lives in
+    // the ChatGPT / Claude sub headings under step 1)
     const heads = wrapper.findAll('h2').map((h) => h.text())
     const steps = [
-      '1. ChatGPT に接続URLを登録する',
+      '1. 接続URLを登録する',
       '2. ログインして接続を許可する',
-      '3. ChatGPT でレシートを送る',
+      '3. 会話でレシートを送る',
     ]
     const idx = steps.map((s) => heads.findIndex((t) => t.includes(s)))
     for (const [i, s] of steps.entries()) expect(idx[i], s).toBeGreaterThanOrEqual(0)
@@ -240,13 +242,28 @@ describe('UsageConnectPage (/usage/connect)', () => {
     expect(failed.wrapper.find('[data-test="copy-url"]').classes()).not.toContain('is-done')
   })
 
+  // TASK-149 D3 (web-usage.connect-flow-aria-service-neutral): the F1 panels
+  // draw no service (URL登録/ログイン許可/接続完了/レシート送信), so the accessible
+  // name stays service-neutral — the per-service registration steps live in
+  // the corpus step bodies, not the figure
+  it('[covers:web-usage.connect-flow-aria-service-neutral] F1 フロー図の aria-label はサービス名を含まない', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/usage/connect')
+    const label = wrapper.find('[data-test="connect-flow"]').attributes('aria-label') ?? ''
+    expect(label).toContain('接続の流れ')
+    expect(label).not.toContain('ChatGPT')
+    expect(label).not.toContain('Claude')
+  })
+
   it('[covers:web-usage.figures] 各図は figure + figcaption・F1 は role=img の inline SVG・asset 未配置の図は placeholder で img なし', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/usage/connect')
-    // five figures: F1 flow diagram, F2/F6 ChatGPT-side placeholders and the
-    // F4/F5 self-screen screenshots (auto-captured, so they carry an img)
+    // six figures (TASK-149 D3: the Claude connector screenshot joins as a
+    // placeholder): F1 flow diagram, the ChatGPT/Claude connector and
+    // conversation placeholders, and the login/consent self-screen
+    // screenshots (auto-captured, so they carry an img)
     const figs = wrapper.findAll('figure')
-    expect(figs).toHaveLength(5)
+    expect(figs).toHaveLength(6)
     for (const f of figs) expect(f.find('figcaption').exists(), f.text()).toBe(true)
 
     // F1: the connection-flow diagram is an inline SVG exposing its content
@@ -262,13 +279,13 @@ describe('UsageConnectPage (/usage/connect)', () => {
     expect(withImg).toHaveLength(2)
     for (const f of withImg) expect(f.find('img').attributes('alt') ?? '').not.toBe('')
 
-    // figures without an asset (the ChatGPT-side screenshots until the
-    // manual capture lands) are placeholders: a swap-in note and no img.
+    // figures without an asset (the ChatGPT/Claude-side screenshots until
+    // the manual capture lands) are placeholders: a swap-in note and no img.
     // Picked by the placeholder element itself — the F1 figure holds the
-    // inline SVG, so "no img" alone would count it too (5 figures = 2 imgs +
-    // 2 placeholders + the SVG flow)
+    // inline SVG, so "no img" alone would count it too (6 figures = 2 imgs +
+    // 3 placeholders + the SVG flow)
     const placeholders = figs.filter((f) => f.find('.usage-fig-ph').exists())
-    expect(placeholders).toHaveLength(2)
+    expect(placeholders).toHaveLength(3)
     for (const p of placeholders) {
       expect(p.text()).toContain('スクリーンショット')
       expect(p.find('img').exists()).toBe(false)
@@ -337,13 +354,13 @@ describe('usage topics on the dynamic route (TASK-141)', () => {
 })
 
 describe('AppsPage usage link', () => {
-  it('[covers:web-usage.apps-link] /apps の未接続表示の直後に /usage/connect への「ChatGPTとの接続方法を見る」', async () => {
+  it('[covers:web-usage.apps-link] /apps の未接続表示の直後に /usage/connect への「接続方法を見る」', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/oauth/grants': { body: [] } })
     const { wrapper } = await mountApp('/apps')
     const empty = wrapper.find('[data-test="empty"]')
     expect(empty.text()).toContain('接続中のアプリはありません。')
     const link = wrapper.find('[data-test="usage-link"]')
-    expect(link.text()).toBe('ChatGPTとの接続方法を見る')
+    expect(link.text()).toBe('接続方法を見る')
     expect(link.attributes('href')).toBe('/usage/connect')
     // the lead sits right after the empty note
     expect(empty.element.nextElementSibling).toBe(link.element)

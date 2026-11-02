@@ -648,7 +648,7 @@ const groups = computed(() => {
                 name="chat"
                 :size="28"
               />
-              該当するレシートはありません。ChatGPT でレシートの写真を送ると記録されます。
+              該当するレシートはありません。ChatGPT や Claude でレシートの写真を送ると記録されます。
             </p>
             <div
               v-for="g in groups"

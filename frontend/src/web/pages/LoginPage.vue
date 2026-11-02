@@ -88,7 +88,7 @@ async function loginWithButton(): Promise<void> {
         v-if="req"
         class="auth-lead"
       >
-        ChatGPT との接続を続けるにはログインしてください。
+        ChatGPT や Claude との接続を続けるにはログインしてください。
       </p>
       <p
         v-else

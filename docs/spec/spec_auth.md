@@ -21,7 +21,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 | MCP canonical URI（resource） | `https://<host>/mcp`（末尾スラッシュなし） |
 | WebAuthn RP ID / origin | `<host>` / `https://<host>` |
 | frontend 配信 | backend が Vite build 成果物を同一 origin で配信。開発時は Vite dev server の proxy で同一 origin に見せる |
-| MCP クライアント | 初版は ChatGPT のみ（CIMD の client_id host を `chatgpt.com` に限定） |
+| MCP クライアント | ChatGPT・Claude（CIMD の client_id host を `chatgpt.com`・`claude.ai` に限定。Claude は TASK-149 で追加） |
 
 - 同一 origin 前提により cookie は `__Host-` prefix・`SameSite=Lax` とし、CORS は一切設定しない。
 - サーバーが保持する秘密鍵・共有 secret は初版に存在しない（opaque token + hash 保存、WebAuthn は公開鍵のみ保存、署名付き token を発行しない）。
@@ -220,11 +220,12 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 4-3 クライアント登録（CIMD）
 
 - クライアント登録は CIMD（Client ID Metadata Document）のみ。client_id は HTTPS URL。
-- client_id URL の静的検証（取得前）: `https` スキーム、host が `oauth.cimd_allowed_hosts`（初期値 `["chatgpt.com"]`）と完全一致（サブドメイン不可）、port なし、userinfo なし、fragment なし、query なし、path が `/` 以外、path に dot segment（`.` / `..`、`%2e` 表記を含む）や `//` を含まない、長さ 512 以下。`url` crate でパースして再シリアライズした結果が入力と完全一致しないものも拒否する。
+- client_id URL の静的検証（取得前）: `https` スキーム、host が `oauth.cimd_allowed_hosts`（値 `["chatgpt.com", "claude.ai"]`）と完全一致（サブドメイン不可）、port なし、userinfo なし、fragment なし、query なし、path が `/` 以外、path に dot segment（`.` / `..`、`%2e` 表記を含む）や `//` を含まない、長さ 512 以下。`url` crate でパースして再シリアライズした結果が入力と完全一致しないものも拒否する。却下時は 400 エラー画面とともに、parse できた host と静的検証の拒否理由だけを warn log に記録する（client_id 全体は未検証値なので 10-2 の規則により log しない。allowlist 外 host が現れたときの唯一の情報源）。
+- Claude（claude.ai）の client_id URL の正確な path は接続完了後に `oauth_clients.client_id` で記録して確定する（host の完全一致のみで受理するため、path は設定に不要）。
 - 取得（`net::safe_fetch`。JWKS 取得と共通）: rustls、redirect 非追従（3xx は失敗）、connect 3秒・全体 5秒 timeout、body 上限 64KiB（streaming で打ち切り）、`Accept: application/json`、`If-None-Match` による条件付き取得。名前解決結果が private / loopback / link-local / CGNAT / ULA なら接続しない。
 - 文書検証: `client_id` が URL と完全一致、`client_name` と `redirect_uris`（非空配列）が存在、全 `redirect_uris` が https、`token_endpoint_auth_method` が `none` / `private_key_jwt`（未指定は none）、`private_key_jwt` なら `jwks_uri`（host は allowlist）か `jwks` を持つ、`client_secret*` 系は拒否。
 - キャッシュ（`oauth_clients`）: `expires_at = fetched_at + clamp(Cache-Control max-age, 5分, 24時間)`（max-age なし・no-store は 5分）。期限切れで取得失敗した場合、期限から 24時間までは旧文書を使う（stale-if-error）。超過後は `invalid_client`（authorize ではエラー画面）。取得契機は `/oauth/authorize`・`/oauth/token`・`/oauth/revoke` で期限切れのとき。
-- redirect URI: 要求の `redirect_uri` が CIMD 文書の `redirect_uris` と完全一致し、かつ `oauth.redirect_uri_allowlist`（初期値 `["https://chatgpt.com/connector_platform_oauth_redirect"]`）と完全一致すること。
+- redirect URI: 要求の `redirect_uri` が CIMD 文書の `redirect_uris` と完全一致し、かつ `oauth.redirect_uri_allowlist`（値 `["https://chatgpt.com/connector_platform_oauth_redirect", "https://claude.ai/api/mcp/auth_callback"]`）と完全一致すること。claude.ai 側は hosted Claude（web・desktop・モバイル）の固定 callback。
 
 ### 4-4 client 認証（token / revoke）
 
@@ -248,7 +249,7 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 4-6 同意
 
 - 同意画面は毎回表示する（既存 grant があっても省略しない）。
-- 表示: client 名は allowlist 済み host から決めた固定名（「ChatGPT」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名とその表示色の chip（6-1 の初期値。接続後に ChatGPT から切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
+- 表示: client 名は allowlist 済み host から決めた固定名（`chatgpt.com` →「ChatGPT」、`claude.ai` →「Claude」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名とその表示色の chip（6-1 の初期値。接続後に接続したアプリから切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
 - 同意 POST（allow）では authorization request を削除し、認可コード行（user_id・client_id・redirect_uri・code_challenge・scope・resource、`grant_id` は NULL）だけを作る。grant は作らない。
 - 同意画面・ログイン画面には `Content-Security-Policy: frame-ancestors 'none'` と `X-Frame-Options: DENY` を付ける。
 
@@ -337,7 +338,7 @@ rotation では grant が変わらないので、選択中 ledger（`active_ledg
 | 選択中 ledger が未選択・所属外 | HTTP エラーにしない（`AuthContext.ledger = None` で通し、tool が isError で選び直しを促す） |
 | scope 不足（tool 呼び出し時） | HTTP 200、`CallToolResult { is_error: true, _meta: {"mcp/www_authenticate": ["Bearer error=\"insufficient_scope\", scope=\"ledger.write\", resource_metadata=\"...\""]}}` |
 
-- HTTP 403 + `insufficient_scope` は使わない（ChatGPT の再認証 UI につながるのは tool 結果の `_meta["mcp/www_authenticate"]`）。
+- HTTP 403 + `insufficient_scope` は使わない。ChatGPT の再認証 UI につながるのは tool 結果の `_meta["mcp/www_authenticate"]`。Claude は 403 + `WWW-Authenticate: Bearer error="insufficient_scope"` で step-up 再認可をする（200 応答の challenge は無視する）が、Claude は 401 challenge の `scope`（なければ AS metadata / PRM の `scopes_supported`）を丸ごと要求するため、**Claude が両 scope を要求する限り**本 AS では scope 不足が到達不能（TASK-149 D5。実際の要求・付与 scope は §12 #23 で確認する）。実装は非空の要求 scope を補充せずそのまま採用する（4-8）ため、仮に Claude の要求が一部 scope のみだった場合は grant の scope がそれに限られ、書き込み tool が scope 不足になりうる。その場合も tool 結果の日本語文がモデル経由で伝わるため 403 経路の利益がない。403 を返すには tool 実行（HTTP 200 の JSON-RPC 処理中）の枠組み変更を要する。scope を利用者が絞れる client が出たら再検討する。
 - `tools/list` は read / write のどちらかの scope があれば返す。
 - 各 tool の `_meta.securitySchemes` は `[{"type":"oauth2","scopes":["ledger.read"]}]`（書き込み tool は `["ledger.write"]`）。HTTP レベルの認証と一致させるミラーとして付ける。
 
@@ -763,7 +764,7 @@ sequenceDiagram
 
 ## 12. 実装時の注意: TASK-7 で実機確認が必要な前提
 
-以下は本書が前提としている ChatGPT・ブラウザ・rmcp の挙動で、実機（TASK-7）で確認するまで確定しない。結果によって仕様を変更する。tool・widget に関する前提は `spec_mcp-tools.md` §14。
+以下は本書が前提としている ChatGPT・Claude・ブラウザ・rmcp の挙動で、実機（TASK-7、Claude 分は TASK-149 の stg 接続確認）で確認するまで確定しない。結果によって仕様を変更する。tool・widget に関する前提は `spec_mcp-tools.md` §14。
 
 | # | 優先度 | 前提 | 成り立たない場合の変更先 |
 |---|---|---|---|
@@ -785,6 +786,11 @@ sequenceDiagram
 | 16 | P1 | `openai/subject` が tools/call の `_meta` に毎回付き、アプリごとに異なり、端末・再接続をまたいで安定し、推測不能な形式である | 7-4 の有効性、hash 方式（HMAC へ切替） |
 | 17 | P1 | 接続切れ（Authorization ヘッダなし）の状態で ChatGPT が noauth の `request_recovery` を呼べる（`tools/list` が 401 でも tool が使え、401 で再認証 UI に入ってしまわない） | 5-2 の実装ゲート。匿名 `tools/list` の追加、web フォームへの移行等を再検討 |
 | 18 | P2 | `whoami` のアカウント番号がモデルの応答で正確に伝わる | 7-1 の表示形式 |
+| 19 | P0 | Claude の client_id URL（claude.ai host の CIMD）が 4-3 の静的検証をとおり、`token_endpoint_auth_method: none`・redirect URI が固定 callback で届く。正確な client_id URL は接続後に `oauth_clients` キャッシュで記録して確定する | allowlist の値、4-4 |
+| 20 | P0 | Claude が送る `resource` の正確な値（末尾スラッシュ等）が canonical URI と完全一致する。同意画面が開いている間に `oauth_authorization_requests` 行または authorize URL の `resource` パラメータで記録する | resource 比較（緩和ではなく設定・PRM 値の整合） |
+| 21 | P1 | Claude の同意画面が 4-6 のとおり（表示名「Claude」・client_id URL・scope 説明・初期 ledger）表示され、許可 → token 交換 → 会話での tool 呼び出し・画像を貼った画像なし draft が動く | 4-6 表示、`spec_mcp-tools.md` §7 の description 案内 |
+| 22 | P1 | Claude の web とスマホアプリの両方で connector が使える（アプリ内ブラウザでパスキー login が通る。widget 領域が空白・読み込み中でも会話内承認に支障がない） | usage の接続手順、widget adapter（TASK-150） |
+| 23 | P1 | Claude の実際の要求 scope と付与 scope（接続後に DB `oauth_grants.scope`・grants 一覧の scope 表示）を記録し、5-1 の前提（Claude が両 scope を要求する）を確認する | 5-1（scope 不足の伝え方・403 経路の再検討） |
 
 単体テストで確認する事項（実機不要）: `resident_key` 上書き後も `finish_passkey_registration` が通ること、sign counter 逆行の拒否、PKCE・assertion 検証、rotation 4 分岐、code 再利用、superseded、不正検知時の失効が COMMIT されること、CIMD 検証（不正 URL 群）、safe_fetch（redirect / size / private IP）、Origin 検証、Bearer 失敗応答のヘッダ形式、`AuthContext` が tool handler まで届くこと（tower 経由の結合テスト）。
 

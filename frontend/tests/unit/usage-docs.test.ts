@@ -213,4 +213,28 @@ describe('usage docs reconciliation (design §2-5)', () => {
     const connect = readFileSync(resolve(docsDir, 'usage_connect.md'), 'utf8')
     expect(connect).toContain(`${days[0]!}日`)
   })
+
+  it('[covers:usage-docs.connect-topic-covers-both-services] 接続トピックは ChatGPT と Claude 両サービスの登録手順に言及する', () => {
+    // TASK-149 D3: the connect topic is a common flow plus per-service
+    // registration steps, naming both services (service names are data
+    // names; a neutral wording is NOT used). Removing one service's
+    // registration steps must fail here, so beyond both service names the
+    // per-service step headings themselves are asserted (meaning-bearing
+    // substrings of the corpus headings, not exact-sentence pins).
+    const connect = readFileSync(resolve(docsDir, 'usage_connect.md'), 'utf8')
+    expect(connect).toContain('ChatGPT')
+    expect(connect).toContain('Claude')
+    expect(connect).toContain('ChatGPT に登録する')
+    expect(connect).toContain('Claude に登録する')
+  })
+
+  it('[covers:usage-docs.send-receipt-mentions-claude] レシート送信トピックは Claude での画像の扱いに言及する', () => {
+    // TASK-149 D3: in Claude the conversation image is read by the model,
+    // so the record carries no image file — the send-receipt topic notes
+    // this. Removing the note must fail here, so the note's own
+    // meaning-bearing phrase is asserted in addition to the Claude mention.
+    const send = readFileSync(resolve(docsDir, 'usage_send-receipt.md'), 'utf8')
+    expect(send).toContain('Claude')
+    expect(send).toContain('記録に写真は付きません')
+  })
 })

@@ -123,6 +123,7 @@ pub fn scope_string(list: &[String]) -> String {
 pub fn client_display_for_host(host: &str) -> String {
     match host {
         "chatgpt.com" => "ChatGPT".to_string(),
+        "claude.ai" => "Claude".to_string(),
         other => other.to_string(),
     }
 }
@@ -381,4 +382,19 @@ async fn authorize_limit_guard(
 
 fn session_now() -> i64 {
     super::session::now_ms()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [covers:auth-oauth.client-display-claude-host]
+    #[test]
+    fn client_display_for_host_known_names() {
+        // TASK-149 D2: claude.ai gets its own fixed display name (the consent
+        // screen and the grants list share this mapping); the chatgpt.com arm
+        // stays as-is
+        assert_eq!(client_display_for_host("claude.ai"), "Claude");
+        assert_eq!(client_display_for_host("chatgpt.com"), "ChatGPT");
+    }
 }

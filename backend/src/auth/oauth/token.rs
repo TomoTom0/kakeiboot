@@ -92,7 +92,9 @@ pub async fn token_post(
     let record = match cimd::get_client(&state.db, &state.fetch, &state.auth, &client_id, now).await
     {
         Ok(r) => r,
-        Err(ClientError::InvalidClientId) => return OAuthError::invalid_client().into_response(),
+        Err(ClientError::InvalidClientId(_)) => {
+            return OAuthError::invalid_client().into_response();
+        }
         Err(e) => {
             tracing::warn!(error = %e, client_id, "client metadata unavailable");
             return OAuthError::invalid_client().into_response();

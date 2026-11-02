@@ -117,14 +117,23 @@ pub async fn authorize_get(
     let issuer = state.auth.issuer.clone();
 
     // 1. client_id static validation (no redirect on failure)
-    if cimd::validate_client_id_url(client_id, &state.auth).is_err() {
+    if let Err(rejection) = cimd::validate_client_id_url(client_id, &state.auth) {
+        // TASK-149 D1: record only the parsed host and the static reason —
+        // the raw client_id is an unvalidated value (userinfo, query,
+        // control characters, ...) and is never logged (design review MED3).
+        // This is the sole signal when a new client host shows up.
+        tracing::warn!(
+            host = cimd::client_id_host_for_log(client_id),
+            reason = %rejection,
+            "authorize: client_id rejected by static validation"
+        );
         return authorize_error_page("unsupported client");
     }
     // 2. CIMD fetch / cache (invalid client: error page, never a redirect)
     let record = match cimd::get_client(&state.db, &state.fetch, &state.auth, client_id, now).await
     {
         Ok(r) => r,
-        Err(ClientError::InvalidClientId) => return authorize_error_page("unsupported client"),
+        Err(ClientError::InvalidClientId(_)) => return authorize_error_page("unsupported client"),
         Err(e) => {
             tracing::warn!(error = %e, "CIMD unavailable");
             return authorize_error_page("client metadata unavailable");

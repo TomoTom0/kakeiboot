@@ -100,6 +100,18 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
   })
 
 
+  // TASK-149 D3 (web-common.fixed-guidance-names-both-services): the recent
+  // zone's empty-state guidance names both services (the corpus copy policy)
+  it('[covers:web-common.fixed-guidance-names-both-services] 最近のレシート空状態の案内は ChatGPT と Claude を併記', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    vi.spyOn(api, 'listReceipts').mockResolvedValue({ total_count: 0, sum_amount: 0, receipts: [], next_cursor: null })
+    const { wrapper } = await mountApp('/')
+    const empty = wrapper.find('[data-test="recent"] .empty-state')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('ChatGPT')
+    expect(empty.text()).toContain('Claude')
+  })
+
   // TASK-105 (web-home.breakdown-rest-row revised + web-common.series-color-
   // assignment, design §4-2): every row — top rows AND the「ほか」rest row —
   // carries the leading 12px round swatch `.ranked-swatch`; RankedList sets

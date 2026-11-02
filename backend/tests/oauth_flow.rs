@@ -622,3 +622,139 @@ async fn authorize_state_over_512_is_invalid_request() {
     );
     assert!(oauth::extract_query_param(&loc, "state").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// TASK-149: a claude.ai CIMD client (public, token_endpoint_auth_method=none)
+// runs the whole flow. The production CIMD document is served from
+// https://claude.ai (unreachable from tests); the oauth_clients cache row
+// (fresh TTL) stands in as the CIMD source — the fetch machinery itself is
+// covered by the cimd-fetch-cache conditions against the loopback mock.
+
+// [covers:auth-oauth.claude-cimd-full-flow]
+#[tokio::test]
+async fn claude_cimd_client_full_flow() {
+    const CLAUDE_CLIENT_ID: &str = "https://claude.ai/oauth/client-metadata";
+    const CLAUDE_CB: &str = "https://claude.ai/api/mcp/auth_callback";
+    let mock = oauth::spawn_mock().await;
+    // repo config plus the TASK-149 D1 entries (the loopback mock stays
+    // allowlisted for the rate-limit raised setup; claude.ai joins the hosts
+    // and its fixed callback joins the redirect allowlist)
+    let mut cfg = oauth::oauth_config(&mock, None);
+    cfg.auth.oauth.cimd_allowed_hosts.push("claude.ai".into());
+    cfg.auth.oauth.redirect_uri_allowlist.push(CLAUDE_CB.into());
+    let pool = budget_book::db::connect_memory().await.expect("memory db");
+    let state = budget_book::app::AppState::new(&cfg, pool.clone()).expect("app state");
+    let router = budget_book::app::router(&cfg, state, tokio_util::sync::CancellationToken::new());
+    let mut client = Client::new();
+    auth::register_setup_user(&mut client, &router, &pool, "Claude Flow User").await;
+
+    // the CIMD record for the claude client, as a fresh cache row (auth none)
+    let now = budget_book::auth::session::now_ms();
+    sqlx::query(
+        "INSERT INTO oauth_clients (client_id, metadata_json, client_name,
+             redirect_uris_json, token_endpoint_auth_method, jwks_uri, etag,
+             fetched_at, expires_at)
+         VALUES (?, '{}', 'Claude', ?, 'none', NULL, NULL, ?, ?)",
+    )
+    .bind(CLAUDE_CLIENT_ID)
+    .bind(serde_json::json!([CLAUDE_CB]).to_string())
+    .bind(now)
+    .bind(now + 3_600_000)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // authorize (PKCE S256 + state + resource) with the claude client_id and
+    // its hosted-Claude callback
+    let (verifier, challenge) = pkce_pair();
+    let query = format!(
+        "response_type=code&client_id={}&redirect_uri={}&code_challenge={challenge}&code_challenge_method=S256&resource=http%3A%2F%2Flocalhost%3A40281%2Fmcp&state=cs-7",
+        oauth::urlencode(CLAUDE_CLIENT_ID),
+        oauth::urlencode(CLAUDE_CB),
+    );
+    let resp = client
+        .get(&router, &format!("/oauth/authorize?{query}"))
+        .await;
+    assert_eq!(resp.status(), 302, "claude authorize");
+    let location = location_of(&resp);
+    assert!(
+        location.starts_with("/oauth/consent?req="),
+        "unexpected redirect: {location}"
+    );
+    let req_id = location
+        .split("req=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+
+    // consent info: the fixed display name for the claude.ai host, the
+    // client_id URL alongside
+    let resp = client
+        .get(&router, &format!("/api/oauth/requests/{req_id}"))
+        .await;
+    assert_eq!(resp.status(), 200, "claude consent info");
+    let body = body_json(resp).await;
+    assert_eq!(body["client_display"], "Claude");
+    assert_eq!(body["client_id"], CLAUDE_CLIENT_ID);
+    assert!(
+        body["ledger_name"].as_str().is_some_and(|n| !n.is_empty()),
+        "initial ledger selected"
+    );
+
+    // decision allow -> code on the claude callback
+    let resp = client
+        .post(
+            &router,
+            "/oauth/authorize/decision",
+            serde_json::json!({ "req": req_id, "decision": "allow" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "claude decision");
+    let body = body_json(resp).await;
+    let redirect_to = body["redirect_to"].as_str().unwrap();
+    assert!(redirect_to.starts_with(CLAUDE_CB), "{redirect_to}");
+    let code = oauth::extract_query_param(redirect_to, "code").expect("code");
+    assert_eq!(
+        oauth::extract_query_param(redirect_to, "state").as_deref(),
+        Some("cs-7")
+    );
+
+    // token exchange: public client — client_id form param only, no assertion
+    let form = format!(
+        "grant_type=authorization_code&code={code}&redirect_uri={}&code_verifier={verifier}&client_id={}",
+        oauth::urlencode(CLAUDE_CB),
+        oauth::urlencode(CLAUDE_CLIENT_ID),
+    );
+    let resp = oauth::post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200, "claude public client exchange");
+    let body = body_json(resp).await;
+    let access_token = body["access_token"].as_str().unwrap();
+    let refresh_token = body["refresh_token"].as_str().unwrap();
+    assert_eq!(body["token_type"], "Bearer");
+    assert_eq!(body["scope"], "ledger.read ledger.write");
+
+    // the grant belongs to the claude client
+    let client_of_grant: String = sqlx::query_scalar(
+        "SELECT g.client_id FROM oauth_grants g
+         JOIN oauth_access_tokens t ON t.grant_id = g.id WHERE t.token_hash = ?",
+    )
+    .bind(oauth::token_hash(access_token))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(client_of_grant, CLAUDE_CLIENT_ID);
+
+    // refresh: client_id param only, rotation issues a new refresh token
+    let form = format!(
+        "grant_type=refresh_token&refresh_token={refresh_token}&client_id={}",
+        oauth::urlencode(CLAUDE_CLIENT_ID),
+    );
+    let resp = oauth::post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200, "claude public client refresh");
+    let body = body_json(resp).await;
+    let next_refresh = body["refresh_token"].as_str().unwrap();
+    assert_ne!(next_refresh, refresh_token, "refresh rotation");
+    assert!(body["access_token"].as_str().is_some_and(|t| !t.is_empty()));
+}

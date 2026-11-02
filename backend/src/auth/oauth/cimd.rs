@@ -50,9 +50,11 @@ struct RawCimd {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    /// the client_id URL fails static validation
-    #[error("invalid client_id URL")]
-    InvalidClientId,
+    /// the client_id URL fails static validation; the payload is a static
+    /// reason tag (safe to log: it never contains the raw client_id,
+    /// which is an unvalidated value at this point — TASK-149 D1)
+    #[error("invalid client_id URL: {0}")]
+    InvalidClientId(&'static str),
     /// fetch / cache / document validation failed entirely
     #[error("client metadata unavailable: {0}")]
     Unavailable(String),
@@ -70,14 +72,15 @@ pub fn validate_client_id_url(
     client_id: &str,
     cfg: &ResolvedAuth,
 ) -> Result<url::Url, ClientError> {
-    let err = || ClientError::InvalidClientId;
     if client_id.len() > CLIENT_ID_MAX_LEN || client_id.chars().any(|c| c.is_control()) {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("length or control characters"));
     }
-    let url: url::Url = client_id.parse().map_err(|_| err())?;
+    let url: url::Url = client_id
+        .parse()
+        .map_err(|_| ClientError::InvalidClientId("not a URL"))?;
     if url.as_str() != client_id {
         // non-canonical serialization (default port, uppercase escapes, ...)
-        return Err(err());
+        return Err(ClientError::InvalidClientId("non-canonical serialization"));
     }
     let https_ok = url.scheme() == "https";
     let http_loopback = url.scheme() == "http"
@@ -85,11 +88,13 @@ pub fn validate_client_id_url(
         && (matches!(url.host(), Some(url::Host::Domain(d)) if d == "localhost")
             || matches!(url.host(), Some(url::Host::Ipv4(v)) if v.is_loopback()));
     if !https_ok && !http_loopback {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("scheme"));
     }
-    let host = url.host_str().ok_or_else(err)?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| ClientError::InvalidClientId("no host"))?;
     if !cfg.oauth.cimd_allowed_hosts.iter().any(|h| h == host) {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("host not allowlisted"));
     }
     if url.port().is_some() {
         // an explicit port is rejected; the dev/test switch permits loopback
@@ -98,32 +103,49 @@ pub fn validate_client_id_url(
             && (matches!(url.host(), Some(url::Host::Ipv4(v)) if v.is_loopback())
                 || matches!(url.host(), Some(url::Host::Domain(d)) if d == "localhost"));
         if !loopback_port {
-            return Err(err());
+            return Err(ClientError::InvalidClientId("port"));
         }
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("userinfo"));
     }
     if url.query().is_some() || url.fragment().is_some() {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("query or fragment"));
     }
     let path = url.path();
     if path == "/" || path.is_empty() {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("path"));
     }
     for seg in path.split('/') {
         if seg == "." || seg == ".." {
-            return Err(err());
+            return Err(ClientError::InvalidClientId("dot segment"));
         }
         let lower = seg.to_ascii_lowercase();
         if lower.contains("%2e") {
-            return Err(err());
+            return Err(ClientError::InvalidClientId("encoded dot segment"));
         }
     }
     if path.contains("//") {
-        return Err(err());
+        return Err(ClientError::InvalidClientId("empty path segment"));
     }
     Ok(url)
+}
+
+/// Log-safe host extraction for a rejected (unvalidated) client_id value
+/// (TASK-149 D1 / design review MED3): the raw client_id must never be
+/// logged — it may contain userinfo, a query, control characters or a huge
+/// payload — so only the parser-normalized host is recorded, and only when
+/// the value passes the same length / control-character gates as the
+/// validation itself.
+pub fn client_id_host_for_log(client_id: &str) -> Option<String> {
+    if client_id.len() > CLIENT_ID_MAX_LEN || client_id.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    client_id
+        .parse::<url::Url>()
+        .ok()?
+        .host_str()
+        .map(str::to_string)
 }
 
 /// Validate a fetched document (spec_auth.md 4-3). `raw_value` is the whole
@@ -443,6 +465,56 @@ mod tests {
         }
     }
 
+    // [covers:auth-oauth.cimd-client-id-log-host-only]
+    #[test]
+    fn client_id_host_for_log_returns_host_only() {
+        // TASK-149 D1 / design review MED3: a rejected client_id is an
+        // unvalidated value, so the log-safe view returns the
+        // parser-normalized host alone — userinfo, query and fragment
+        // contents never survive into the return value (even for a host
+        // outside the allowlist, which is the whole point of logging it).
+        for (input, host, secret) in [
+            (
+                "https://user:secret@chatgpt.com/c",
+                "chatgpt.com",
+                "user:secret",
+            ),
+            (
+                "https://chatgpt.com/c?token=abc",
+                "chatgpt.com",
+                "token=abc",
+            ),
+            ("https://chatgpt.com/c#frag", "chatgpt.com", "#frag"),
+            ("https://evil.example.com/c", "evil.example.com", "/c"),
+        ] {
+            let host_for_log = client_id_host_for_log(input);
+            assert_eq!(host_for_log.as_deref(), Some(host), "{input:?}");
+            // the userinfo / query / fragment / path parts never appear in
+            // the value handed to the log call
+            assert!(
+                !host_for_log.as_deref().is_some_and(|h| h.contains(secret)),
+                "{input:?}: {secret:?} leaked into {host_for_log:?}"
+            );
+        }
+        // a normal URL yields Some(host)
+        assert_eq!(
+            client_id_host_for_log("https://chatgpt.com/clients/abc").as_deref(),
+            Some("chatgpt.com")
+        );
+        // the same gates as the validation itself: control characters and
+        // over-length input never reach the parser
+        assert_eq!(client_id_host_for_log("https://chatgpt.com/c\u{0}"), None);
+        assert_eq!(
+            client_id_host_for_log(&format!(
+                "https://chatgpt.com/{}",
+                "a".repeat(CLIENT_ID_MAX_LEN)
+            )),
+            None
+        );
+        // parse failure yields None
+        assert_eq!(client_id_host_for_log("not a url"), None);
+    }
+
     // [covers:auth-oauth.cimd-client-id-static-validation]
     #[test]
     fn client_id_dev_loopback_relaxation() {
@@ -463,6 +535,88 @@ mod tests {
         ] {
             assert!(validate_client_id_url(bad, &c).is_err(), "{bad}");
         }
+    }
+
+    // [covers:auth-oauth.cimd-client-id-claude-host]
+    #[test]
+    fn client_id_claude_host_with_allowlist_entry() {
+        // TASK-149 D1: claude.ai joins the allowlist hosts. The exact
+        // client_id path is never pinned by config — the static check is a
+        // host exact-match with a free-form path, so any CIMD URL Anthropic
+        // publishes under claude.ai is accepted once the host is listed.
+        let mut c = cfg();
+        c.oauth.cimd_allowed_hosts = vec!["chatgpt.com".into(), "claude.ai".into()];
+        for ok in [
+            "https://claude.ai/oauth/claude-code-client-metadata",
+            "https://claude.ai/oauth/client-metadata",
+            "https://claude.ai/.well-known/oauth-authorization-server",
+        ] {
+            assert!(
+                validate_client_id_url(ok, &c).is_ok(),
+                "{ok} should pass with claude.ai allowlisted"
+            );
+        }
+        // the host gate stays an exact match and the static rules apply to
+        // claude.ai exactly as they do to chatgpt.com
+        for bad in [
+            "https://anthropic.com/c",  // sibling host not allowlisted
+            "https://claude.com/c",     // sibling host not allowlisted
+            "https://evil.claude.ai/c", // subdomain of the allowed host
+            "https://claude.ai/",       // path must not be "/"
+            "https://claude.ai",        // no path
+            "https://claude.ai:8443/c", // explicit port
+            "https://claude.ai/c?x=1",  // query
+            "https://claude.ai/c#f",    // fragment
+            "http://claude.ai/c",       // plain http
+        ] {
+            assert!(
+                validate_client_id_url(bad, &c).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        // the acceptance comes from the config value, not the code: without
+        // the claude.ai entry the same URL is rejected
+        assert!(
+            validate_client_id_url("https://claude.ai/oauth/client-metadata", &cfg()).is_err(),
+            "claude.ai must be rejected while not allowlisted"
+        );
+    }
+
+    // [covers:auth-oauth.cimd-claude-callback-double-allowlist]
+    #[test]
+    fn claude_callback_redirect_double_allowlist() {
+        // TASK-149 D1: the hosted-Claude fixed callback joins the config
+        // allowlist; the check still requires BOTH the CIMD document and the
+        // config to carry it (a loopback redirect from any other client
+        // shape fails the same gate)
+        const CLAUDE_CB: &str = "https://claude.ai/api/mcp/auth_callback";
+        let mut c = cfg();
+        c.oauth.redirect_uri_allowlist = vec![
+            "https://chatgpt.com/connector_platform_oauth_redirect".into(),
+            CLAUDE_CB.into(),
+        ];
+        let record = |uris: &[&str]| ClientRecord {
+            client_id: "https://claude.ai/oauth/client-metadata".into(),
+            client_name: Some("Claude".into()),
+            redirect_uris: uris.iter().map(|s| s.to_string()).collect(),
+            auth_method: AuthMethod::None,
+            jwks_uri: None,
+            jwks_inline: None,
+        };
+        // both allowlists carry the callback
+        assert!(redirect_uri_allowed(&record(&[CLAUDE_CB]), CLAUDE_CB, &c));
+        // document side missing (the CIMD lists something else)
+        assert!(!redirect_uri_allowed(
+            &record(&["https://claude.ai/other"]),
+            CLAUDE_CB,
+            &c
+        ));
+        // config side missing (double allowlist: chatgpt-only config)
+        assert!(!redirect_uri_allowed(
+            &record(&[CLAUDE_CB]),
+            CLAUDE_CB,
+            &cfg()
+        ));
     }
 
     // [covers:auth-oauth.cimd-document-validation]

@@ -1,7 +1,7 @@
 レシート（買い物1回分）を家計簿の「下書き」として保存する。登録の最初に必ずこれを呼ぶ。確定はユーザーの承認後に approve_receipt_draft で行う。レシートが2枚以上（複数の買い物分をまとめて）のときは create_receipt_drafts を使う。
 
 使う場面:
-- ユーザーがレシート画像を貼った: input_kind="image"。receipt_image に貼られた画像を指定する。画像の文字はあなたが読み取り、payload に入れる。
+- ユーザーがレシート画像を貼った: input_kind="image"。画像の文字はあなたが読み取り、payload に入れる。tool 引数として画像が届いた環境では receipt_image にその画像を指定する。画像が会話に貼られただけで tool に届かない環境では、receipt_image を渡さず payload だけ作る。
 - ユーザーが画像なしで金額等を伝えた: input_kind="manual"。receipt_image は渡さない。
 
 結果:

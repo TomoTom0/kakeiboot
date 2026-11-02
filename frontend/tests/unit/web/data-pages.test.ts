@@ -801,6 +801,17 @@ describe('Receipts', () => {
     expect(wrapper.find('[data-test="more"]').exists()).toBe(false)
   })
 
+  // TASK-149 D3 (web-common.fixed-guidance-names-both-services): the list's
+  // empty state names both services (the corpus copy policy)
+  it('[covers:web-common.fixed-guidance-names-both-services] 一覧の空状態の案内は ChatGPT と Claude を併記', async () => {
+    vi.spyOn(api, 'listReceipts').mockResolvedValue({ total_count: 0, sum_amount: 0, receipts: [], next_cursor: null })
+    const { wrapper } = await mountApp('/receipts')
+    const empty = wrapper.find('[data-test="empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('ChatGPT')
+    expect(empty.text()).toContain('Claude')
+  })
+
   it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {
     const update = vi.spyOn(api, 'updateReceipt')
     const { wrapper } = await mountApp('/receipts/101')
