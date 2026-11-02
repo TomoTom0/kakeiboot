@@ -521,6 +521,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin passkey list <user_id>` | パスキー一覧（id、label、作成・最終使用日時、backup state） |
 | `admin passkey revoke <user_id> <passkey_id \| --all>` | パスキー失効（行削除）。最後の1本も削除可 |
 | `admin grant list <user_id>` / `grant revoke <grant_id \| --all-of <user_id>>` | grant 一覧（client、scope、選択中 ledger、作成・最終利用日時）と失効（`revoked_reason='admin'`） |
+| `admin grant concurrent-families [--user <user_id \| アカウント番号>]` | 並存 refresh family の照会（read-only）。同一 grant に参照される未使用・未失効の tip（先端）が 2 本以上ある grant を、grant 行（user・client・失効/期限状態・tip 数）+ tip 行（hash 8 hex・参照元親 hash・発行/期限）で表示。省略 `--user` で全 user 横断。期限切れ tip も数え、失効済み grant も状態付きで出す。tip が残っていても参照元親行が掃除済みだと検出不能（0 件は現在の並存不存在を保証しない） |
 | `admin session list <user_id>` / `session revoke <session_id \| --all-of <user_id>>` | web session 一覧（作成・最終利用日時、User-Agent。hash の先頭 8 hex で識別）と失効 |
 | `admin token issue --kind setup --note <誰に渡したか> [--ttl <dur>]` | setup URL 発行（既定 TTL 24時間、`--note` 必須） |
 | `admin token issue --kind recovery --user <user_id> [--ttl <dur>]` | パスキー再登録 URL 発行（既定 TTL 1時間、上限24時間）。同 user の未使用 recovery token を行削除してから発行 |

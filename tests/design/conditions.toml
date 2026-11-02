@@ -2001,6 +2001,90 @@ description = "recovery reject は依頼を rejected に close（close_note に�
 given = "open 依頼の reject、二重 reject"
 expect_return_shape = "成功で status=rejected・audit あり、二重目はエラー"
 
+# TASK-155 並存refresh token familyの運用者照会（admin grant concurrent-families）。
+# 正本は tmp/tasks/tm-155/design_family_inquiry.md（§2 決定1〜6・§5 テスト節の9分岐）。
+
+[[condition]]
+id = "auth-cli.grant-concurrent-detection"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定1〜2・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:87"
+description = "同一grantに参照される未使用・未失効tip（used_at IS NULL・revoked_at IS NULL・token_hashがいずれかの行のchild_hashに参照される）が2本あるgrantを、grantヘッダ行（user・client・grant_revoked・grant_expires・tips数）+ tip詳細行（hash8・parent hash8〔parent_hash列でなくchild_hash逆引き〕・created・expires・JST）+ 末尾件数行で出力する。tip詳細行はcreated_at昇順"
+given = "S1残存形状（使用済み親2行がそれぞれ別の未使用tipをchild_hashで参照するgrant）"
+expect_return_shape = "grantヘッダ1行（tips=2）とtip 2行（各hash8・parent=参照元親行hash8・created/expiresはms_to_jst・created昇順）と件数行「1 concurrent family(ies), 2 tip(s)」"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-single-tip-excluded"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定1・§3（tip定義）・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:135"
+description = "tipが1本のみの正常grant（初期token〔child_hash参照なしの未使用行〕と、使用済み親1行から参照される現行単独tipの両方）は並存familyとして出ない"
+given = "初期tokenのみのgrantと、使用済み親→現行tip 1本のgrant"
+expect_return_shape = "どちらのgrant行も出力されず件数行は 0"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-orphan-excluded"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §1（0012の検出できない残存ケース）・§2 決定1・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:155"
+description = "どの行からもchild_hash参照されない未使用・未失効行（孤児。0012失効対象と同形状）はtipに数えず、現行tipとの混在でも並存familyとして出ない"
+given = "使用済み親→現行tip 1本に加えて未参照の孤児未使用行を持つgrant"
+expect_return_shape = "grant行は出力されず件数行は 0"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-used-revoked-tip-excluded"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定1（WHERE r.used_at IS NULL AND r.revoked_at IS NULL）・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:175"
+description = "使用済みtip（used_at非NULL・child_hashで参照され得る行）と失効済みtip（revoked_at非NULL・child_hashで参照される行）は検出から除外され、現行tip 1本との混在では並存familyとして出ない"
+given = "使用済み行がchild_hashで参照される未使用tip 1本＋他行のchild_hashで参照される失効済み（revoked_at非NULL）未使用行を持つgrant"
+expect_return_shape = "grant行は出力されず件数行は 0"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-expired-tip-counted"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定1（expires_atは条件に入れない）・§3・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:202"
+description = "期限切れtip（expires_atが現在より過去）も数える。grant_list系の失効・期限切れ除外条件（absolute_expires_at > now 等）は流用しない。各行のexpires列で運用者が判断する"
+given = "有効期限内tip 1本と期限切れtip 1本（両方ともchild_hashで参照される未使用・未失効行）を持つgrant"
+expect_return_shape = "grant行がtips=2で出力され、期限切れtip行にもexpires=（過去のJST日時）が表示される"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-dead-grant-listed"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定6（grantの生死で絞らない）・§3・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:227"
+description = "失効済みgrant（revoked_at非NULL）・絶対期限切れgrant（absolute_expires_atが現在より過去）も並存があれば行に出す。状態はgrant_revoked=<JST>/grant_expires=<JST>で行に表れ、行がsweep済みなら自然に出ない"
+given = "失効済みgrantと絶対期限切れgrantがそれぞれ参照されるtip 2本を持つ"
+expect_return_shape = "両grant行とも出力され（計2 family）、失効済みは grant_revoked=<JST>・絶対期限切れは grant_expires=<過去のJST> が行に表示される"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-user-filter"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定3（--user <account/id>・省略時全user横断）・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:271"
+description = "--user <account/id> で当該userのgrantに絞り、省略時は全user横断で出す（user横断が本来の用途。UserCmd::List の省略時全件と同じ慣行）"
+given = "別々のuserがそれぞれ並存familyを持つ状態での --user 指定実行と省略実行"
+expect_return_shape = "指定時は当該userのgrant行のみ、省略時は両userのgrant行が出る"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-empty"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §2 決定4（末尾件数行）・§5（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:310"
+description = "並存familyが1件もない場合も件数行のみを出力する（0件で無出力・エラーにしない）"
+given = "並存familyを持たないDB（正常grantのみ）"
+expect_return_shape = "「0 concurrent family(ies), 0 tip(s)」の件数行のみ"
+
+[[condition]]
+id = "auth-cli.grant-concurrent-parent-deleted-undetectable"
+target_function = "admin::concurrent_families"
+source = "tmp/tasks/tm-155/design_family_inquiry.md §1（MED3 参照元親行の削除による検出不能）・§2 決定1・§5 観測限界（TASK-155 design doc）"
+source_lines = "backend/tests/admin_cli_concurrent_families.rs:326"
+description = "参照元の親行のみがsweep削除された並存（tip自身は未使用・未失効で残存してもchild_hash参照が無くなった状態）は検出できない。照会0件は現在の並存不存在を保証しない（検出限界の固定）"
+given = "並存tip 2本を残して参照元親行2行のみを削除したgrant"
+expect_return_shape = "grant行は出力されず件数行は 0"
+
 [[condition]]
 id = "auth-cleanup.loop-runs"
 target_function = "maintenance::run_cleanup_loop"

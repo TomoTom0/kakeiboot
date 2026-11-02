@@ -69,8 +69,10 @@
 | `backend/tests/web_export_import.rs` | 結合 | データの書き出し・取り込み（export: viewer 含む member の一貫 snapshot・version 1 構造・audit。import: 新規 ledger 復元・ID remap・round-trip 一致。guard: 401・403・非所属 404 同一視。上限: export/import_too_large・413・import_invalid は rollback・画像 file 残存なし [TASK-58]） |
 | `backend/tests/web_media.rs` | 結合 | `GET /media/img/<token>` の配信時再検査と IP rate limit |
 | `backend/tests/admin_cli_phaseb.rs` | 結合 | 運用者 CLI Phase B（grant/session/recovery/resolve/reject/cleanup） |
+| `backend/tests/admin_cli_concurrent_families.rs` | 結合 | 運用者 CLI 並存 refresh family 照会 `grant concurrent-families`（tip 2本検出・孤児/使用済み/失効済みtip除外・期限切れtip算定・失効/期限切れgrant出力・--user絞り込み・0件・親行削除で検出不能 [TASK-155]） |
 | `backend/tests/admin_cli_backup.rs` | 結合 | 運用者 CLI backup（VACUUM INTO snapshot・read-only open・稼働中一貫性・失敗系 exit・tmp 冪等性 [TASK-83]） |
 | `backend/tests/common/oauth.rs` | 補助 | OAuth テスト用モック（CIMD/JWKS サーバ・RSA 署名・PKCE・grant fixture・フルフロー） |
+| `backend/tests/common/logcap.rs` | 補助 | tracing 出力の buffer capture（log assertion 用。request_log・oauth_refresh が使用） |
 | `backend/tests/db_schema.rs` | 結合 | migration 全適合・FK・ラベル表・drafts.batch_id・認証系・catalog・images・FTS・v_item_facts・audit・色 0008・0012 の孤児旧子 refresh 失効補正 [TASK-140] |
 | `backend/tests/db_drafts.rs` | 結合 | drafts CHECK 群・library 層 draft 操作・承認トランザクション・reopen・一括作成 |
 | `backend/tests/db_seed_ttl.rs` | 結合 | カテゴリ seed・ラベル seed・TTL 掃除の対象別 |
