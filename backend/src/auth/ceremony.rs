@@ -95,30 +95,6 @@ async fn take_ceremony(
     Ok(row)
 }
 
-/// Peek without deleting (reauth mismatch detection needs the owner first).
-async fn peek_ceremony(
-    conn: &mut SqliteConnection,
-    token: &[u8; TOKEN_LEN],
-    kind: &str,
-) -> sqlx::Result<Option<(Option<i64>, i64, String)>> {
-    let row: Option<(Option<i64>, i64, String)> = sqlx::query_as(
-        "SELECT user_id, expires_at, state_json FROM webauthn_ceremonies WHERE id_hash = ? AND kind = ?",
-    )
-    .bind(sha256(token).to_vec())
-    .bind(kind)
-    .fetch_optional(conn)
-    .await?;
-    Ok(row)
-}
-
-async fn delete_ceremony(conn: &mut SqliteConnection, token: &[u8; TOKEN_LEN]) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM webauthn_ceremonies WHERE id_hash = ?")
-        .bind(sha256(token).to_vec())
-        .execute(conn)
-        .await?;
-    Ok(())
-}
-
 /// Overwrite `authenticator_selection.resident_key` with `preferred`
 /// (spec_auth.md section 2-3; `required` hid platform / cloud authenticators
 /// from the picker on some clients during TASK-7 on-device checks). User
@@ -913,10 +889,10 @@ async fn load_passkeys(
 
 /// Persist `update_credential` results (spec 2-4) and `last_used_at`.
 ///
-/// The caller passes `creds` read inside the same `BEGIN IMMEDIATE`
-/// transaction as `conn` (TASK-147): the stored `passkey_json` is
-/// overwritten whole from that snapshot, so a snapshot read before the
-/// write lock could roll the sign counter back.
+/// Both callers (`login_finish` / `reauth_finish`) pass `creds` read inside
+/// the same `BEGIN IMMEDIATE` transaction as `conn` (TASK-147 / 154): the
+/// stored `passkey_json` is overwritten whole from that snapshot, so a
+/// snapshot read before the write lock could roll the sign counter back.
 async fn update_credential_after_auth(
     conn: &mut SqliteConnection,
     user_id: i64,
@@ -1019,6 +995,15 @@ pub async fn reauth_start(
     })
 }
 
+/// Sign-counter rule of spec_auth.md sections 2-4 / 2-6 (the same rule
+/// webauthn-rs applies during its own verification): when either side is a
+/// positive counter, an assertion that did not advance past the stored value
+/// (`received <= stored`) is a regression. A counter-0-fixed authenticator
+/// (received = 0 / stored = 0) passes — the check is simply skipped for it.
+fn counter_regressed(received: u32, stored: u32) -> bool {
+    (received > 0 || stored > 0) && received <= stored
+}
+
 /// Non-discoverable step-up finish. The ceremony must belong to the session's
 /// user (mismatch: 403, ceremony deleted). On success the same session row's
 /// `auth_at` is renewed.
@@ -1029,21 +1014,20 @@ pub async fn reauth_finish(
     ceremony_token: &[u8; TOKEN_LEN],
     credential: &PublicKeyCredential,
     now: i64,
+    test_hooks: &crate::test_hooks::TestHooks,
 ) -> Result<(), ReauthError> {
     let mut conn = pool.acquire().await.map_err(anyhow::Error::from)?;
-    let Some((ceremony_user, expires_at, state_json)) =
-        peek_ceremony(&mut conn, ceremony_token, "authenticate")
+    // Atomic consumption (spec 2-5, TASK-154): DELETE ... RETURNING admits
+    // exactly one of concurrent submissions of the same ceremony. The expiry
+    // check rides the WHERE clause; a missing or expired row is the same 400
+    // as the old peek miss. The owner check uses the returned row.
+    let Some((ceremony_user, _, state_json)) =
+        take_ceremony(&mut conn, ceremony_token, "authenticate", now)
             .await
             .map_err(anyhow::Error::from)?
     else {
         return Err(ReauthError::CeremonyInvalid);
     };
-    if expires_at <= now {
-        return Err(ReauthError::CeremonyInvalid);
-    }
-    delete_ceremony(&mut conn, ceremony_token)
-        .await
-        .map_err(anyhow::Error::from)?;
     if ceremony_user != Some(s.user_id) {
         return Err(ReauthError::UserMismatch);
     }
@@ -1055,33 +1039,77 @@ pub async fn reauth_finish(
         Ok(r) => r,
         Err(e) => {
             // step-up failure (spec_auth.md 10-5, TASK-15): WARN with the
-            // reason; the error text carries no secrets.
+            // reason; the error text carries no secrets. Pure CPU work on the
+            // ceremony snapshot, so it stays outside the write lock.
             tracing::warn!(action = %"reauth_failed", error = %e, "auth failure");
             return Err(ReauthError::Authentication);
         }
     };
-    // the authenticated credential must belong to this user (spec 2-6).
-    let owned: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT credential_id FROM webauthn_credentials WHERE user_id = ? AND credential_id = ?",
-    )
-    .bind(s.user_id)
-    .bind(result.cred_id().as_slice())
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(anyhow::Error::from)?;
-    if owned.is_none() {
+    // From the ownership resolution on, everything runs in one BEGIN
+    // IMMEDIATE transaction (spec 2-6, TASK-154): the passkey read, the
+    // counter re-check against the latest stored value, the credential
+    // update and the auth_at renewal. The verification above used the
+    // ceremony snapshot, whose counter can be up to the ceremony TTL old;
+    // re-checking under the write lock closes that window, so a delayed or
+    // parked step-up assertion never rolls the stored counter back. Every
+    // failure below leaves nothing written (the dropped transaction rolls
+    // back). Inside the transaction nothing acquires another pool connection
+    // (that would self-deadlock until busy_timeout). test-only pause point
+    // (feature `test-hooks`; no-op otherwise): just ahead of taking the
+    // write lock.
+    test_hooks.pause_reauth_before_write_lock().await;
+    let mut tx = conn
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(anyhow::Error::from)?;
+    // the authenticated credential must belong to this user (spec 2-6);
+    // resolving it against the passkeys read inside the transaction also
+    // closes the race where the credential is deleted mid-flight and a
+    // stale auth_at renewal would still land.
+    let creds = load_passkeys(&mut tx, s.user_id).await?;
+    if !creds
+        .iter()
+        .any(|(_, cid, _)| cid.as_slice() == result.cred_id().as_slice())
+    {
         tracing::warn!(action = %"reauth_mismatch", "auth failure");
         return Err(ReauthError::Authentication);
     }
-    let creds = load_passkeys(&mut conn, s.user_id).await?;
-    update_credential_after_auth(&mut conn, s.user_id, result.cred_id(), &creds, &result, now)
+    // fresh-counter re-check (spec 2-6): this stored value is the latest,
+    // not the ceremony snapshot the assertion was verified against.
+    let stored_raw: i64 = sqlx::query_scalar(
+        "SELECT json_extract(passkey_json, '$.cred.counter') FROM webauthn_credentials
+         WHERE user_id = ? AND credential_id = ?",
+    )
+    .bind(s.user_id)
+    .bind(result.cred_id().as_slice())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(anyhow::Error::from)?;
+    let stored = u32::try_from(stored_raw).map_err(anyhow::Error::from)?;
+    if counter_regressed(result.counter(), stored) {
+        // step-up failures stay WARN-only (spec 10-5 exception): no
+        // audit_events row; the user recovers by retrying.
+        let cred_prefix = to_hex(&sha256(result.cred_id()))[..8].to_string();
+        tracing::warn!(action = %"counter_regression", credential_id_hash_prefix = %cred_prefix, "auth failure");
+        return Err(ReauthError::Authentication);
+    }
+    update_credential_after_auth(&mut tx, s.user_id, result.cred_id(), &creds, &result, now)
         .await?;
-    sqlx::query("UPDATE web_sessions SET auth_at = ? WHERE id_hash = ?")
+    let renewed = sqlx::query("UPDATE web_sessions SET auth_at = ? WHERE id_hash = ?")
         .bind(now)
         .bind(&s.id_hash)
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(anyhow::Error::from)?
+        .rows_affected();
+    if renewed == 0 {
+        // the session row vanished between the handler's check and this
+        // update: fail the step-up so the credential update rolls back with
+        // it (tx atomicity) instead of silently succeeding.
+        tracing::warn!(action = %"reauth_failed", reason = "session_row_vanished", "auth failure");
+        return Err(ReauthError::Authentication);
+    }
+    tx.commit().await.map_err(anyhow::Error::from)?;
     Ok(())
 }
 

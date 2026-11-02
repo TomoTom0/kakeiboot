@@ -411,6 +411,7 @@ impl Park {
         });
         budget_book::test_hooks::TestHooks {
             login_before_write_lock: Some(hook),
+            ..Default::default()
         }
     }
 

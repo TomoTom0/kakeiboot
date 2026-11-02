@@ -593,6 +593,7 @@ async fn reauth_finish(
         &ceremony_token,
         &req.credential,
         now,
+        &state.test_hooks,
     )
     .await?;
     Ok(with_ceremony_cleared(Json(json!({})).into_response()))

@@ -93,8 +93,11 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 2-6 step-up 再認証
 
 - 対象操作: パスキーの削除のみ（TASK-46 で追加・発行系からは外れた。条件は直近 10分以内のパスキー認証 `web_sessions.auth_at`）。
-- 満たさない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
+- 満たない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
 - step-up は非 discoverable 認証（`start_passkey_authentication(当該 user の credential 全件)`）とし、他 user のパスキーで step-up できないようにする。成功時は同じ session 行の `auth_at` を更新する。
+- finish では、ceremony の取得・削除・user 一致検査と `finish_passkey_authentication`（開始時 snapshot による署名検証）を transaction の外で行い、それ以降（credential の所有確認、当該 user の `passkey_json` 読み込み、sign counter の再判定、`update_credential` が Some なら `passkey_json` 更新、`last_used_at` 更新、`auth_at` 更新）は 1 つの `BEGIN IMMEDIATE` で行う。tx 内では別の DB 接続を取得しない。`auth_at` 更新の影響行数が 0（tx 取得後に session が削除された）なら credential 更新もろとも rollback して 401 を返す。ceremony の消費は原子（1回限り。並行する同一 ceremony への再提出は2回目以降が受理されない）。
+- counter 検証は write lock の下で読んだ最新の保存値を基準とする（`(受信値 > 0 または 保存値 > 0)` かつ `受信値 <= 保存値` なら拒否）。ceremony TTL 内に別の login・step-up で保存 counter が進んだ場合、開始時 snapshot の基準を満たす assertion でも後から write lock を得た時点の保存値に対して逆行していれば `counter_regression` として 401 を返す（§10-5 の WARN 粒度）。これにより同一 credential の並行 login・step-up で保存 counter が巻き戻らず、遅延到着した step-up assertion は再生できない。counter が 0 固定の authenticator は検査対象外で、並行でも誤拒否しない。
+- step-up 失敗時の log は WARN のみで audit_events への挿入は行わない（§10-5 の「audit_events 挿入に併記」の例外。失敗は利用者側の再試行で回復する一時的な状態のため）。
 
 ### 2-7 パスキー管理
 
@@ -602,7 +605,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 |---|---|---|
 | INFO | 全 HTTP リクエスト（middleware） | `method`・`path`（query は秘密を載せうるため一切記録しない）・`status`・`latency_ms`。`/media/img/<token>` は 10-2 のとおり `<redacted>` に置換。`latency_ms` は応答開始までの時間 |
 | ERROR | 5xx を返したリクエスト（middleware） | 上と同じ項目を ERROR で 1 行。handler 内部のエラー詳細は従来どおり箇所ごとの error ログが担う |
-| WARN | 認証失敗（login / step-up） | audit action と同じ粒度（`login_mismatch` / `login_failed` / `counter_regression` / `reauth_failed` / `reauth_mismatch`）+ `credential_id_hash_prefix` 等の audit 同等のマスク済み詳細。audit_events 挿入に併記 |
+| WARN | 認証失敗（login / step-up） | audit action と同じ粒度（`login_mismatch` / `login_failed` / `counter_regression` / `reauth_failed` / `reauth_mismatch`）+ `credential_id_hash_prefix` 等の audit 同等のマスク済み詳細。audit_events 挿入に併記。ただし step-up の失敗は例外で WARN のみとし、audit_events へは挿入しない（2-6。再試行で回復する一時的な状態のため） |
 | WARN | token 受理の失敗（register/info 等） | endpoint・粗い理由（`parse_failed` / `unknown_token` / `expired_or_used` / `invalid_token`）・`token_hash_prefix`（token 平文は出さない） |
 | WARN | rate limit 発火（429） | limit 種別（`webauthn` / `token_accept` / `authorize` / `token_endpoint` / `mcp` / `mcp_unauthenticated` / `media` 等 10-1 の分類）・key（IP または `user:<id>` / `client:<client_id>`）・`retry_after_secs` |
 | WARN | 画像取得の失敗 | 理由（`fetch_failed` / `too_large` / `decode_failed` / `fetch_timeout`）・所要時間 |

@@ -28,6 +28,14 @@ pub struct TestHooks {
     /// the same point lies ahead of the window.
     #[cfg(feature = "test-hooks")]
     pub login_before_write_lock: Option<Hook>,
+    /// `reauth_finish`: awaited at the same structural point as the login
+    /// hook — after the ceremony consumption and the assertion verification,
+    /// immediately before `BEGIN IMMEDIATE` (TASK-154 step-up sign-counter
+    /// freshness). The field is not awaited anywhere until the TASK-154
+    /// implementation wires `reauth_finish` to it; installing it is a no-op
+    /// until then, so tests park-or-run linearly either way.
+    #[cfg(feature = "test-hooks")]
+    pub reauth_before_write_lock: Option<Hook>,
 }
 
 impl TestHooks {
@@ -36,6 +44,15 @@ impl TestHooks {
     pub async fn pause_login_before_write_lock(&self) {
         #[cfg(feature = "test-hooks")]
         if let Some(hook) = &self.login_before_write_lock {
+            hook().await;
+        }
+    }
+
+    /// Await the `reauth_before_write_lock` hook when installed.
+    #[inline]
+    pub async fn pause_reauth_before_write_lock(&self) {
+        #[cfg(feature = "test-hooks")]
+        if let Some(hook) = &self.reauth_before_write_lock {
             hook().await;
         }
     }
