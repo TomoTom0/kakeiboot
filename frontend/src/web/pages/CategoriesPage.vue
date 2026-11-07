@@ -14,7 +14,6 @@ import RankedList from '../components/RankedList.vue'
 import TrendWindow from '../components/TrendWindow.vue'
 import { errorMessage, formatYen } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { usePeriodMove } from '../composables/periodMove'
 import { firstString } from '../composables/receiptContext'
 import { currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
@@ -43,10 +42,10 @@ const analysis = ref<AnalysisResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-// TASK-146 §3: the pane's committed key (bumped at the load commit) and the
-// move's direction off the shared period store
+// TASK-146 §3: the pane's committed key (bumped at the load commit). TASK-161
+// §2 (web-common.period-move-voice): the key drops the PERIOD range — a
+// period step never remounts the pane (periodMove is gone)
 const committedKey = ref('')
-const move = usePeriodMove(committedKey)
 
 // the trend's movable window (TASK-104): the composable owns the trend
 // fetch and the stacked assembly
@@ -64,7 +63,7 @@ async function load(id?: number): Promise<void> {
     const a = await api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 })
     if (n !== seq) return
     analysis.value = a
-    committedKey.value = `${l}|${period.mode}|${period.range[0]}|${period.range[1]}|${period.labelQuery?.join(',') ?? ''}`
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -107,6 +106,7 @@ const rows = computed<StatsRow[]>(() => {
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
   if (res.truncated_rows > 0) {
     // the folded tail's amount: the period total minus the shown rows (the
@@ -191,15 +191,14 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       class="view-stack"
       :class="{ loading }"
     >
-      <!-- TASK-146 §3: the content transition fires at the load commit -->
-      <ContentSwap
-        :swap-key="committedKey"
-        :dir="move.dir.value"
-      >
+      <!-- TASK-146 §3: the content transition fires at the load commit.
+           TASK-161 §2: a period move renders in place (dir stays 'swap') -->
+      <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
-            :label="`${period.label}の支出`"
+            :label="period.label"
             :total="totals.amount"
+            :swap-key="committedKey"
           />
 
           <div class="dash-cols">

@@ -216,16 +216,18 @@ describe('topbar filter bar CSS (TASK-44)', () => {
     ).toBe(true)
   })
 
-  it('[covers:web-search.layout-real] /search の2行構成（.search-head・.search-tabs）と品目2行・件数行の規則がある', () => {
+  it('[covers:web-search.layout-real] /search の2行構成（.search-head・.search-tabs）と件数行の規則がある（品目行は .data-row 共通文法）', () => {
     // the layout facts jsdom cannot measure live in verify.spec.ts
     // (web-search.layout-real, 360px two rows / no overflow); the stylesheet
-    // side is pinned here: the head row, the tab row, the item rows' two-line
-    // composition and the meta line all have rules
-    for (const sel of ['.search-head', '.search-input', '.search-tabs', '.search-item-main', '.search-item-sub', '.search-meta']) {
+    // side is pinned here: the head row, the tab row and the meta line keep
+    // their rules. REVIEW-15 中1: the item tab's rows ride the shared
+    // .data-row grammar now — the per-surface .search-item-* composition
+    // (its own two-line rules) is gone from the stylesheet
+    for (const sel of ['.search-head', '.search-input', '.search-tabs', '.search-meta']) {
       expect(rulesFor(sel).length, sel).toBeGreaterThan(0)
     }
     expect(rulesFor('.search-head').some((r) => decl(r.body, 'display') === 'flex')).toBe(true)
-    expect(rulesFor('.search-item-sub').some((r) => /--bb-muted|color/.test(r.body))).toBe(true)
+    expect(css).not.toMatch(/\.search-item-(row|main|sub|name|category)/)
   })
 })
 
@@ -301,17 +303,20 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
     expect(css).not.toMatch(/\.donut\b/)
   })
 
-  it('[covers:web-receipts.dashboard] レシート行は1行 grid（3.2rem minmax(0,1fr) auto auto）で .recent-icon の規則は無く、日ごと見出しは 28px', () => {
-    // the one-line receipt row: date / store (ellipsis) / labels / amount
-    expect(
-      rulesFor('.recent-row').map((r) => decl(r.body, 'grid-template-columns')),
-    ).toContain('3.2rem minmax(0, 1fr) auto auto')
+  it('[covers:web-receipts.dashboard] レシート行は共通2行 .data-row（min-height 52px）で .recent-row の規則は無く、日ごと見出しは 28px', () => {
+    // TASK-167 D-1/D-2: the per-surface one-line grid is gone — the receipt
+    // rows ride the shared two-line DataRow grammar
+    expect(rulesFor('.recent-row')).toHaveLength(0)
+    expect(css).not.toMatch(/\.recent-row/)
     // the 34px icon column is gone from the stylesheet entirely
     expect(rulesFor('.recent-icon')).toHaveLength(0)
     expect(css).not.toMatch(/\.recent-icon/)
+    expect(rulesFor('.data-row').some((r) => decl(r.body, 'min-height') === '52px')).toBe(true)
+    expect(rulesFor('.data-row').some((r) => decl(r.body, 'flex-direction') === 'column')).toBe(true)
+    expect(rulesFor('.row-sub').some((r) => decl(r.body, 'font-size') === '0.8rem')).toBe(true)
     expect(rulesFor('.day-head').some((r) => decl(r.body, 'min-height') === '28px')).toBe(true)
     // review L5: the labels cell never wraps — overflow clips the dots (or
-    // the 削除済み badge row) so the row keeps its one 44px line
+    // the 削除済み badge row)
     expect(
       rulesFor('.row-labels').some(
         (r) => decl(r.body, 'flex-wrap') === 'nowrap' && decl(r.body, 'overflow') === 'hidden',
@@ -329,19 +334,28 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
   // spanning the row's full width including the paddings the old
   // background-origin: border-box used to cover). The bar grammar rules
   // (.row-bar/.row-seg) live in the TASK-129 block below.
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列1行44px（dot・diff列なし）・下端は絶対配置trackで gradient 規則は廃止・.meter 規則は無い', () => {
+  it('[covers:web-layout.ranked-row-single-line] .ranked-row はgrid規則無し・relative・下端bar分の padding-bottom・.week-row は旧5列gridを保持・行washのhoverは a.data-row.is-link', () => {
     const rows = rulesFor('.ranked-row')
     expect(rows.length, '.ranked-row rules').toBeGreaterThan(0)
+    // TASK-167 D-1: the row rides the shared DataRow grammar — no grid on
+    // the row itself anymore
+    for (const r of rows) {
+      expect(decl(r.body, 'grid-template-columns'), 'no ranked-row grid').toBeUndefined()
+    }
+    // TASK-129: the absolute track needs the row as its containing block;
+    // TASK-167: the padding keeps the text and the bottom bar apart
+    expect(rows.some((r) => decl(r.body, 'position') === 'relative')).toBe(true)
+    expect(rows.some((r) => decl(r.body, 'padding-bottom') === 'calc(var(--row-bar-h) + 4px)')).toBe(true)
+    // the week row keeps its own grid (its two-line composition predates the
+    // shared grammar)
     expect(
-      rows.some(
+      rulesFor('.week-row').some(
         (r) =>
           decl(r.body, 'grid-template-columns') === '12px minmax(0, 1fr) auto auto 12px' &&
           decl(r.body, 'gap') === '8px' &&
           decl(r.body, 'min-height') === '44px',
       ),
     ).toBe(true)
-    // TASK-129: the absolute track needs the row as its containing block
-    expect(rows.some((r) => decl(r.body, 'position') === 'relative')).toBe(true)
     // the gradient era is fully gone: no background-image on the row, no
     // --rank-fill token anywhere (the bar is a DOM element now)
     for (const r of rows) {
@@ -349,7 +363,8 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
       expect(r.body, '.ranked-row must not reference --rank-fill').not.toContain('--rank-fill')
     }
     expect(css).not.toMatch(/--rank-fill/)
-    // the absolutely-positioned bottom track (full row width incl. padding)
+    // the absolutely-positioned bottom track (full row width incl. padding);
+    // TASK-161 §7: the thickness reads --row-bar-h (the 6px literal is gone)
     const track = rulesFor('.ranked-bar-track')
     expect(track.length, '.ranked-bar-track rules').toBeGreaterThan(0)
     expect(
@@ -359,18 +374,20 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
           decl(r.body, 'bottom') === '0' &&
           decl(r.body, 'left') === '0' &&
           decl(r.body, 'right') === '0' &&
-          decl(r.body, 'height') === '6px',
+          decl(r.body, 'height') === 'var(--row-bar-h)',
       ),
     ).toBe(true)
     // the compare/diff column is gone with TASK-93 (no .ranked-diff rule at
     // all); the standalone meter element is gone from the ranked list too
     expect(rulesFor('.ranked-diff')).toHaveLength(0)
     expect(css).not.toMatch(/\.meter/)
-    // the link hover keeps painting background-color, never the shorthand
-    for (const r of rulesFor('a.ranked-row.is-link:hover')) {
+    // TASK-167 D-4: the row wash lives on the shared link rows only — the
+    // ranked row itself has no :hover rule anymore
+    for (const r of rulesFor('a.data-row.is-link:hover')) {
       expect(decl(r.body, 'background'), 'hover background shorthand').toBeUndefined()
     }
-    expect(rulesFor('a.ranked-row.is-link:hover').some((r) => decl(r.body, 'background-color') === 'var(--bb-hover)')).toBe(true)
+    expect(rulesFor('a.data-row.is-link:hover').some((r) => decl(r.body, 'background-color') === 'var(--bb-hover)')).toBe(true)
+    expect(css).not.toMatch(/\.ranked-row[^{]*:hover/)
   })
 })
 
@@ -734,16 +751,7 @@ describe('dashboard visual (TASK-105 §3/§5, post-implementation static checks)
     expect(css).not.toMatch(/--c-rest\b/)
   })
 
-  it('[covers:web-layout.ranked-row-single-line] .ranked-row は行頭12px swatch列の5列 grid・.ranked-swatch は丸で var(--rank-color)', () => {
-    const rows = rulesFor('.ranked-row')
-    expect(
-      rows.some(
-        (r) =>
-          decl(r.body, 'grid-template-columns') === '12px minmax(0, 1fr) auto auto 12px' &&
-          decl(r.body, 'gap') === '8px' &&
-          decl(r.body, 'min-height') === '44px',
-      ),
-    ).toBe(true)
+  it('[covers:web-layout.ranked-row-single-line] .ranked-swatch は丸で var(--rank-color)', () => {
     const sw = rulesFor('.ranked-swatch')
     expect(sw.length, '.ranked-swatch rules').toBeGreaterThan(0)
     expect(sw.some((r) => decl(r.body, 'border-radius') === '50%' && /var\(--rank-color\)/.test(decl(r.body, 'background') ?? ''))).toBe(true)
@@ -854,7 +862,7 @@ describe('stacked breakdown visual (TASK-123, static checks)', () => {
     }
   })
 
-  it('[covers:web-home.week-row-stack-bar] 週行は gradient を持たず bar は共通 .row-bar（flex row・高さ6px）+ .row-seg（旧 .week-bar/.week-seg 規則は廃止）', () => {
+  it('[covers:web-home.week-row-stack-bar] 週行は gradient を持たず bar は共通 .row-bar（flex row・高さは--row-bar-h）+ .row-seg（旧 .week-bar/.week-seg 規則は廃止）', () => {
     // §4-7 + TASK-129: no rule may paint .week-row with a gradient (the
     // composition lives in the shared .row-bar's segment elements)
     for (const r of rulesFor('.week-row')) {
@@ -863,17 +871,13 @@ describe('stacked breakdown visual (TASK-123, static checks)', () => {
     expect(rulesFor('.week-row').some((r) => decl(r.body, 'background-image') !== undefined)).toBe(false)
     // the ranked row is gradient-free too now (TASK-129): see the
     // ranked-row block above — this block owns the shared bar grammar
-    // the DOM bar: a flex row of segments at the fixed readable height
-    // (TASK-129: 6px exactly — the ranked-row bar shares the component, so
-    // the TASK-123 "4..8px implementation freedom" collapses to one value)
+    // the DOM bar: a flex row of segments at the ONE shared thickness —
+    // TASK-161 §7: the height reads the --row-bar-h variable (12px), never a
+    // per-surface literal
     const bar = rulesFor('.row-bar')
     expect(bar.length, '.row-bar rules').toBeGreaterThan(0)
     expect(bar.some((r) => decl(r.body, 'display') === 'flex')).toBe(true)
-    const heights = bar
-      .map((r) => Number(/^([\d.]+)px$/.exec(decl(r.body, 'height') ?? '')?.[1] ?? NaN))
-      .filter((n) => !Number.isNaN(n))
-    expect(heights.length, '.row-bar height declarations').toBeGreaterThan(0)
-    for (const h of heights) expect(h, 'the shared bar height is the 6px grammar').toBe(6)
+    expect(bar.some((r) => decl(r.body, 'height') === 'var(--row-bar-h)')).toBe(true)
     // the segments: full height, the shared outline, and the data-end cap
     const seg = rulesFor('.row-seg')
     expect(seg.length, '.row-seg rules').toBeGreaterThan(0)
@@ -888,7 +892,7 @@ describe('stacked breakdown visual (TASK-123, static checks)', () => {
     const track = rulesFor('.week-bar-track')
     expect(track.length, '.week-bar-track rules').toBeGreaterThan(0)
     expect(track.some((r) => decl(r.body, 'grid-column') === '1 / -1')).toBe(true)
-    expect(track.some((r) => decl(r.body, 'height') === '6px')).toBe(true)
+    expect(track.some((r) => decl(r.body, 'height') === 'var(--row-bar-h)')).toBe(true)
   })
 })
 
@@ -899,12 +903,13 @@ describe('stacked breakdown visual (TASK-123, static checks)', () => {
 // gradient rows and the week-scoped classes. ---
 
 describe('shared row bar component (TASK-129, static checks)', () => {
-  it('[covers:web-common.row-bar-component] .row-seg:last-child のデータ端cap（0 1.5px 1.5px 0）・bar文法は1組のみで track は行種別（ranked=absolute / week=grid）', () => {
-    // the cap: the data end (right) alone rounds — min(2px, 6px/4) = 1.5px;
-    // the base (left) stays square
+  it('[covers:web-common.row-bar-component] .row-seg:last-child のデータ端cap（0 2px 2px 0）・bar文法は1組のみで track は行種別（ranked=absolute / week=grid）', () => {
+    // the cap: the data end (right) alone rounds — TASK-161 §7: the DOM twin
+    // of BarSegs' capR min(2, thickness/4), 2px at the --row-bar-h 12px; the
+    // base (left) stays square
     const cap = rulesFor('.row-seg:last-child')
     expect(cap.length, '.row-seg:last-child cap rule').toBeGreaterThan(0)
-    expect(cap.some((r) => decl(r.body, 'border-radius') === '0 1.5px 1.5px 0')).toBe(true)
+    expect(cap.some((r) => decl(r.body, 'border-radius') === '0 2px 2px 0')).toBe(true)
     // no mid-bar rounding on the other segments and no other radius rule
     for (const r of rulesFor('.row-seg')) {
       const radius = decl(r.body, 'border-radius')
@@ -1029,5 +1034,217 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
     // reduced-motion turns the vocabulary off (the second guard)
     const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)
+  })
+})
+
+// TASK-161 (design: tmp/tasks/tm-161/design_period_ui.md v2 §7 + §2-2, 指摘9
+// and 指摘3): the row-bar thickness becomes ONE CSS variable (--row-bar-h)
+// that every horizontal bar rule references (no per-surface literals), the
+// list gaps widen, the data-end radius follows min(2, thickness/4) (the DOM
+// twin of BarSegs' capR), and the bar length eases through a width transition
+// (the period-move row vocabulary, off under reduced motion). TASK-162 §4
+// (design: tmp/tasks/tm-162/design_breakdown_stack.md v2, 指摘4) lifts the
+// value 12px -> 16px — the value that houses the §3 11px/600 in-bar label
+// (11px + 2.5px breathing room each side). Test-first: red until styles.css
+// lands it.
+describe('row bar thickness variable (TASK-161 §7 + TASK-162 §4)', () => {
+  it('[covers:web-common.row-bar-thickness] --row-bar-h 一元管理: .row-bar/track は var(--row-bar-h) 参照で 6px/12px 直置きなし・16px・gap 4px・radius は min(2, thickness/4) の DOM 双生（0 2px 2px 0）・width transition は reduced-motion で無効', () => {
+    // the ONE variable definition (TASK-162 §4: 16px)
+    expect(css).toMatch(/--row-bar-h:\s*16px/)
+    expect(css).not.toMatch(/--row-bar-h:\s*12px/)
+    // every horizontal-bar rule reads it — no per-surface height literal
+    for (const sel of ['.row-bar', '.ranked-bar-track', '.week-bar-track']) {
+      const r = rulesFor(sel).at(-1)
+      expect(r, sel).toBeDefined()
+      expect(decl(r!.body, 'height')).toBe('var(--row-bar-h)')
+    }
+    expect(css).not.toMatch(/height:\s*6px/)
+    expect(css).not.toMatch(/height:\s*12px/)
+    // the row list gaps widen (2px -> 4px; the week row's label/bar gap too)
+    expect(decl(rulesFor('.ranked').at(-1)!.body, 'gap')).toBe('4px')
+    expect(decl(rulesFor('.week-rows').at(-1)!.body, 'gap')).toBe('4px')
+    expect(decl(rulesFor('.week-row').at(-1)!.body, 'row-gap')).toBe('4px')
+    // the row's padding-bottom keeps the bar band the BAR's alone — the text
+    // clears it by the bar height + 4px (20px at the 16px bar)
+    expect(decl(rulesFor('.ranked-row').at(-1)!.body, 'padding-bottom')).toBe('calc(var(--row-bar-h) + 4px)')
+    // the data-end cap follows min(2, thickness/4) — 2px at the 16px
+    // thickness (the old fixed 1.5px is gone)
+    expect(decl(rulesFor('.row-seg:last-child').at(-1)!.body, 'border-radius')).toBe('0 2px 2px 0')
+    // the bar length eases (§2-2's row vocabulary) and reduced motion kills
+    // it (the width transition lives on the base rule; the reduced-motion
+    // block's later rule overrides it with none — the second guard). The
+    // SEGMENTS carry it too (review 中6): they paint at their own fixed px
+    // widths, so the outer bar's transition alone would swap the coloured
+    // shape at once
+    expect(rulesFor('.row-bar').some((r) => /width/.test(decl(r.body, 'transition') ?? ''))).toBe(true)
+    expect(rulesFor('.row-seg').some((r) => /width/.test(decl(r.body, 'transition') ?? ''))).toBe(true)
+    const rm = blockAfter(/@media \(prefers-reduced-motion[^{]*\)/)
+    expect(rm).toBeDefined()
+    expect(rulesFor('.row-bar', rm).length).toBeGreaterThan(0)
+    expect(decl(rulesFor('.row-bar', rm).at(-1)!.body, 'transition')).toBe('none')
+    expect(rulesFor('.row-seg', rm).length).toBeGreaterThan(0)
+    expect(decl(rulesFor('.row-seg', rm).at(-1)!.body, 'transition')).toBe('none')
+  })
+})
+
+// TASK-162 (design: tmp/tasks/tm-162/design_breakdown_stack.md v2 — §2/§3/§6,
+// 指摘2/3/6): three new static guards. (1) the trend bars' width cap becomes
+// ONE CSS variable (--trend-bar-w: 48px, the twin of --row-bar-h) with no
+// 34px literals left in .bar/.bar-stack; (2) the vertical bars' in-segment
+// label is UPRIGHT vertical-rl writing — the shared .bar-seg-label class the
+// TrendBars and Receipts bars both read; (3) the label type tokens: the
+// in-bar labels (11px/600/0.02em) and the axis/tick family (0.7rem/500/
+// tabular-nums, axis-labels 0.8rem/500) live in CSS variables with no
+// per-surface literals. Test-first: red until styles.css lands them.
+describe('trend bar width / vertical segment labels / label type tokens (TASK-162)', () => {
+  it('[covers:web-browse.trend-bar-width-margin] --trend-bar-w 一元管理: 48px 定義・.bar/.bar-stack は var 参照で 34px 直置きなし・y軸gutterは2.25rem帯', () => {
+    // the ONE variable definition (§6-1: 48px)
+    expect(css).toMatch(/--trend-bar-w:\s*48px/)
+    // both vertical-bar rules read it — the 34px literal is gone
+    for (const sel of ['.bar', '.bar-stack']) {
+      const found = rulesFor(sel).filter((r) => /max-width/.test(r.body))
+      expect(found.length, sel).toBeGreaterThan(0)
+      for (const r of found) expect(decl(r.body, 'max-width')).toBe('var(--trend-bar-w)')
+    }
+    expect(css).not.toMatch(/max-width:\s*34px/)
+    // the y-axis gutter narrows (2.5rem -> 2.25rem, ±0.25rem at implement
+    // time — the guard accepts the band)
+    const gutter = decl(rulesFor('.trend-wrap').at(-1)!.body, 'grid-template-columns')
+    expect(gutter ?? '').toMatch(/2(\.25)?\.?/)
+  })
+
+  it('[covers:web-browse.trend-bar-segment-label] .bar-seg-label は直立縦書き（vertical-rl + upright）— TrendBars と Receipts が共用する一つのclass', () => {
+    const r = rulesFor('.bar-seg-label').at(-1)
+    expect(r, '.bar-seg-label rule exists').toBeDefined()
+    expect(decl(r!.body, 'writing-mode')).toBe('vertical-rl')
+    expect(decl(r!.body, 'text-orientation')).toBe('upright')
+  })
+
+  it('[covers:web-common.label-type-tokens] label type token一元: bar内label（11px/600/0.02em）とtick系（0.7rem/500/tabular）と軸label（0.8rem/500・狭幅0.65rem）はCSS変数参照で直置きなし', () => {
+    // the token group exists and the in-bar labels read it
+    expect(css).toMatch(/--bar-label-size:\s*11px/)
+    expect(css).toMatch(/--bar-label-weight:\s*600/)
+    expect(css).toMatch(/--bar-label-tracking:\s*0\.02em/)
+    // TASK-162 review 低8: the vertical label's needed WIDTH is a token too
+    // (the Receipts daily grid's track floor reads it — 高1's containment fix)
+    expect(css).toMatch(/--bar-label-w:\s*15px/)
+    for (const sel of ['.row-seg-label', '.bar-seg-label']) {
+      const r = rulesFor(sel).at(-1)
+      expect(r, sel).toBeDefined()
+      expect(decl(r!.body, 'font-size'), sel).toBe('var(--bar-label-size)')
+      expect(decl(r!.body, 'font-weight'), sel).toBe('var(--bar-label-weight)')
+      expect(decl(r!.body, 'letter-spacing'), sel).toBe('var(--bar-label-tracking)')
+    }
+    // the old literal-sized in-bar label rule is gone
+    const rowLabel = rulesFor('.row-seg-label').at(-1)
+    expect(decl(rowLabel!.body, 'font-size')).not.toBe('10px')
+    // the tick family: 0.7rem/500/tabular-nums off the token
+    expect(css).toMatch(/--tick-label-size:\s*0\.7rem/)
+    expect(css).toMatch(/--tick-label-weight:\s*500/)
+    for (const sel of ['.y-axis', '.bar-val']) {
+      const r = rulesFor(sel).at(-1)
+      expect(r, sel).toBeDefined()
+      expect(decl(r!.body, 'font-size'), sel).toBe('var(--tick-label-size)')
+      expect(decl(r!.body, 'font-weight'), sel).toBe('var(--tick-label-weight)')
+      expect(decl(r!.body, 'font-variant-numeric'), sel).toBe('tabular-nums')
+    }
+    // the AXIS labels (review 低8): the month row AND the year row read the
+    // axis token pair — no per-surface 0.8rem/500/0.65rem literals (the
+    // ≤420px override rides the narrow token)
+    expect(css).toMatch(/--axis-label-size:\s*0\.8rem/)
+    expect(css).toMatch(/--axis-label-weight:\s*500/)
+    expect(css).toMatch(/--axis-label-size-narrow:\s*0\.65rem/)
+    for (const sel of ['.axis-labels', '.axis-years']) {
+      const r = rulesFor(sel).at(-1)
+      expect(r, sel).toBeDefined()
+      expect(decl(r!.body, 'font-size'), sel).toBe('var(--axis-label-size)')
+      expect(decl(r!.body, 'font-weight'), sel).toBe('var(--axis-label-weight)')
+    }
+    const narrow = blockAfter(/@media \(max-width: 420px\)[^{}]*\{[^{}]*\.trend-wrap \.axis-labels/)
+    expect(narrow, 'the ≤420px axis override block exists').toBeDefined()
+    expect(decl(narrow!, 'font-size')).toBe('var(--axis-label-size-narrow)')
+  })
+})
+
+
+// TASK-167 (design: tmp/tasks/tm-167/design_row_hierarchy.md v2 §2
+// D-2/D-4/D-6): the row hierarchy tokens (the amount is the strongest
+// figure at w700 tabular, the sub line drops to 0.8rem, the rows grow past
+// the old 44px), the hover family (an element-local underline + accent
+// reaction for pressable elements only, inside the hover-capable media,
+// focus-visible mirrors it) and the receipt detail's three-tier item
+// typography. Test-first: red until the implementation lands.
+describe('row hierarchy tokens + hover family (TASK-167)', () => {
+  it('[covers:web-common.data-row-grammar] 行token: 主行の金額は w700・tabular・副行は 0.8rem・行は2行分の高さ', () => {
+    const amount = rulesFor('.data-row .amount')
+    expect(amount.some((r) => decl(r.body, 'font-weight') === '700'), 'amount w700').toBe(true)
+    expect(
+      amount.some((r) => /tabular/.test(decl(r.body, 'font-variant-numeric') ?? '')),
+      'amount tabular',
+    ).toBe(true)
+    const sub = rulesFor('.row-sub')
+    expect(sub.some((r) => decl(r.body, 'font-size') === '0.8rem'), 'sub 0.8rem').toBe(true)
+    // two text lines grow past the old 44px single-line height
+    const row = rulesFor('.data-row')
+    expect(
+      row.some((r) => {
+        const h = decl(r.body, 'min-height')
+        return h !== undefined && parseFloat(h) >= 52
+      }),
+      'row min-height >= 52px',
+    ).toBe(true)
+  })
+
+  it('[covers:web-common.hover-ink-family] hover族: .hover-ink は underline+accent（hover可能media内のみ）・focus-visible も同表現・行washは .data-row へ移行', () => {
+    // every @media (hover: hover) block's inner text (the TASK-130 guard the
+    // family extends): the hover-ink reaction lives ONLY there
+    const hoverBlocks: string[] = []
+    for (const m of css.matchAll(/@media[^{]*hover:\s*hover[^{]*\{/g)) {
+      const open = css.indexOf('{', m.index)
+      let depth = 0
+      for (let i = open; i < css.length; i++) {
+        if (css[i] === '{') depth++
+        else if (css[i] === '}' && --depth === 0) {
+          hoverBlocks.push(css.slice(open + 1, i))
+          break
+        }
+      }
+    }
+    expect(hoverBlocks.length).toBeGreaterThan(0)
+    const hoverAll = hoverBlocks.join('\n')
+    expect(hoverAll).toMatch(/\.hover-ink[^{]*:hover[^{]*\{[^}]*text-decoration:\s*underline/)
+    expect(hoverAll).toMatch(/\.hover-ink[^{]*:hover[^{]*\{[^}]*color:\s*var\(--bb-accent[^)]*\)/)
+    // the keyboard focus takes the same local reaction (outside the media:
+    // focus-visible exists regardless of hover capability)
+    expect(css).toMatch(/\.hover-ink[^{]*:focus-visible[^{]*\{[^}]*color:\s*var\(--bb-accent[^)]*\)/)
+    // the row wash survives on the shared row vocabulary
+    expect(hoverAll).toMatch(/\.data-row[^{]*:hover[^{]*\{[^}]*background/)
+    // and the touch sticky-hover guard holds: NO hover-ink hover rule
+    // outside the hover-capable media
+    const outside = topLevel().replace(/@media[^{]*hover:\s*hover[^{]*\{[\s\S]*?\n\}/g, '')
+    expect(outside).not.toMatch(/\.hover-ink[^{]*:hover/)
+    // REVIEW-15 中2: the AppsPage text link rides the family too — its bare
+    // .more:hover is gone (the reaction is the .hover-ink rule alone) and the
+    // dead a.sub-row wash rule no longer claims a media-bare row hover
+    expect(outside).not.toMatch(/\.more\s*:hover/)
+    expect(css).not.toMatch(/a\.sub-row/)
+  })
+
+  it('[covers:web-receipts.items-typography] 明細3層: 品目金額は w600・明細合計は label縮小+w600・値 w700・上辺rule', () => {
+    const itemNum = rulesFor('.items td.num')
+    expect(itemNum.some((r) => decl(r.body, 'font-weight') === '600'), 'item amount w600').toBe(true)
+    const foot = rules(css).filter((r) => r.selectors.some((s) => s.includes('.items') && s.includes('tfoot')))
+    expect(foot.some((r) => decl(r.body, 'font-weight') === '700'), 'foot value w700').toBe(true)
+    expect(
+      foot.some((r) => {
+        const f = decl(r.body, 'font-size')
+        return f !== undefined && parseFloat(f) < 1
+      }),
+      'foot label smaller than the base',
+    ).toBe(true)
+    expect(
+      foot.some((r) => /border-top/.test(r.body) && !/border-top-style:\s*none/.test(r.body)),
+      'the rule above 明細合計',
+    ).toBe(true)
   })
 })

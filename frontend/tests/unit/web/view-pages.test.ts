@@ -127,11 +127,13 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     expect(rest.element.tagName).not.toBe('A')
   })
 
-  // TASK-146 §3 #6 (web-common.content-swap): the list screens' content
-  // transition fires at the load COMMIT — mid-refetch the old content stays
-  // dimmed with the swap key unmoved, the commit then slides back for a step
-  // into the past. Written test-first.
-  it('[covers:web-common.content-swap] 期間stepの内容遷移は load 確定時に発火（再取得中は旧内容の dim・確定で slide-back）', async () => {
+  // TASK-146 §3 #6 (web-common.content-swap): the content transition fires at
+  // the load COMMIT — mid-refetch the old content stays dimmed with the swap
+  // key unmoved. TASK-161 §2 (web-common.period-move-voice, 指摘3): a PERIOD
+  // step never slides/remounts the pane anymore — the committedKey drops the
+  // period range, so the commit renders in place (same pane node, no
+  // slide-back classes). Written test-first.
+  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepの内容遷移は pane を再mountしない（再取得中は旧内容の dim・確定時もslide classなし・同一DOM）', async () => {
     let gated = false
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
@@ -150,16 +152,20 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    const paneBefore = swapEl().element.firstElementChild
     release()
     await flushPromises()
+    // the commit lands in place: no slide vocabulary, the SAME pane node
+    // (the period change never bumps the committedKey)
     const kids = Array.from(swapEl().element.children)
-    // into the past: the from date moved down, so the entering content
-    // slides in from the left
-    expect(kids.some((el) => el.classList.contains('slide-back-enter-active'))).toBe(true)
-    expect(kids.some((el) => el.classList.contains('slide-back-leave-active'))).toBe(true)
+    expect(
+      kids.some((el) =>
+        Array.from(el.classList).some((c) => c.includes('-enter-') || c.includes('-leave-')),
+      ),
+    ).toBe(false)
+    expect(swapEl().element.firstElementChild).toBe(paneBefore)
     await settle()
-    expect(swapEl().element.children).toHaveLength(1)
-    expect(wrapper.find('.period-label').text()).toBe('2026年9月の支出')
+    expect(wrapper.find('.period-label').text()).toBe('2026年9月')
   })
 })
 
@@ -205,7 +211,7 @@ describe('StoresPage (list, TASK-89 redesign)', () => {
 })
 
 describe('AxisDetailPage (TASK-89 §1-(5))', () => {
-  it('[covers:web-axis.unified-skeleton][covers:web-browse.trend-month-window] 大カテゴリ: 同一骨格（PageHead・期間ヘッダ・チップ・推移・交差ランキング・最近の明細）で sidebar のカテゴリ節が active・推移は6か月窓', async () => {
+  it('[covers:web-axis.unified-skeleton][covers:web-browse.trend-month-window][covers:web-axis.page-back-removed] 大カテゴリ: 同一骨格（PageHead・期間ヘッダ・チップ・推移・交差ランキング・最近の明細）で sidebar のカテゴリ節が active・推移は6か月窓', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getAnalysis')
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
@@ -216,7 +222,10 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
     // the trend rides the 6-month window in month mode
     expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'category', granularity: 'month', from: '2026-05-01', to: '2026-10-31' }))
     // the skeleton parts all draw
-    expect(wrapper.find('[data-test="page-back"]').attributes('aria-label')).toBe('カテゴリ一覧へ戻る')
+    // TASK-164 §2-4/§2-6: the PageHead ‹ is gone (the topbar ‹ took the
+    // axis back over — the heading row itself stays: kind label / name / total)
+    expect(wrapper.find('.page-head [data-test="page-back"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="topbar-back"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="total"]').text()).toBe('550円')
     expect(wrapper.find('[data-test="axis-period"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="axis-period"]').find('[data-test="period-total"]').text()).toBe('550円')
@@ -250,14 +259,15 @@ describe('AxisDetailPage (TASK-89 §1-(5))', () => {
     expect(unc.wrapper.find('[data-test="total"]').exists()).toBe(true)
   })
 
-  it('[covers:web-axis.unified-skeleton] 店・品目・ラベル・支払の軸も同骨格（名前keyは解決処理なしで空データでも骨格描画）', async () => {
+  it('[covers:web-axis.unified-skeleton][covers:web-axis.page-back-removed] 店・品目・ラベル・支払の軸も同骨格（名前keyは解決処理なしで空データでも骨格描画・PageHead ‹ なし/topbar ‹ あり）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getAnalysis')
     const store = await mountApp('/axes/store/1?month=2026-10')
     expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ axis: 'category', store_id: 1 }))
     expect(store.wrapper.find('[data-test="cross"]').text()).toContain('この店で買ったカテゴリ')
     expect(store.wrapper.find('[data-test="nav-stores"]').classes()).toContain('active')
-    expect(store.wrapper.find('[data-test="page-back"]').attributes('aria-label')).toBe('店一覧へ戻る')
+    expect(store.wrapper.find('.page-head [data-test="page-back"]').exists()).toBe(false)
+    expect(store.wrapper.find('[data-test="topbar-back"]').exists()).toBe(true)
     // the name-keyed axes resolve nothing: an unknown item still draws
     const item = await mountApp('/axes/item/存在しない品目?month=2026-10')
     expect(item.wrapper.find('[data-test="trend-card"]').exists()).toBe(true)
@@ -438,18 +448,19 @@ describe('ReceiptsPage (dashboard)', () => {
     const cashRow = wrapper.find('[data-test="payments"] [data-test="row-現金"]')
     expect(cashRow.find('.ranked-swatch').exists()).toBe(true)
     expect(cashRow.attributes('style')).toContain('--rank-color: var(--series-4)')
-    // TASK-75 §6-4: the receipt rows are one line (date / store / labels /
-    // amount) — no icon column, no sub line
-    const row = wrapper.find('[data-test="receipt-101"] a.recent-row')
+    // TASK-167 D-1: the receipt rows ride the shared two-line DataRow (the
+    // per-surface receipt-row class) — no icon column
+    const row = wrapper.find('[data-test="receipt-101"] a.data-row')
+    expect(row.classes()).toContain('receipt-row')
     expect(row.find('.recent-icon').exists()).toBe(false)
-    expect(row.find('.recent-main').exists()).toBe(false)
+    expect(row.find('.row-main').exists()).toBe(true)
     expect(row.find('[data-test="label-dot"]').exists()).toBe(true)
-    // TASK-63/57: the day head carries the date, so the row's column shows
-    // the time (mock 101 is 18:30)
-    expect(row.find('.recent-date').text()).toBe('18:30')
+    // TASK-63/57: the day head carries the date, so the row's sub line
+    // shows the time (mock 101 is 18:30)
+    expect(row.find('.row-fig').text()).toBe('18:30')
     expect(row.text()).toContain('Aマート')
     expect(row.text()).toContain('400円')
-    expect(row.text()).not.toContain('品目')
+    expect(row.find('.row-items').text()).toBe('牛乳・パン')
     expectNoEditing(wrapper)
 
     await wrapper.find('[data-test="filters-toggle"]').trigger('click')
@@ -473,7 +484,7 @@ describe('ReceiptsPage (dashboard)', () => {
     expect(wrapper.find('[data-test="receipt-101"]').exists()).toBe(false)
   })
 
-  it('[covers:web-receipts.kpi-parity][covers:web-receipts.group-time-column][covers:web-receipts.list-time-order] KPI は {label}の支出+1日あたり・同一日内は時刻降順で行は時刻列（searchItems も時刻順）', async () => {
+  it('[covers:web-receipts.kpi-parity][covers:web-receipts.group-time-column][covers:web-receipts.list-time-order] KPI は {label}（の支出なし・step pair付き）+1日あたり・同一日内は時刻降順で行は時刻列（searchItems も時刻順）', async () => {
     // 102 joins 101's day with an earlier time; 103 loses its time — the
     // same-day group orders by time desc (18:30 above 09:00, a time-less row
     // last) and the row column shows the time / '-'
@@ -481,8 +492,12 @@ describe('ReceiptsPage (dashboard)', () => {
     await api.updateReceipt(1, 103, { revision: 1, set: { purchased_time: null } })
     const { wrapper } = await mountApp('/receipts?month=2026-10')
     const kpi = wrapper.find('[data-test="summary"]')
-    // TASK-57 A6: the same KPI vocabulary as the other dashboards
-    expect(kpi.find('.label').text()).toBe('2026年10月の支出')
+    // TASK-57 A6: the same KPI vocabulary as the other dashboards.
+    // TASK-161 §3/§4 (指摘5): the label is period.label alone (no「の支出」
+    // suffix) with the step pair around it (web-common.period-step)
+    expect(kpi.find('.label').text()).toBe('2026年10月')
+    expect(kpi.find('[data-test="period-step-prev"]').exists()).toBe(true)
+    expect(kpi.find('[data-test="period-step-next"]').exists()).toBe(true)
     const sub = kpi.find('.kpi-sub').text()
     expect(sub).toContain('レシート 3件')
     expect(sub).toContain('1日あたり 63円') // 948 / 15日（進行中は今日まで）
@@ -490,10 +505,10 @@ describe('ReceiptsPage (dashboard)', () => {
     const groups = wrapper.findAll('.day-group')
     const day10 = groups.find((g) => g.text().includes('10月10日'))!
     const rows = day10.findAll('li')
-    expect(rows.map((r) => r.find('.recent-date').text())).toEqual(['18:30', '09:00'])
+    expect(rows.map((r) => r.find('.row-fig').text())).toEqual(['18:30', '09:00'])
     expect(rows[0]!.attributes('data-test')).toBe('receipt-101')
     const day5 = groups.find((g) => g.text().includes('10月5日'))!
-    expect(day5.find('[data-test="receipt-103"] .recent-date').text()).toBe('-')
+    expect(day5.find('[data-test="receipt-103"] .row-fig').text()).toBe('-')
     // the mock's item-level list keeps the same key (date desc -> time desc)
     const items = await api.searchItems(1, { from: '2026-10-01', to: '2026-10-31' })
     const sameDay = items.items.filter((i) => i.purchased_on === '2026-10-10')
@@ -641,7 +656,7 @@ describe('ReceiptsPage (dashboard)', () => {
 
   it('[covers:web-receipts.period-identity-in-url] フィルタ適用後も URL に month= が残り再読込で月モード・支払方法の空テキスト統一', async () => {
     const { wrapper, router } = await mountApp('/receipts?month=2026-09')
-    expect(wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
+    expect(wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月')
     // TASK-57 A1: the same empty text as every stats card
     expect(wrapper.find('[data-test="payments"] .empty').text()).toBe('この期間の記録はありません。')
     await wrapper.find('[data-test="filters-toggle"]').trigger('click')
@@ -662,7 +677,7 @@ describe('ReceiptsPage (dashboard)', () => {
     // a fresh mount of that URL (the literal form of the asserted query)
     // restores the month mode
     const again = await mountApp('/receipts?item=%E7%89%9B%E4%B9%B3&month=2026-09')
-    expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月の支出')
+    expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月')
   })
 
   // TASK-105 (landed, web-shell.loading-skeleton revised, design §5-4):
@@ -1005,13 +1020,13 @@ describe('RankedList row rendering (TASK-74 stage 4)', () => {
       const foodSeg = track('食費').find('.row-bar .row-seg')
       expect(track('食費').exists()).toBe(true)
       expect(foodSeg.exists()).toBe(true)
-      expect(foodSeg.attributes('style') ?? '').toContain('background: var(--series-4)')
+      expect(foodSeg.attributes('style') ?? '').toContain('background-color: var(--series-4)')
       const widthOf = (s: ReturnType<W['find']>) =>
         Number.parseFloat(/width:\s*([\d.]+)px/.exec(s.attributes('style') ?? '')?.[1] ?? 'NaN')
       expect(widthOf(foodSeg)).toBeCloseTo(165, 1)
       // the null-key row: rest grey, its own value/scale width (100 → 30px)
       const restSeg = track('その他').find('.row-bar .row-seg')
-      expect(restSeg.attributes('style') ?? '').toContain('background: var(--series-rest)')
+      expect(restSeg.attributes('style') ?? '').toContain('background-color: var(--series-rest)')
       expect(widthOf(restSeg)).toBeCloseTo(30, 1)
       // one common scale: the length ratio equals the value ratio
       expect(widthOf(foodSeg) / widthOf(restSeg)).toBeCloseTo(550 / 100, 4)
@@ -1126,5 +1141,29 @@ describe('ReceiptsPage 絞り込み popover (TASK-76 §6-3)', () => {
     await settle()
     expect(narrow.wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(narrow.wrapper.find('.popover-scrim').exists()).toBe(false)
+  })
+})
+
+
+// TASK-167 A系: the ranked rows ride the same two-line grammar with the
+// bottom bar kept (design v2 §2 D-1/D-2/D-3). Test-first: red until it lands.
+describe('ranked rows two-line hierarchy (TASK-167)', () => {
+  it('[covers:web-common.data-row-grammar][covers:web-common.row-top-items-display] ランキング行は2行構成（主行=軸label+金額・副行=代表品目+share）で下端barは維持', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/categories?month=2026-10')
+    const rows = wrapper.findAll('.ranked-row')
+    expect(rows.length).toBeGreaterThan(0)
+    const row = rows[0]!
+    expect(row.classes()).toContain('data-row')
+    expect(row.find('.row-main').exists()).toBe(true)
+    expect(row.find('.row-main .amount').exists()).toBe(true)
+    // the sub line carries the derived top items of that axis value and the
+    // share as its secondary figure (牛乳 leads the mock's 食費 spending)
+    const sub = row.find('.row-sub')
+    expect(sub.exists()).toBe(true)
+    expect(sub.text()).toContain('牛乳')
+    expect(sub.text()).toMatch(/%/)
+    // the bottom bar track (the TASK-129 grammar) survives the rework
+    expect(row.find('.row-bar').exists()).toBe(true)
   })
 })

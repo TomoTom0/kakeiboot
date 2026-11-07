@@ -32,6 +32,56 @@ export function truncateLabel(label: string, max: number): string {
 }
 
 /**
+ * Estimate a text's drawn width under the monospace assumption (TASK-161
+ * §6-2): every code point paints one em — the char-count × em conversion the
+ * axis-label thinning and the in-bar series labels share. A canvas measure
+ * would be exact but is overkill for a fit decision; the estimate errs wide
+ * (CJK-heavy labels thin/hide a little early, never overlapping).
+ */
+export function estimateTextWidth(text: string, fontPx: number): number {
+  return Array.from(text).length * fontPx
+}
+
+/**
+ * Truncate a label to a drawn-width budget (TASK-161 §6-1/§6-2 — the px twin
+ * of truncateLabel): the widest code-point prefix (plus the … tail) that fits
+ * `maxWidth` at `fontPx`, never empty. A label that already fits returns
+ * unchanged.
+ */
+export function truncateLabelWidth(label: string, maxWidth: number, fontPx: number): string {
+  if (fontPx <= 0) return label
+  const budget = Math.floor(maxWidth / fontPx)
+  const chars = Array.from(label)
+  if (chars.length <= budget) return label
+  return `${chars.slice(0, Math.max(1, budget - 1)).join('')}…`
+}
+
+/**
+ * The VERTICAL bars' in-segment label fit (TASK-162 §2-3, design: tmp/tasks/
+ * tm-162/design_breakdown_stack.md v2): the label runs top→bottom, so the
+ * fit axis is the segment's drawn HEIGHT and the width is a fixed 1-em +
+ * paddings (15px) that never needs judging. The full name whenever
+ * `estimateTextWidth(label, font) + the 0.02em tracking` fits the height
+ * minus the 4px end paddings, the … tail truncation next, null when even the
+ * 1-char + … minimum cannot fit (the caller keeps the colour-only fallback —
+ * the jsdom unmeasured size 0 lands here). The letter-spacing rides the
+ * estimate as a per-char 2% of the em (§3-1's token), erring wide.
+ */
+export function verticalSegLabel(label: string, sizePx: number, fontPx = 11): string | null {
+  // the tracking-inclusive per-char pitch: 1em + 0.02em letter-spacing
+  const pitch = fontPx * 1.02
+  const avail = sizePx - 4
+  // the half-pixel tolerance: the 26px fold bar's own arithmetic (2 × 11px +
+  // 4px pads) leaves the「○…」minimum at exactly 22px of glyphs — the 2%
+  // tracking's 0.44px must not evict the minimum the fold guarantees
+  const fits = (text: string): boolean => Array.from(text).length * pitch <= avail + 0.5
+  if (avail <= 0 || label === '') return null
+  if (fits(label)) return label
+  const fitted = truncateLabelWidth(label, avail, pitch)
+  return fits(fitted) ? fitted : null
+}
+
+/**
  * Format an ISO date "YYYY-MM-DD" as "YYYY年M月D日" for chart axis labels (spec §11-6).
  * Returns `raw` unchanged when it does not strictly match the form — no Date parsing,
  * so timezone shifts and loose formats stay out of scope.

@@ -180,28 +180,29 @@ test.describe('ledger switch via account menu (390x780)', () => {
 })
 
 // --- anchored popover shift: the panel rect is measured after opening and
-// pushed back inside the 16px viewport margins via --popover-shift (bare
-// chips of the default seed keep the picker width deterministic). Seeded
-// with bareTags (design §9-1 alt-2): at both 390px and 360px the full tags
-// row keeps the picker host near the row's end (measured panel left 223 of
-// 390, shift 0px — the §9-1 first alternative's wrap never happens), so
-// receipt 101 drops its tags and the host sits at the row head where the
-// panel crosses the 16px margin and the correction demonstrably fires ---
+// pushed back inside the 16px viewport margins via --popover-shift.
+// TASK-167 D-10 moved the label picker's host from the old tags row onto
+// the receipt head's datetime line — the host now lands mid-line where the
+// panel fits unshifted (measured panel left 224 of 390, shift 0px at 390;
+// the wrapped-line positions at 360 land 20px short of the margin too), so
+// the seed cannot force a crossing there anymore. The non-vacuous proof
+// rides the account menu instead: its trigger hugs the topbar's 8px right
+// padding, past the 16px viewport margin, so the right-anchored menu
+// crosses the right margin and the correction demonstrably fires (a
+// negative shift) ---
 
 test.describe('popover shift (390x780)', () => {
   test.use({ viewport: { width: 390, height: 780 } })
 
   test('[covers:web-shell.popover-shift-real] anchored popover は --popover-shift で 16px margin 内へ収まる', async ({ page }) => {
     logPageIssues(page, 'popover-shift')
-    await installApiStub(page, { bareTags: true })
+    await installApiStub(page)
     await page.goto('/receipts/101')
     await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
-    // the feed renders the whole window's panels, each with its own picker
-    // button — scope to panel 101's own trigger
-    await page.locator('[data-test="receipt-panel-101"] [data-test="label-add"]').click()
-    await expect(page.locator('.label-picker-pop .popover-dialog')).toBeVisible()
+    await page.locator('[data-test="account-button"]').click()
+    await expect(page.locator('[data-test="account-menu"]')).toBeVisible()
     const m = await page.evaluate(() => {
-      const el = document.querySelector('.label-picker-pop .popover-dialog')!
+      const el = document.querySelector('[data-test="account-menu"]')!
       const r = el.getBoundingClientRect()
       return {
         left: r.left,
@@ -213,10 +214,13 @@ test.describe('popover shift (390x780)', () => {
     const dump = JSON.stringify(m)
     expect(m.left, dump).toBeGreaterThanOrEqual(15)
     expect(m.right, dump).toBeLessThanOrEqual(m.innerWidth - 15)
-    // non-vacuous: the correction actually fired (shift parsed as a number > 0)
+    // non-vacuous: the correction actually fired (shift parsed as a finite
+    // number — the right-anchored menu crosses the right viewport margin, so
+    // the correction is NEGATIVE; a positive shift would be a regression the
+    // old Math.abs assertion could not catch. REVIEW-15 低4)
     const shift = parseFloat(m.shift)
     expect(Number.isFinite(shift), dump).toBe(true)
-    expect(shift, dump).toBeGreaterThan(0)
+    expect(shift, dump).toBeLessThan(0)
   })
 })
 
@@ -242,6 +246,18 @@ for (const spec of [
       // dialog (a bare visibility wait could measure pre-narrow)
       if (spec.narrow) {
         await expect(page.locator('.filters-popover .popover-dialog.is-narrow')).toBeVisible()
+        // web-common.overlay-transition: the sheet ENTERS on the 8px rise —
+        // the resting geometry (bottom on the viewport floor) is only true
+        // once the fade has settled, so wait the transition out before
+        // measuring
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const el = document.querySelector('.filters-popover .popover-dialog')
+              return el ? Math.abs(el.getBoundingClientRect().bottom - window.innerHeight) : 999
+            }),
+          )
+          .toBeLessThanOrEqual(1)
       } else {
         await expect(page.locator('.filters-popover .popover-dialog:not(.is-narrow)')).toBeVisible()
       }
@@ -326,6 +342,7 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
       return {
         lock: document.documentElement.classList.contains('drawer-lock'),
         overflow: getComputedStyle(document.documentElement).overflow,
+        scrimOpacity: getComputedStyle(scrim).opacity,
         scrimTop: sr.top,
         scrimLeft: sr.left,
         scrimRight: sr.right,
@@ -340,6 +357,7 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
     const dump = JSON.stringify(m)
     expect(m.lock, dump).toBe(true)
     expect(m.overflow, dump).toBe('hidden')
+    expect(m.scrimOpacity, 'the open scrim sits at the visible pole of the opacity fade').toBe('1')
     expect(Math.abs(m.scrimTop - 56), dump).toBeLessThanOrEqual(1)
     expect(Math.abs(m.scrimLeft), dump).toBeLessThanOrEqual(1)
     expect(Math.abs(m.scrimRight - m.innerWidth), dump).toBeLessThanOrEqual(1)
@@ -349,18 +367,31 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
     expect(m.hitMenuInTopbar, 'the topbar (z 40) stays above the drawer layers').toBe(true)
     expect(Math.abs((await mainX()) - x0), 'the main column never moves').toBeLessThanOrEqual(1)
 
-    // close: everything modal is gone and the sidebar is off-screen again
+    // close: everything modal is gone and the sidebar is off-screen again.
+    // TASK-146 §3 #17: the scrim stays in the DOM as an opacity fade — the
+    // closed state reads opacity 0 / pointer-events none, and the content
+    // underneath is reachable THROUGH it (the old display:none flip is gone)
     await page.locator('[data-test="menu-button"]').click()
     await expect.poll(async () => (await sidebarRect()).right <= 0, { timeout: 3_000 }).toBe(true)
-    const closed = await page.evaluate(() => ({
-      lock: document.documentElement.classList.contains('drawer-lock'),
-      mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
-      scrim: getComputedStyle(document.querySelector('.scrim')!).display,
-    }))
+    const closed = await page.evaluate(() => {
+      const scrim = document.querySelector('.scrim')!
+      const cs = getComputedStyle(scrim)
+      const feed = document.querySelector('[data-test="feed-prev"]')!.getBoundingClientRect()
+      const hit = document.elementFromPoint(feed.left + feed.width / 2, feed.top + feed.height / 2)
+      return {
+        lock: document.documentElement.classList.contains('drawer-lock'),
+        mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
+        scrimOpacity: cs.opacity,
+        scrimPointerEvents: cs.pointerEvents,
+        hitFeedThroughScrim: hit !== null && hit.closest('.scrim') === null,
+      }
+    })
     const cdump = JSON.stringify(closed)
     expect(closed.lock, cdump).toBe(false)
     expect(closed.mainInert, cdump).toBe(false)
-    expect(closed.scrim, cdump).toBe('none')
+    expect(closed.scrimOpacity, cdump).toBe('0')
+    expect(closed.scrimPointerEvents, cdump).toBe('none')
+    expect(closed.hitFeedThroughScrim, 'the closed scrim is hit-through (the content underneath works)').toBe(true)
     expect(Math.abs((await mainX()) - x0), cdump).toBeLessThanOrEqual(1)
   })
 })
@@ -382,15 +413,26 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
     const sidebarRect = () => page.evaluate(() => document.querySelector('.sidebar')!.getBoundingClientRect())
     const mainX = () => page.evaluate(() => document.querySelector('.app-main')!.getBoundingClientRect().x)
 
-    // TASK-89: the drawer starts closed even at 900px+
+    // TASK-89: the drawer starts closed even at 900px+. TASK-146 §3 #17: the
+    // scrim is the opacity fade now — closed reads opacity 0 / pointer-events
+    // none (hit-through), not a display flip
     await expect.poll(async () => (await sidebarRect()).right <= 0, { timeout: 3_000 }).toBe(true)
-    const m0 = await page.evaluate(() => ({
-      scrim: getComputedStyle(document.querySelector('.scrim')!).display,
-      mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
-      lock: document.documentElement.classList.contains('drawer-lock'),
-    }))
+    const m0 = await page.evaluate(() => {
+      const cs = getComputedStyle(document.querySelector('.scrim')!)
+      const feed = document.querySelector('[data-test="feed-prev"]')!.getBoundingClientRect()
+      const hit = document.elementFromPoint(feed.left + feed.width / 2, feed.top + feed.height / 2)
+      return {
+        scrimOpacity: cs.opacity,
+        scrimPointerEvents: cs.pointerEvents,
+        hitFeedThroughScrim: hit !== null && hit.closest('.scrim') === null,
+        mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
+        lock: document.documentElement.classList.contains('drawer-lock'),
+      }
+    })
     const d0 = JSON.stringify(m0)
-    expect(m0.scrim, d0).toBe('none')
+    expect(m0.scrimOpacity, d0).toBe('0')
+    expect(m0.scrimPointerEvents, d0).toBe('none')
+    expect(m0.hitFeedThroughScrim, d0).toBe(true)
     expect(m0.mainInert, d0).toBe(false)
     expect(m0.lock, d0).toBe(false)
 
@@ -403,13 +445,18 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
         return Math.abs(r.left) <= 1 && Math.abs(r.top - 60) <= 1 && Math.abs(r.width - 240) <= 1
       }, { timeout: 3_000 })
       .toBe(true)
-    const m = await page.evaluate(() => ({
-      scrim: getComputedStyle(document.querySelector('.scrim')!).display,
-      mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
-      lock: document.documentElement.classList.contains('drawer-lock'),
-    }))
+    const m = await page.evaluate(() => {
+      const cs = getComputedStyle(document.querySelector('.scrim')!)
+      return {
+        scrimOpacity: cs.opacity,
+        scrimPointerEvents: cs.pointerEvents,
+        mainInert: document.querySelector('.main-col')!.hasAttribute('inert'),
+        lock: document.documentElement.classList.contains('drawer-lock'),
+      }
+    })
     const dump = JSON.stringify(m)
-    expect(m.scrim, dump).toBe('block')
+    expect(m.scrimOpacity, dump).toBe('1')
+    expect(m.scrimPointerEvents, dump).toBe('auto')
     expect(m.mainInert, dump).toBe(false)
     expect(m.lock, dump).toBe(false)
     const x0 = await mainX()
@@ -529,21 +576,24 @@ test.describe('apps grant ledger chip (390x780)', () => {
 test.describe('series tokens dark switch (390x780)', () => {
   test.use({ viewport: { width: 390, height: 780 } })
 
-  test('[covers:web-common.series-color-assignment] dark theme で series token が切替わる（食費 segment は light/dark 各々の --series-1 実効値・行swatchも同時に入れ替わる）', async ({ page }) => {
+  test('[covers:web-common.series-color-assignment] dark theme で series token が切替わる（食費 segment は light/dark 各々の --series-1 実効値・内訳1本bar segmentも同時に入れ替わる）', async ({ page }) => {
     logPageIssues(page, 'series-dark')
     await installApiStub(page)
     await page.goto('/')
     await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
     await page.waitForLoadState('networkidle')
-    // the mock's top series is 食費 (category id 1 -> slot 1 -> --series-1);
-    // its breakdown row reads the same key
+    // the mock's top series is 食費 (category id 1 -> slot 1 -> --series-1).
+    // TASK-162 §1 replaced the breakdown zone's ranked rows with the ONE
+    // stacked bar — the second surface reading the same key on Home is the
+    // one-bar's own segment (the /categories ranked-row swatch has its own
+    // check in verify.spec.ts's series-colors test)
     const sample = () =>
       page.evaluate(() => {
         const seg = Array.from(document.querySelectorAll('[data-test="bar-2026-10"] .bar-seg')).find((s) =>
           (s.getAttribute('title') ?? '').startsWith('食費'),
         )
-        const row = Array.from(document.querySelectorAll('[data-test="breakdown"] .ranked-row')).find((r) =>
-          (r.querySelector('.ranked-label')?.textContent ?? '').trim() === '食費',
+        const barSeg = Array.from(document.querySelectorAll('[data-test="breakdown"] [data-test="breakdown-seg"]')).find((s) =>
+          (s.getAttribute('title') ?? '').startsWith('食費'),
         )
         const probe = document.createElement('span')
         probe.style.background = 'var(--series-1)'
@@ -552,7 +602,7 @@ test.describe('series tokens dark switch (390x780)', () => {
         probe.remove()
         return {
           seg: seg ? getComputedStyle(seg).backgroundColor : null,
-          swatch: row?.querySelector('.ranked-swatch') ? getComputedStyle(row.querySelector('.ranked-swatch')!).backgroundColor : null,
+          barSeg: barSeg ? getComputedStyle(barSeg).backgroundColor : null,
           token,
         }
       })
@@ -563,9 +613,9 @@ test.describe('series tokens dark switch (390x780)', () => {
     // the light scheme paints the light token and dark the dark token
     expect(light.seg, dump).toBe(light.token)
     expect(dark.seg, dump).toBe(dark.token)
-    // the row swatch follows in lockstep with the segment
-    expect(light.swatch, dump).toBe(light.seg)
-    expect(dark.swatch, dump).toBe(dark.seg)
+    // the breakdown one-bar's segment follows in lockstep with the trend segment
+    expect(light.barSeg, dump).toBe(light.seg)
+    expect(dark.barSeg, dump).toBe(dark.seg)
     // non-vacuous: the two schemes really carry different token values
     expect(dark.token, dump).not.toBe(light.token)
   })

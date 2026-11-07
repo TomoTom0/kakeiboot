@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from 'vue'
+import AppearList from './AppearList.vue'
+import RowBar from './RowBar.vue'
+import TweenYen from './TweenYen.vue'
 import { formatYen } from '../composables/format'
 import { allocateStack, type AllocatedSegment, type StackedSegment } from '@/shared/lib/stackedBars'
 
@@ -19,19 +22,23 @@ import { allocateStack, type AllocatedSegment, type StackedSegment } from '@/sha
 // TASK-123 (design §4-7): the bar is a DOM element structure now — the old
 // multi-stop linear-gradient string is gone (a gradient cannot carry the
 // per-segment title, the 1px outline, the allocation rules or the corner
-// cap). The row left the shared .ranked-row bottom-gradient grammar: the bar
-// is a 6px flex row of segments whose px widths come from the shared
-// allocateStack (§4-5 horizontal variant: the full fill length splits by
-// value ratio, the outline consumes inside, minimum 3px, 5%/size folds,
-// sub-3px fill-only) and the data end (right) alone rounds.
+// cap).
 //
 // TASK-129 (design §4-2, web-common.row-bar-component + web-common.bar-scale):
-// the bar element is the SAME shared DOM bar component as the ranked rows'
-// (.row-bar + .row-seg — the week-scoped .week-bar/.week-seg classes are
-// gone), and the bar's full length rides the screen's absolute scale
-// (week total / scale × track) instead of the old week/max-week fill — so
-// even the max week no longer pegs the full track, and the same amount
-// paints the same length as the ranked rows over the same track width.
+// the bar element is the SAME shared DOM bar as the ranked rows' (the ONE
+// RowBar component since TASK-161 §7), and the bar's full length rides the
+// screen's absolute scale (week total / scale × track) instead of the old
+// week/max-week fill — so even the max week no longer pegs the full track,
+// and the same amount paints the same length as the ranked rows over the
+// same track width.
+//
+// TASK-161 §2-2: the rows enter/leave/move through the shared bb-appear
+// grammar (AppearList) and the amounts tween (TweenYen) — a period change
+// never remounts the pane. TASK-161 §6-1
+// (web-home.week-row-in-bar-label): each stacked segment paints its series
+// name INSIDE the bar wherever the drawn px fit the estimated text — the
+// colour-only fallback stays for the unmeasured tracks (jsdom) and the too
+// narrow segments; the hover title keeps the full information everywhere.
 export interface WeekRow {
   /** the week's Monday ("YYYY-MM-DD") */
   key: string
@@ -65,19 +72,21 @@ interface WeekItem {
 
 // TASK-123 §4-5 rule E: the allocation works in px, so the track's real
 // width feeds it (measured at mount / on resize; jsdom keeps 0 and the
-// segments render at size 0 with their titles and colors until then)
-const rowsEl = ref<HTMLElement | null>(null)
+// segments render at size 0 with their titles and colors until then). The
+// ref rides the AppearList carrier, so the root ul is the instance's $el
+const rowsEl = ref<ComponentPublicInstance | null>(null)
 const trackW = ref(0)
 let ro: ResizeObserver | null = null
 function measure(): void {
-  const track = rowsEl.value?.querySelector('.week-bar-track') ?? null
+  const root = rowsEl.value?.$el
+  const track = root instanceof HTMLElement ? (root.querySelector('.week-bar-track') ?? null) : null
   trackW.value = track ? track.clientWidth : 0
 }
 onMounted(() => {
   measure()
   if (typeof ResizeObserver === 'undefined') return
   ro = new ResizeObserver(measure)
-  if (rowsEl.value) ro.observe(rowsEl.value)
+  if (rowsEl.value?.$el instanceof HTMLElement) ro.observe(rowsEl.value.$el)
 })
 onBeforeUnmount(() => {
   ro?.disconnect()
@@ -105,14 +114,16 @@ const items = computed<WeekItem[]>(() =>
 
 /** the segment hover title「名称 金額（構成比%）」— the same form the trend
  * and daily segments carry, over the allocated composition */
-function segTitle(s: AllocatedSegment, segTotal: number): string {
-  const pct = segTotal > 0 ? Math.round((s.value / segTotal) * 100) : 0
-  return `${s.label} ${formatYen(s.value)}（${pct}%）`
+function segTitle(segTotal: number): (s: AllocatedSegment) => string {
+  return (s) => {
+    const pct = segTotal > 0 ? Math.round((s.value / segTotal) * 100) : 0
+    return `${s.label} ${formatYen(s.value)}（${pct}%）`
+  }
 }
 </script>
 
 <template>
-  <ul
+  <AppearList
     ref="rowsEl"
     class="week-rows"
     data-test="rows"
@@ -129,25 +140,19 @@ function segTitle(s: AllocatedSegment, segTotal: number): string {
         @click="emit('select', w.key)"
       >
         <span class="week-label">{{ w.label }}</span>
-        <span class="amount">{{ formatYen(w.total) }}</span>
+        <TweenYen :value="w.total" />
         <span class="week-bar-track">
-          <span
+          <RowBar
             v-if="w.bar"
-            class="row-bar"
-            :style="{ width: `${w.bar.width}px` }"
-          >
-            <span
-              v-for="(s, i) in w.bar.segs"
-              :key="i"
-              class="row-seg"
-              :style="{ width: `${s.size}px`, background: s.color, border: s.outline ? undefined : 'none' }"
-              :title="segTitle(s, w.bar.segTotal)"
-            />
-          </span>
+            :width="w.bar.width"
+            :segs="w.bar.segs"
+            :seg-title="segTitle(w.bar.segTotal)"
+            in-bar-labels
+          />
         </span>
         <!-- is-link は全行押下可能なため常に付与（RankedList button行と同文法。v3再レビュー2回目 M-1:
              §1-3 の is-link 共有 selector（hover/focus-visible/transition）と対になる -->
       </button>
     </li>
-  </ul>
+  </AppearList>
 </template>

@@ -10,11 +10,32 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
-import type { NavigationFailure, RouteLocationNormalized } from 'vue-router'
+import { createMemoryHistory, type NavigationFailure, type RouteLocationNormalized, type Router } from 'vue-router'
+import { createPinia } from 'pinia'
 import { direction, navKind, pendingRestore, setNavIntent, updateDirection } from '@/web/composables/navDirection'
 import { markReady, notifyPageEntered, resetPageReady } from '@/web/composables/usePageReady'
+import { createAppRouter } from '@/web/router'
 import { useSessionStore } from '@/web/stores/session'
 import { cleanup, ME, mockFetch, mountApp, scrollMocks, setReducedMotion, settle } from './helpers'
+
+/** router.resolve() answers the RESOLVED variant whose name is nullable;
+ * scrollBehavior expects the normalized shape (a non-null name among the
+ * differences). Narrow the name with a guard — no `as` cast. */
+function normalizedRoute(router: Router, path: string): RouteLocationNormalized {
+  const r = router.resolve(path)
+  if (r.name === null) throw new Error(`normalizedRoute: no route matches ${path}`)
+  return { ...r, name: r.name }
+}
+
+/** Drive the app router's scrollBehavior the way a pop does: memory history
+ * never delivers a savedPosition, so a pop's park is exercised by calling the
+ * router's own scrollBehavior with a fabricated one (the TASK-74 recipe;
+ * TASK-164 §2-2-2 keeps scrollBehavior the only issuer of reservations). */
+async function popSaved(router: Router, toPath: string, fromPath: string, top: number): Promise<unknown> {
+  const sb = router.options.scrollBehavior
+  if (!sb) throw new Error('the app router has no scrollBehavior')
+  return sb(normalizedRoute(router, toPath), normalizedRoute(router, fromPath), { left: 0, top })
+}
 
 const src = (...p: string[]) => readFileSync(resolve(process.cwd(), 'src/web', ...p), 'utf8')
 
@@ -584,11 +605,13 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     // a pop parks the saved position; the restore waits for the page's
     // readiness on top of the finished enter (stage 5: the pages call
     // markReady themselves, so re-arm both gates for the incoming page —
-    // the parked position predates its load in the real flow)
+    // the parked position predates its load in the real flow). The park is
+    // driven the way scrollBehavior does it (memory history never delivers
+    // a savedPosition)
     window.history.replaceState({ position: 2 }, '')
     await router.back()
     await settle()
-    pendingRestore.value = 640
+    await popSaved(router, '/receipts', '/receipts/101', 640)
     scrollTo.mockClear()
     resetPageReady()
     notifyPageEntered()
@@ -598,12 +621,14 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     expect(pendingRestore.value).toBe(null)
   })
 
-  it('[covers:web-browse.scroll-restore] markReady が1.5秒来なければ保存位置を諦める（復元しない）', () => {
+  it('[covers:web-browse.scroll-restore] markReady が1.5秒来なければ保存位置を諦める（復元しない）', async () => {
     vi.useFakeTimers()
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
     try {
       resetPageReady()
-      pendingRestore.value = 800
+      // a bare app router is enough to issue the park (no mount needed)
+      const bare = createAppRouter(createMemoryHistory(), createPinia())
+      await popSaved(bare, '/stores', '/receipts', 800)
       notifyPageEntered() // the enter side is done; readiness never comes
       vi.advanceTimersByTime(1500)
       expect(pendingRestore.value).toBe(null)
@@ -612,5 +637,98 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TASK-164 §2-2-2 (design: tmp/tasks/tm-164/design_back_home.md v4): the
+// period pop's scroll and the reservation token. A period-change pop rides a
+// query-only URL change — the PATH never moves — so scrollBehavior's
+// same-path branch (placed BEFORE the savedPosition branch) returns false
+// without parking a reservation: the viewport keeps its place both ways of
+// the round trip. A pop whose path differs (a screen change — even between
+// screens sharing the first path segment, /receipts ↔ /receipts/101 or two
+// axes, whose pageKey collides) parks the saved position as before. The
+// reservations carry a navigation-unit generation token: every scrollBehavior
+// pass advances it and the page-ready gate releases only a reservation whose
+// token is still current — a stale one (a cross-screen pop's restore still
+// waiting when a period pop comes in) dies unseen. Test-first: red until it
+// lands.
+
+describe('period pop scroll + reservation tokens (TASK-164 §2-2-2)', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '')
+    cleanup()
+  })
+
+  it('[covers:web-browse.period-pop-scroll] 同一pathの期間popはsavedPositionを復元しない（scroll維持・予約なし）・pathが異なるpop（pageKey同値の画面間を含む）はsavedPositionを予約する', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { router } = await mountApp('/categories?month=2026-10')
+    const scrollTo = scrollMocks().scrollTo
+
+    // the period pop: the same path, a query-only change — even WITH a
+    // saved position the same-path branch (now ahead of the savedPosition
+    // branch) returns false and parks nothing
+    scrollTo.mockClear()
+    const verdict = await popSaved(router, '/categories?month=2026-09', '/categories', 640)
+    expect(verdict).toBe(false)
+    expect(pendingRestore.value).toBe(null)
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    // a pop whose path differs parks the saved position — and the parked
+    // reservation REALLY restores through both page-ready gates, not just
+    // that a reservation exists (REVIEW-12 #5): the enter gate alone does
+    // not scroll, the readiness gate releases the exact parked top
+    await popSaved(router, '/stores', '/categories', 320)
+    expect(pendingRestore.value?.top).toBe(320)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    expect(scrollTo).not.toHaveBeenCalled()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 320 })
+    expect(pendingRestore.value).toBe(null)
+
+    // ... including screens that SHARE the first path segment — the pageKey
+    // collides (/receipts ↔ /receipts/101, two axes); the PATH decides — and
+    // each parks its own top through the same gate flow
+    await popSaved(router, '/receipts/101', '/receipts', 500)
+    expect(pendingRestore.value?.top).toBe(500)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500 })
+    await popSaved(router, '/axes/store/2', '/axes/category/1', 400)
+    expect(pendingRestore.value?.top).toBe(400)
+  })
+
+  it('[covers:web-browse.restore-generation-token] 予約はnavigation単位token: 後続navigation（期間popのreturn false含む）で無効化された旧予約は gate 解放でも実行されず破棄される', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { router } = await mountApp('/categories?month=2026-10')
+    const scrollTo = scrollMocks().scrollTo
+
+    // a cross-screen pop parks its restore and waits for the page gates ...
+    await popSaved(router, '/stores', '/categories', 640)
+    expect(pendingRestore.value).not.toBe(null)
+    // ... but a further navigation — here the period pop's same-path return
+    // false — advances the generation: the parked reservation went stale
+    await popSaved(router, '/categories?month=2026-09', '/categories', 640)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    markReady()
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(pendingRestore.value).toBe(null)
+
+    // a CURRENT reservation still releases through both gates
+    await popSaved(router, '/stores', '/categories', 240)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    expect(scrollTo).not.toHaveBeenCalled()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 240 })
+    expect(pendingRestore.value).toBe(null)
   })
 })

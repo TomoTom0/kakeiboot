@@ -80,3 +80,16 @@ export function seriesColor(key: string | number | null, axis?: SeriesAxis): str
   }
   return `var(--series-${(h % SERIES_SLOT_COUNT) + 1})`
 }
+
+/** The in-bar label ink of a series color (TASK-161 §6-1, design: tmp/tasks/
+ * tm-161/design_period_ui.md v2): the FIXED contrast table. The palette
+ * tokens are known colors, but their VALUES differ per theme (light / dark
+ * flip several slots' luminance), so the ink rides as its own token beside
+ * each swatch (--series-N-ink / --series-rest-ink, both themes in the
+ * stylesheets) — no startup luminance math, and a palette change follows the
+ * stylesheets alone. Any other color (a one-off fill) falls to the page ink. */
+export function seriesInk(color: string): string {
+  if (color === SERIES_REST) return 'var(--series-rest-ink)'
+  const slot = /^var\(--series-([1-7])\)$/.exec(color)
+  return slot ? `var(--series-${slot[1]}-ink)` : 'inherit'
+}

@@ -1,5 +1,5 @@
 // TASK-60 real-browser verification (chromium), labels half: the layout
-// facts jsdom cannot compute — the one-line receipt rows staying put with
+// facts jsdom cannot compute — the receipt rows staying put with
 // LabelDots inserted, the label UI layout (picker popover containment, the
 // search chip tap target and its dialog's label half — TASK-101 reshaped the
 // topbar entry — the manage screen) and the titled chips' WCAG contrast in
@@ -28,9 +28,10 @@ function logPageIssues(page: Page, tag: string): void {
   })
 }
 
-// --- one-line receipt rows: the reserved labels cell (row-labels) carries
-// the compact LabelDots (8px, up to five) without widening the row — the
-// width difference against a label-less row is the font-independent metric
+// --- the receipt list rows (.data-row, TASK-167's two-line grammar): the
+// sub line's reserved labels cell (row-labels) carries the compact
+// LabelDots (8px, up to five) without widening the row — the width
+// difference against a label-less row is the font-independent metric
 // (richLabels puts all five labels on receipt 102; the feed seed's 104 is
 // the label-less contrast row) ---
 
@@ -41,14 +42,14 @@ test.describe('row labels (360x780)', () => {
     logPageIssues(page, 'row-labels')
     await installApiStub(page, { feed: 9, richLabels: true })
     await page.goto('/receipts?month=2026-10')
-    await expect(page.locator('.recent-row').first()).toBeVisible()
+    await expect(page.locator('.data-row').first()).toBeVisible()
     // NB: the row is addressed via its li[data-test] — the link's href
     // expands the list context query, so an attribute selector on the href
     // would not match
     const m = await page.evaluate(() => {
-      const five = document.querySelector('[data-test="receipt-102"] a.recent-row')
-      const none = document.querySelector('[data-test="receipt-104"] a.recent-row')
-      const rows = Array.from(document.querySelectorAll('.recent-row'))
+      const five = document.querySelector('[data-test="receipt-102"] a.data-row')
+      const none = document.querySelector('[data-test="receipt-104"] a.data-row')
+      const rows = Array.from(document.querySelectorAll('.recent-list .data-row'))
       const dot = five?.querySelector('.label-dot') ?? null
       const fr = five?.getBoundingClientRect() ?? null
       const nr = none?.getBoundingClientRect() ?? null
@@ -71,7 +72,9 @@ test.describe('row labels (360x780)', () => {
     // non-vacuous: the five-dot row really carries five dots
     expect(m.dots, dump).toBe(5)
     expect(Math.abs(m.fiveW! - m.noneW!), dump).toBeLessThanOrEqual(1)
-    expect(m.maxRowH, dump).toBeLessThanOrEqual(44.5)
+    // TASK-167: the row is the shared two-line .data-row (~53px, no bar) —
+    // the dots must not grow it past that shape
+    expect(m.maxRowH, dump).toBeLessThanOrEqual(60)
     expect(m.scrollWidth, dump).toBeLessThanOrEqual(m.clientWidth)
     expect(Math.abs(m.dotW! - 8), dump).toBeLessThanOrEqual(0.5)
     expect(Math.abs(m.dotH! - 8), dump).toBeLessThanOrEqual(0.5)
@@ -255,9 +258,10 @@ for (const scheme of ['light', 'dark'] as const) {
 }
 
 // --- label picker close-on-select (TASK-51): tapping a color in the picker
-// popover closes the dialog, lands the chip in the tags row and returns the
-// focus to the tag-plus trigger (the user read the always-open popover as a
-// bug; the chip animating in is the confirmation now) ---
+// popover closes the dialog, lands the chip on the receipt head's when line
+// (TASK-167 D-10 moved the picker host there from the old tags row) and
+// returns the focus to the tag-plus trigger (the user read the always-open
+// popover as a bug; the chip animating in is the confirmation now) ---
 
 test.describe('label picker close on select (390x780)', () => {
   test.use({ viewport: { width: 390, height: 780 } })
@@ -271,18 +275,26 @@ test.describe('label picker close on select (390x780)', () => {
     await expect(picker.locator('[data-test="label-add"]')).toBeVisible()
     await picker.locator('[data-test="label-add"]').click()
     await expect(picker.locator('.popover-dialog')).toBeVisible()
-    await picker.locator('[data-test="label-toggle-red"]').click()
+    // receipt 101 already carries red — pick BLUE so the selection genuinely
+    // ADDS a chip (the old click counted the still-mounted popover's own
+    // toggle chips, a vacuous pass once the close waited out its fade)
+    await picker.locator('[data-test="label-toggle-blue"]').click()
+    // TASK-146 §3 #15: the close is a leave FADE — the panel element rides
+    // the ~0.2s transition before the v-if drops it. The close itself (the
+    // chip landing, the focus return) is immediate; the dialog's removal is
+    // what waits out the fade (a close that never detached would hang here)
+    await expect(picker.locator('.popover-dialog')).toBeHidden()
     const m = await page.evaluate(() => {
       const p = document.querySelector('[data-test="receipt-panel-101"] [data-test="label-picker"]')!
       return {
         dialog: p.querySelector('[role="dialog"]') !== null,
-        chip: p.querySelectorAll('.label-chip').length,
+        chipBlue: p.querySelectorAll('.label-chip.label-blue').length,
         focusOnAdd: document.activeElement === p.querySelector('[data-test="label-add"]'),
       }
     })
     const dump = JSON.stringify(m)
     expect(m.dialog, dump).toBe(false)
-    expect(m.chip, 'the selected chip rides the tags row').toBeGreaterThan(0)
+    expect(m.chipBlue, 'the selected chip rides the head\'s when line').toBeGreaterThan(0)
     expect(m.focusOnAdd, 'the focus returns to the tag-plus trigger').toBe(true)
   })
 })

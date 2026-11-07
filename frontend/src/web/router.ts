@@ -1,6 +1,6 @@
 import { createRouter, type RouterHistory, type RouteRecordRaw } from 'vue-router'
 import type { Pinia } from 'pinia'
-import { navKind, pendingRestore, updateDirection } from './composables/navDirection'
+import { advanceRestoreGeneration, navKind, pendingRestore, updateDirection } from './composables/navDirection'
 import { useCatalogStore } from './stores/catalog'
 import { useSessionStore } from './stores/session'
 
@@ -136,16 +136,27 @@ export function createAppRouter(history: RouterHistory, pinia: Pinia) {
     // (TASK-74 §4-3) — restoring here would land before the incoming page
     // has rendered its data and the position would drift. A replace (the
     // history position unchanged: the feed's scrolling id rewrite, a chip ×,
-    // a period change, /search's debounce) and a same-pageKey navigation
-    // (the first path segment — the page stays mounted: /categories/1/5 →
-    // /categories/1, the list → the feed, which self-positions at its anchor
-    // panel) must not touch the scroll at all: scrolling to the top on every
-    // replace yanked the continuous feed back to its start (D28 §4-3 rule 1:
-    // replace → none). navKind lands before this runs — scrollBehavior is
-    // deferred to the next tick, after afterEach has compared the positions.
+    // /search's debounce) and a same-pageKey navigation (the first path
+    // segment — the page stays mounted: /categories/1/5 → /categories/1, the
+    // list → the feed, which self-positions at its anchor panel) must not
+    // touch the scroll at all: scrolling to the top on every replace yanked
+    // the continuous feed back to its start (D28 §4-3 rule 1: replace →
+    // none). navKind lands before this runs — scrollBehavior is deferred to
+    // the next tick, after afterEach has compared the positions.
+    //
+    // TASK-164 §2-2-2: a same-PATH navigation (a period change either way —
+    // the write-back's push rewrites the query only) keeps the scroll both
+    // directions of the round trip: the check runs BEFORE the savedPosition
+    // branch, so a period pop restores nothing (the path, not the pageKey,
+    // decides — /receipts ↔ /receipts/101 and two axes collide on pageKey
+    // but differ in path). Every pass first advances the reservation
+    // generation, so an older navigation's parked restore dies unseen when a
+    // newer one (this same-path branch included) supersedes it.
     scrollBehavior(to, from, savedPosition) {
+      const gen = advanceRestoreGeneration()
+      if (to.path === from.path) return false
       if (savedPosition) {
-        pendingRestore.value = savedPosition.top
+        pendingRestore.value = { top: savedPosition.top, gen }
         return false
       }
       if (navKind.value === 'replace') return false

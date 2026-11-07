@@ -119,7 +119,7 @@ function switchLedger(g: Grant): Promise<void> {
     <RouterLink
       v-if="!loading && grants.length === 0"
       to="/usage/connect"
-      class="more"
+      class="more hover-ink"
       data-test="usage-link"
     >
       接続方法を見る

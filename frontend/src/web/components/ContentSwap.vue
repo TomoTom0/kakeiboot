@@ -47,7 +47,9 @@ export default defineComponent({
   props: {
     /** the committed content's identity; unchanged mid-refetch by contract */
     swapKey: { type: String, required: true },
-    /** the move's shape (periodMove derives it from the period store) */
+    /** the move's shape — TASK-161 §2-4: the slide vocabulary is the shell
+     *  navigation's alone; the in-page callers keep the default fade (a
+     *  period move renders in place, never through the pane) */
     dir: { type: String, default: 'swap' },
   },
   setup(props, { slots }) {
@@ -57,9 +59,9 @@ export default defineComponent({
     provide(ContentSwapActive, swapping)
     // the vocabulary is CAPTURED at the commit (review MED1): the sync watch
     // reads dir once per swapKey change and the render replays the captured
-    // value, so a dir arriving after the capture (the periodMove consume
-    // reset of this very commit, the next press while the transition still
-    // runs) can never re-patch a transition already in flight. The capture
+    // value, so a dir arriving after the capture (the next press while the
+    // transition still runs) can never re-patch a transition already in
+    // flight. The capture
     // starts at the fade vocabulary — the first appearance rides the fade
     // whatever dir says, a pane never slides in from a direction that was
     // never moved along — and a swap before the appear even finishes

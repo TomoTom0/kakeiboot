@@ -501,8 +501,13 @@ async function goTo(id: number): Promise<void> {
   void maybeLoadMore()
   await nextTick()
   panelEl(id)?.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' })
+  // the focus lands WITHOUT its own scroll (TASK-168): the plain focus()
+  // reveals an off-viewport heading with the browser's instant scroll, which
+  // lands in the same frames as the smooth scrollIntoView above and overrides
+  // it — the move read as an animation-less jump on the real device. The
+  // move's motion is the smooth scroll alone
   const heading = panelEl(id)?.querySelector<HTMLElement>('.detail-title')
-  heading?.focus()
+  heading?.focus({ preventScroll: true })
 }
 
 function move(delta: -1 | 1): void {
@@ -552,7 +557,7 @@ function goBack(): void {
       aria-label="レシートフィード"
     >
       <RouterLink
-        class="feed-back"
+        class="feed-back hover-ink"
         :to="{ path: '/receipts', query: contextQuery }"
         data-test="feed-back"
         @click="goBack"

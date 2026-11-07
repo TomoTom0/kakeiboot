@@ -87,6 +87,10 @@ let pinned: { one: number; gap: number; wrapWidth: number } | null = null
 const wrapEl = (): HTMLElement | null => root.value?.querySelector('.trend-wrap') ?? null
 const barsEl = (): HTMLElement | null => root.value?.querySelector('.bars') ?? null
 const axisEl = (): HTMLElement | null => root.value?.querySelector('.axis-labels') ?? null
+/** TASK-162 §5-4 (review 3): the YEAR row rides the same machinery — it is
+ *  pinned, transformed, transitioned and cleared together with .bars and
+ *  .axis-labels at every step of the slide (absent on day/week axes) */
+const yearsEl = (): HTMLElement | null => root.value?.querySelector('.axis-years') ?? null
 
 /** the slide's report: idempotent (the transitionend and the watchdog can
  *  race) — the page trims through the composable's finishSlide */
@@ -128,14 +132,16 @@ function gapPx(el: HTMLElement | null): number {
   return Number.isFinite(v) ? v : 4
 }
 
-/** pin the concatenated track (design §3-3): the committed window's
- *  measured width fixes one track cell and the wrap's width, so the 2N-bar
- *  grid never re-solves its minmax tracks (bars do not shrink) and the
- *  2-window overflow stays clipped inside the wrap (no phantom scroll) */
-function pinTrack(n: number, one: number, gap: number, wrapWidth: number): void {
-  const cols = `repeat(${2 * n}, ${one}px)`
-  const width = `${2 * n * one + (2 * n - 1) * gap}px`
-  for (const el of [barsEl(), axisEl()]) {
+/** pin the concatenated track (design §3-3, TASK-161 §1-2): the committed
+ *  window's measured width fixes one track cell and the wrap's width, so the
+ *  concatenated grid (union length = committed + moveCols columns — 2N for an
+ *  E1 page, span + k for an E2b minimal slide) never re-solves its minmax
+ *  tracks (bars do not shrink) and the overflow stays clipped inside the wrap
+ *  (no phantom scroll) */
+function pinTrack(count: number, one: number, gap: number, wrapWidth: number): void {
+  const cols = `repeat(${count}, ${one}px)`
+  const width = `${count * one + (count - 1) * gap}px`
+  for (const el of [barsEl(), axisEl(), yearsEl()]) {
     if (!el) continue
     el.style.gridTemplateColumns = cols
     el.style.width = width
@@ -152,19 +158,19 @@ function pinTrack(n: number, one: number, gap: number, wrapWidth: number): void 
   }
 }
 
-/** the concatenated array's index N (the boundary, either direction's
- *  right-window head) — the exact one-window travel in measured px */
-function boundary(bars: HTMLElement, n: number): number {
-  const bar = bars.children[n] as HTMLElement | undefined
+/** the concatenated array's index-k child's offsetLeft (the boundary — the
+ *  exact moveCols-column travel in measured px; TASK-161 §1-2 generalizes the
+ *  old N-argument from the E1 whole-page span to the slide's own distance) */
+function boundary(bars: HTMLElement, k: number): number {
+  const bar = bars.children[k] as HTMLElement | undefined
   return bar ? bar.offsetLeft : 0
 }
 
 function setTransform(x: number): void {
   const t = `translateX(${x}px)`
-  const bars = barsEl()
-  const axis = axisEl()
-  if (bars) bars.style.transform = t
-  if (axis) axis.style.transform = t
+  for (const el of [barsEl(), axisEl(), yearsEl()]) {
+    if (el) el.style.transform = t
+  }
 }
 
 // The slide lifecycle. The watch fires (flush 'pre') BEFORE the
@@ -194,10 +200,15 @@ watch(
       pinned = null
       void nextTick(() => {
         if (gen !== generation) return
-        for (const el of [barsEl(), axisEl()]) {
+        for (const el of [barsEl(), axisEl(), yearsEl()]) {
           if (!el) continue
           el.style.transform = ''
-          el.style.gridTemplateColumns = ''
+          // gridTemplateColumns is NOT cleared: the trim's own patch already
+          // re-wrote the :style binding (the committed window's template)
+          // over the pin. Clearing it here would strip the grid entirely —
+          // the frame the ResizeObserver samples then measures a full-width
+          // "cell" (TrendBars' colW) that no later resize corrects, and the
+          // axis/value thinning silently stops thinning after a slide
           el.style.width = ''
         }
         const wrap = wrapEl()
@@ -212,7 +223,7 @@ watch(
       })
       return
     }
-    const n = Math.floor(slide.bars.length / 2)
+    const n = Math.max(slide.bars.length - slide.moveCols, 1)
     const barsNow = barsEl()
     // the previous pin still on the DOM (a same-tick replacement slid past
     // the trim's cleanup): reuse its recorded measurements
@@ -220,8 +231,9 @@ watch(
     const gap = reuse?.gap ?? gapPx(barsNow)
     const wrapWidth = reuse?.wrapWidth ?? wrapEl()?.offsetWidth ?? 0
     const width = reuse === null ? (barsNow?.offsetWidth ?? 0) : 0
-    // one track cell = (measured width - the N-1 gaps) / N; a non-positive
-    // measurement (no layout in jsdom) keeps the minmax resolution
+    // one track cell = (measured width - the n-1 gaps) / n over the COMMITTED
+    // window's columns (union length − moveCols); a non-positive measurement
+    // (no layout in jsdom) keeps the minmax resolution
     const one = reuse?.one ?? (width > 0 && n > 0 ? (width - (n - 1) * gap) / n : 0)
     if (reuse === null && one > 0) pinned = { one, gap, wrapWidth }
     const dir = slide.dir
@@ -230,8 +242,8 @@ watch(
       const bars = barsEl()
       if (!bars) return
       reported = false
-      if (one > 0) pinTrack(n, one, gap, wrapWidth)
-      const shift = boundary(bars, n)
+      if (one > 0) pinTrack(slide.bars.length, one, gap, wrapWidth)
+      const shift = boundary(bars, slide.moveCols)
       setTransform(dir === 'prev' ? -shift : 0)
       requestAnimationFrame(() => {
         if (gen !== generation) return
@@ -268,13 +280,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- TASK-162 §6-3 (review 8): the chevron pair LEFT the grid's side columns
+       (the two auto columns + gaps squeezed the middle column ~88px — the
+       narrow viewport's chief margin). The pair rides an absolute band over
+       the plot's top now: has-nav reserves the 44px band so the chevrons
+       never overlap a bar or its value labels, and the middle column takes
+       the full width back. The 44px tap target, the icon grammar and the
+       aria stay put -->
   <div
     ref="root"
     class="trend-window"
+    :class="{ 'has-nav': nav }"
   >
     <button
       v-if="nav"
-      class="icon-btn trend-nav"
+      class="icon-btn trend-nav trend-nav--prev"
       type="button"
       aria-label="前の範囲"
       title="前の範囲"
@@ -291,13 +311,14 @@ onBeforeUnmount(() => {
       :span="span"
       :current="current"
       :axis-windows="slide ? slide.axisWindows : null"
+      :axis-dir="slide ? slide.dir : 'prev'"
       :sliding="slide != null"
       :no-anim="noAnim"
       @select="emit('select', $event)"
     />
     <button
       v-if="nav"
-      class="icon-btn trend-nav"
+      class="icon-btn trend-nav trend-nav--next"
       type="button"
       aria-label="次の範囲"
       title="次の範囲"

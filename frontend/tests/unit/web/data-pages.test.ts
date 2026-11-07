@@ -826,8 +826,16 @@ describe('Receipts', () => {
       set: { note: '特売' },
       upsert_items: [{ item_id: 1001, amount: 250 }],
     })
-    expect(panel(wrapper, 101).find('[data-test="revision"]').text()).toBe('2')
-    expect(panel(wrapper, 101).find('[data-test="note"]').text()).toBe('特売')
+    // TASK-167 D-8: the panel carries no revision/note readouts — the
+    // progressed revision is proven by the next save riding revision 2
+    const after = panel(wrapper, 101)
+    expect(after.find('[data-test="revision"]').exists()).toBe(false)
+    expect(after.find('[data-test="note"]').exists()).toBe(false)
+    await after.find('[data-test="edit"]').trigger('click')
+    await after.find('[data-test="f-note"]').setValue('再修正')
+    await after.find('[data-test="edit-form"]').trigger('submit')
+    await settle()
+    expect(update).toHaveBeenLastCalledWith(1, 101, { revision: 2, set: { note: '再修正' } })
   })
 
   it('[covers:web-receipts.stale-revision-reload] revision 不一致は上書きせず最新を読み直す', async () => {
@@ -840,8 +848,11 @@ describe('Receipts', () => {
     await settle()
     const after = panel(wrapper, 101)
     expect(after.find('[data-test="error"]').text()).toContain('他の画面や会話で更新')
-    expect(after.find('[data-test="revision"]').text()).toBe('2')
-    expect(after.find('[data-test="note"]').text()).toBe('会話で変更')
+    // the reload brought the latest note back — restarting the edit seeds
+    // the form with it
+    await after.find('[data-test="edit"]').trigger('click')
+    const el = after.find('[data-test="f-note"]').element
+    expect(el instanceof HTMLTextAreaElement && el.value).toBe('会話で変更')
   })
 
   it('[covers:web-receipts.delete-preview-confirm] preview を示してから revision 付きで削除、Feed のパネル・位置・URL は不変', async () => {

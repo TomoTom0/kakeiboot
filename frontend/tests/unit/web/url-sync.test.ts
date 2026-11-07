@@ -18,6 +18,20 @@
 // (D1-3); the axis detail page does not re-query on the write-back echo
 // (D2) and its parent link rides the live route query (D2-2). The new cases
 // stay red until the implementation lands.
+//
+// TASK-164 (test-first against tmp/tasks/tm-164/design_back_home.md v4):
+// §2-2-1 turns the user's period changes into history PUSHES (the
+// TASK-124 D2-2 "a period change never stacks history" rule is inverted by
+// the user's "戻るは期間変更全般を1件戻す") — only the user routes push
+// (step / setMonth / setWeek / the new setMode / setRange), every system
+// write (a keys-less completion, an import normalization, the reset, a
+// labels-only change, the /search strip) stays a replace, guarded by the
+// one-shot nextWrite flag with its three residue rules; §2-5 keeps the
+// labels asymmetric (never stacked alone, restored with the entry on pop);
+// §2-4/§2-6 move the ‹ semantics: the axis PageHead ‹ is gone (topbar ‹
+// everywhere on the browsing side, TASK-145 D2-2's carry with it) and
+// /search joins the browsing history-back side (the parentTo map keeps the
+// other ten screens). The TASK-164 cases stay red until it lands.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocationQuery } from 'vue-router'
 import { setDataApi, type DataApi } from '@/web/api/data'
@@ -104,22 +118,34 @@ describe('browsing URL sync: period keys (TASK-124 D2)', () => {
     await settle()
     expect(q(home).month).toBe('2026-05')
 
-    // the write-back is a replace: no history entry, no slide, no scroll
+    // TASK-164 §2-2-1: a USER period change is a push — the write-back
+    // rides ONE router.push (a history entry), so the browser back returns
+    // to the previous period (the entry's URL re-imports into the store)
     const one = await remount('/?month=2026-10')
     // seed navDirection's previous position: remount()'s cleanup() wipes
     // window.history.state, so the mount's own push observed position=null
     // (the memory history never writes window.history — the transition.test
     // recipe). A same-location replace moves nothing and leaves lastPosition
-    // at 3 for the write-back's own replace to compare 3 against 3
+    // at 3 for the write-back's own navigation to compare 3 against 3
     window.history.replaceState({ position: 3 }, '')
     await one.router.replace({ query: { month: '2026-10' } })
     await settle()
+    const push = vi.spyOn(one.router, 'push')
     const scrolls = scrollMocks().scrollTo.mock.calls.length
     await stepPeriod(one)
     expect(q(one).month).toBe('2026-09')
+    // one push per user operation (no replace on the user route), no slide,
+    // and the same-path rule keeps the scroll untouched
+    expect(push).toHaveBeenCalledTimes(1)
     expect(navKind.value).toBe('replace')
     expect(direction.value).toBe('none')
     expect(scrollMocks().scrollTo.mock.calls.length).toBe(scrolls)
+    // the stacked entry is real: the browser back lands on the previous
+    // period and the import restores it into the store
+    await one.router.back()
+    await settle()
+    expect(q(one).month).toBe('2026-10')
+    expect(usePeriodStore().month).toBe('2026-10')
   })
 
   it('[covers:web-browse.url-label-sync] ラベル絞り込みの変更は5画面+/search の URL labels= へ反映される', async () => {
@@ -130,9 +156,10 @@ describe('browsing URL sync: period keys (TASK-124 D2)', () => {
     }
   })
 
-  // TASK-146 §1: stepping into a FUTURE month rides the same replace
-  // write-back (the cap is gone; the URL keeps accepting future values)
-  it('[covers:web-shell.period-uncapped-step] 未来月への送り（›）も URL の month= へ replace で書り戻る（from/to は付かない）', async () => {
+  // TASK-146 §1: stepping into a FUTURE month rides the same user write
+  // (the cap is gone; the URL keeps accepting future values — a push since
+  // TASK-164 §2-2-1, like every user period change)
+  it('[covers:web-shell.period-uncapped-step] 未来月への送り（›）も URL の month= へ書り戻る（from/to は付かない）', async () => {
     const m = await remount('/?month=2026-10')
     await m.wrapper.find('[data-test="filter-period"]').trigger('click')
     await settle()
@@ -181,18 +208,23 @@ describe('browsing URL sync: import rules (TASK-124 D2-1/D2-2/D2-3)', () => {
     expect(q(m).month).toBe('2026-09')
   })
 
-  it('[covers:web-browse.url-pop-restore] browser 戻るは戻り先 entry の最終 URL の期間へ復元する（同一画面内の変更は履歴に積まない）', async () => {
+  it('[covers:web-browse.url-pop-restore] browser 戻るはentry単位で戻り先 entry の最終 URL の期間へ復元する（TASK-164: 期間変更もpushで積まれるため画面内の期間entryも順に遡る）', async () => {
     const stats = vi.spyOn(api, 'getAnalysis')
     const m = await mountApp('/categories?month=2026-10')
-    await stepPeriod(m) // entry 1 becomes /categories?month=2026-09 (replace)
+    await stepPeriod(m) // a USER change: /categories?month=2026-09 stacks (a push)
     await m.router.push('/stores')
     await settle()
-    expect(q(m).month).toBe('2026-09') // the keys-less entry writes it back
-    await stepPeriod(m) // /stores -> 2026-08 (replace)
+    expect(q(m).month).toBe('2026-09') // the keys-less entry's completion (a replace)
+    await stepPeriod(m) // another USER change: /stores?month=2026-08 (a push)
     expect(q(m).month).toBe('2026-08')
+    // back #1: the period entry first — /stores at 2026-09, imported
     await m.router.back()
     await settle()
-    // the pop lands on the categories entry's final URL and imports it
+    expect(m.router.currentRoute.value.path).toBe('/stores')
+    expect(q(m).month).toBe('2026-09')
+    // back #2: the screen entry — the categories entry's final URL imports
+    await m.router.back()
+    await settle()
     expect(m.router.currentRoute.value.path).toBe('/categories')
     expect(q(m).month).toBe('2026-09')
     expect(stats).toHaveBeenLastCalledWith(1, expect.objectContaining({ axis: 'category', month: '2026-09' }))
@@ -324,33 +356,24 @@ describe('axis detail: the write-back echo and the parent link (TASK-145 D2/D2-2
     expect(catalog).toHaveBeenCalledTimes(1)
   })
 
-  it('[covers:web-browse.axis-parent-to-reactive] 軸詳細の ‹ の遷移先指定は現在の期間・labels を運ぶ（parentTo そのものを検証・古値を運ばない）', async () => {
-    // the period move ALONE (a label move mixed in would hand the narrowed
-    // watch another init that refreshes the snapshot): the ‹ press passes its
-    // parentTo to router.push as-is, and the PUSH ARGUMENT — not the landing
-    // URL, which the parent screen's own write-back would patch up from the
-    // store — is what shows a stale query (review LOW)
+  it('[covers:web-axis.page-back-removed] 軸詳細の PageHead ‹ は除去（topbar ‹ へ集約・現在値 carry は廃止・見出し行は残る）', async () => {
     const a = await mountApp('/axes/category/1?month=2026-10')
-    await stepPeriod(a) // the store and the URL: month 2026-09
-    const pushA = vi.spyOn(a.router, 'push')
-    await a.wrapper.find('.page-head [data-test="page-back"]').trigger('click')
-    await settle()
-    expect(pushA).toHaveBeenCalledWith({ path: '/categories', query: { month: '2026-09' } })
-
-    // the label move alone, through the same direct check: the link rides the
-    // live query on both dimensions
-    const b = await remount('/axes/category/1?month=2026-10')
-    await toggleLabel(b, 'red')
-    const pushB = vi.spyOn(b.router, 'push')
-    await b.wrapper.find('.page-head [data-test="page-back"]').trigger('click')
-    await settle()
-    expect(pushB).toHaveBeenCalledWith({ path: '/categories', query: { month: '2026-10', labels: 'red' } })
+    // the heading row itself stays (the kind label / the name / the total)
+    expect(a.wrapper.find('.page-head').exists()).toBe(true)
+    expect(a.wrapper.find('[data-test="total"]').exists()).toBe(true)
+    // ... but its ‹ is gone — TASK-145 D2-2's live-query carry dies with it
+    // (§2-6: the ‹ restores the history entry's state, it carries nothing)
+    expect(a.wrapper.find('.page-head [data-test="page-back"]').exists()).toBe(false)
+    expect(a.wrapper.find('[data-test="page-back"]').exists()).toBe(false)
+    // the topbar ‹ takes over (TASK-164 §2-4: the browsing side's ‹)
+    expect(a.wrapper.find('[data-test="topbar-back"]').exists()).toBe(true)
   })
 })
 
-describe('topbar back ‹ on the tabbar-外 screens (TASK-124 D3)', () => {
+describe('topbar back ‹ on the tabbar-外 screens (TASK-124 D3 + TASK-164 §2-4)', () => {
   const CASES = [
-    { path: '/search', parent: '/', label: 'ホームへ戻る' },
+    // TASK-164: /search moved to the browsing side (a history-back ‹) — the
+    // parentTo map keeps the ten non-browsing screens
     { path: '/settings/general', parent: '/', label: 'ホームへ戻る' },
     { path: '/settings/auth', parent: '/', label: 'ホームへ戻る' },
     { path: '/settings/data', parent: '/', label: 'ホームへ戻る' },
@@ -389,7 +412,7 @@ describe('topbar back ‹ on the tabbar-外 screens (TASK-124 D3)', () => {
     }
   })
 
-  it('[covers:web-shell.topbar-back] ‹ は PageHead と同じ up 语义（parentTo push + back intent・history back でない）で閲覧系/Axis/feed には置かない', async () => {
+  it('[covers:web-shell.topbar-back] ‹ は PageHead と同じ up 语义（parentTo push + back intent・history back でない）・/search と axes の ‹ は browsing side へ移管で feed には置かない', async () => {
     // establish a position so navDirection can see the push (the memory
     // history never writes window.history — the transition.test.ts recipe)
     const m = await remount('/settings/general')
@@ -408,14 +431,184 @@ describe('topbar back ‹ on the tabbar-外 screens (TASK-124 D3)', () => {
     expect(navKind.value).toBe('push')
     expect(direction.value).toBe('back')
 
-    // the browsing screens, the axis detail and the feed keep their existing
-    // navigation (the axis PageHead ‹ stays; no topbar ‹ anywhere here)
-    for (const path of ['/', '/receipts', '/categories', '/stores', '/axes/category/1?month=2026-10', '/receipts/101']) {
+    // TASK-164 §2-4: /search and the axes joined the browsing side — their
+    // topbar ‹ exists (a history back with the boundary fallback) and the
+    // axis PageHead ‹ is gone. The root browsing screens at the boundary
+    // (a fresh mount with no app history behind it) hide the ‹ — that
+    // per-screen matrix lives in dashboard-shell (nav-boundary).
+    for (const path of ['/search?q=牛乳', '/axes/category/1?month=2026-10', '/axes/item/牛乳?month=2026-10']) {
       const n = await remount(path)
-      expect(n.wrapper.find('[data-test="topbar-back"]').exists(), path).toBe(false)
+      expect(n.wrapper.find('[data-test="topbar-back"]').exists(), path).toBe(true)
       if (path.startsWith('/axes/')) {
-        expect(n.wrapper.find('.page-head [data-test="page-back"]').exists(), path).toBe(true)
+        expect(n.wrapper.find('.page-head [data-test="page-back"]').exists(), path).toBe(false)
       }
     }
+    // the feed keeps no topbar ‹ even with app history behind it (its 一覧
+    // link remains its way back)
+    window.history.replaceState({ position: 1 }, '')
+    const home = await remount('/')
+    window.history.replaceState({ position: 2 }, '')
+    await home.router.push('/receipts/101')
+    await settle()
+    expect(home.wrapper.find('[data-test="topbar-back"]').exists()).toBe(false)
+  })
+})
+
+describe('writeBack push/replace + labels asymmetry (TASK-164 §2-2-1/§2-5)', () => {
+  it('[covers:web-browse.url-user-period-push] 利用者の期間変更（mode切替・range指定・jump）は push で書り戻る（同tickの連続変更は1回のpush・labels同時差分は同一pushに載る）', async () => {
+    // the mode switch: the picker's tab rides the new setMode API
+    const m = await mountApp('/?month=2026-10')
+    await m.wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    const push = vi.spyOn(m.router, 'push')
+    await m.wrapper.find('[data-test="mode-year"]').trigger('click')
+    await settle()
+    expect(q(m).year).toBe('2026')
+    expect(push).toHaveBeenCalledTimes(1)
+
+    // the Custom form commits through the new setRange API
+    await m.wrapper.find('[data-test="mode-range"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="range-from"]').setValue('2026-01-01')
+    await m.wrapper.find('[data-test="range-to"]').setValue('2026-03-31')
+    push.mockClear()
+    await m.wrapper.find('[data-test="range-apply"]').trigger('click')
+    await settle()
+    expect(q(m).from).toBe('2026-01-01')
+    expect(q(m).to).toBe('2026-03-31')
+    expect(push).toHaveBeenCalledTimes(1)
+
+    // a jump (setMonth — a trend bar press) pushes once; two steps in one
+    // tick batch into ONE push carrying the final value
+    const store = usePeriodStore()
+    push.mockClear()
+    store.setMonth('2026-05')
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(push).toHaveBeenCalledTimes(1)
+    push.mockClear()
+    store.step(-1)
+    store.step(-1)
+    await settle()
+    expect(q(m).month).toBe('2026-03')
+    expect(push).toHaveBeenCalledTimes(1)
+
+    // a period change with a simultaneous labels diff rides ONE push
+    push.mockClear()
+    store.setMonth('2026-06')
+    store.setLabelColors(['red'])
+    await settle()
+    expect(q(m).month).toBe('2026-06')
+    expect(q(m).labels).toBe('red')
+    expect(push).toHaveBeenCalledTimes(1)
+  })
+
+  it('[covers:web-browse.url-system-write-replace] 利用者以外の書き戻しは replace のまま（keys-less補完・labels単独・reset・/search strip は履歴を積まない）', async () => {
+    const m = await mountApp('/receipts?month=2026-09')
+    const push = vi.spyOn(m.router, 'push')
+    const replace = vi.spyOn(m.router, 'replace')
+
+    // the keys-less arrival's completion write-back is a replace
+    await m.router.push('/')
+    await settle()
+    expect(q(m).month).toBe('2026-09')
+    expect(replace).toHaveBeenCalled()
+    expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
+
+    // a labels-only change never stacks an entry
+    replace.mockClear()
+    push.mockClear()
+    await toggleLabel(m, 'red')
+    expect(q(m).labels).toBe('red')
+    expect(replace).toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+
+    // the home re-press reset writes the default keys as a replace (§1-3:
+    // resetToDefault never marks its write as a user one)
+    replace.mockClear()
+    push.mockClear()
+    await m.wrapper.find('[data-test="tabbar"] a').trigger('click')
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(replace).toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+
+    // the /search scope=all stray-key strip stays a replace too
+    replace.mockClear()
+    push.mockClear()
+    await m.router.push('/search?q=牛乳&month=2026-08')
+    await settle()
+    expect(q(m).month).toBeUndefined()
+    expect(replace).toHaveBeenCalled()
+    expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
+  })
+
+  it('[covers:web-browse.url-label-pop-asymmetry] labels単独の変更は履歴に載せないが pop で戻り先 entry の labels ごと復元される（5月・赤 → 6月push → 青replace → ‹ で 5月・赤）', async () => {
+    const m = await mountApp('/?month=2026-05')
+    // the search dialog opens ONCE and stays open across the toggles (the
+    // filter-bar recipe) — reopening it per toggle would close it instead
+    await m.wrapper.find('[data-test="filter-search"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    // a labels-only replace → entry1 = 5月・赤
+    const store = usePeriodStore()
+    store.setMonth('2026-06') // a user push → entry2 stacked on entry1
+    await settle()
+    // the labels-only change swaps red for blue (a replace on entry2)
+    await m.wrapper.find('[data-test="label-filter-red"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="label-filter-blue"]').trigger('click')
+    await settle()
+    expect(q(m).labels).toBe('blue')
+    expect(q(m).month).toBe('2026-06')
+    // the back lands on entry1 — its period AND its labels restore together
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(q(m).labels).toBe('red')
+    expect(store.month).toBe('2026-05')
+    expect(store.labelColors).toEqual(['red'])
+  })
+
+  it('[covers:web-browse.url-next-write-discard-off-target] 対象外画面での期間変更は nextWrite を即座に破棄し・対象画面への直接遷移でも keys-less 補完は replace（残留 user 指定の誤 push なし）', async () => {
+    const m = await mountApp('/settings/general')
+    const store = usePeriodStore()
+    // a user period change OFF a sync target: the store watch fires, the
+    // write-back returns early — and the early return itself discards the
+    // one-shot flag (REVIEW-12 #4: the change will never be written, so it
+    // must not stand for the NEXT arrival's keys-less completion to misread
+    // as a user change)
+    store.setMonth('2026-05')
+    await settle()
+    expect(store.nextWrite).toBe('system')
+    // the direct hop to a keys-less target lands a replace completion: the
+    // store's period rides the URL without stacking an entry
+    const push = vi.spyOn(m.router, 'push')
+    await m.router.push('/')
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
+  })
+
+  it('[covers:web-browse.url-next-write-discard-off-target] 同tick往復（step(-1);step(1)・watch不発火）で立ったフラグは掃き捨てられ keys-less 遷移の補完は replace（REVIEW-12 #3）', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
+    // the same-tick round trip ends where it started: the value watch never
+    // fires (nothing changed), while the first step DID legitimately raise
+    // 'user' — the composable's sweep watch drops the orphaned marking at
+    // the end of the tick (a real user change has been consumed through
+    // writeBack by then; only a marking with no write behind it resets)
+    store.step(-1)
+    store.step(1)
+    await settle()
+    expect(store.month).toBe('2026-10')
+    expect(store.nextWrite).toBe('system')
+    // ... so a keys-less arrival's completion stays a replace
+    const push = vi.spyOn(m.router, 'push')
+    await m.router.push('/receipts')
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
   })
 })

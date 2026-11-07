@@ -4,7 +4,6 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery, type Label, type LabelColor } from '@/shared/labels'
 import { barScale } from '@/shared/lib/stackedBars'
-import LabelDots from '@/shared/components/LabelDots.vue'
 import {
   useDataApi,
   type AnalysisAxis,
@@ -20,16 +19,16 @@ import DashSkeleton from '../components/DashSkeleton.vue'
 import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import ContentSwap from '../components/ContentSwap.vue'
+import DataRow from '../components/DataRow.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
 import PageHead from '../components/PageHead.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendWindow from '../components/TrendWindow.vue'
-import { errorMessage, formatYen } from '../composables/format'
+import { errorMessage, formatYen, topItemsText } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { shortDate } from '../composables/period'
-import { usePeriodMove } from '../composables/periodMove'
 import { currentTrendKey } from '../composables/trend'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
 import { usePageReady } from '../composables/usePageReady'
@@ -89,15 +88,14 @@ const kind = computed<AxisKind>(() => {
 })
 
 // --- subject resolution --------------------------------------------------------
-/** Resolved view of the route; null until the catalog / stores answered.
- *  The ‹ climb's destination is the resolved parent PATH only — the query
- *  rides the live route through the parentTo computed below (D2-2). */
+/** Resolved view of the route; null until the catalog / stores answered. The
+ *  row carries no climb target anymore (TASK-164 §2-4/§2-6): the topbar ‹ is
+ *  the axis back now — a history back that restores the entry's own state,
+ *  carrying nothing. */
 const view = ref<null | {
   title: string
   sub?: string
   parentName?: string
-  parentPath?: string
-  backLabel: string
   /** the subject filter of every query */
   subject: AnalysisFilters
   /** the subject's own chip label */
@@ -121,8 +119,6 @@ async function resolveRoute(l: number): Promise<boolean> {
         title: '未分類',
         subject: { category: '未分類' },
         subjectChip: 'カテゴリ: 未分類',
-        backLabel: 'カテゴリ一覧',
-        parentPath: '/categories',
       }
       return true
     }
@@ -143,8 +139,6 @@ async function resolveRoute(l: number): Promise<boolean> {
         title: node.name,
         subject: { category: catalog.pathOf('item', topId) ?? node.name },
         subjectChip: `カテゴリ: ${node.name}`,
-        backLabel: 'カテゴリ一覧',
-        parentPath: '/categories',
         topId,
         subId: null,
       }
@@ -172,8 +166,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       subject: { category: catalog.pathOf('item', subId) ?? subNode.name },
       subjectChip: `カテゴリ: ${subNode.name}`,
       parentName: topNode.name,
-      backLabel: 'カテゴリ一覧',
-      parentPath: `/axes/category/${topId}`,
       topId,
       subId,
     }
@@ -192,8 +184,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       sub: found.category ?? undefined,
       subject: { store_id: id },
       subjectChip: `店: ${found.name}`,
-      backLabel: '店一覧',
-      parentPath: '/stores',
     }
     return true
   }
@@ -207,8 +197,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       title: name,
       subject: { item_query: name },
       subjectChip: `品目: ${name}`,
-      backLabel: 'ホーム',
-      parentPath: '/',
     }
     return true
   }
@@ -218,8 +206,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       title: labelTitle(color),
       subject: { label_colors: [color as LabelColor] },
       subjectChip: `ラベル: ${labelTitle(color)}`,
-      backLabel: 'ホーム',
-      parentPath: '/',
     }
     return true
   }
@@ -229,21 +215,9 @@ async function resolveRoute(l: number): Promise<boolean> {
     title: PAYMENT_LABEL[method],
     subject: { payment_method: method },
     subjectChip: `支払: ${PAYMENT_LABEL[method]}`,
-    backLabel: 'ホーム',
-    parentPath: '/',
   }
   return true
 }
-
-/** The ‹ climb's destination (D2-2): the resolved parent path with the LIVE
- *  route query. The shell URL sync keeps month=/labels= current, and the
- *  re-query watch below no longer re-resolves the view on its write-back
- *  echo — so a snapshot taken at resolve time could hold the period from
- *  before the move. Deriving the query here makes the climb carry the
- *  current values whenever it is pressed. */
-const parentTo = computed<RouteLocationRaw | null>(() =>
-  view.value?.parentPath === undefined ? null : { path: view.value.parentPath, query: { ...route.query } },
-)
 
 const storeRow = ref<StoreRow | null>(null)
 
@@ -323,10 +297,19 @@ const storeNameFor = ref<number | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-// TASK-146 §3: the pane's committed key (bumped at the load commit) and the
-// move's direction off the shared period store
+// TASK-146 §3: the pane's committed key (bumped at the load commit). TASK-161
+// §2 (web-common.period-move-voice): the key drops the PERIOD range and the
+// route's fullPath (the URL sync rewrites it on every period change) — it
+// keeps the path plus the subject-defining query alone, so a period step
+// never remounts the pane (periodMove is gone)
 const committedKey = ref('')
-const move = usePeriodMove(committedKey)
+
+/** the subject part of the URL query (every key but the period ones) — the
+ *  committed identity the pane keeps across a period change (TASK-161 §2-1) */
+function subjectQuery(): string {
+  const periodKeys = new Set(['month', 'week', 'year', 'from', 'to'])
+  return JSON.stringify(Object.entries(route.query).filter(([k]) => !periodKeys.has(k)))
+}
 
 // the trend's movable window (TASK-104): the composable owns the trend
 // fetch with this screen's stack axis and the resolved subject as filters —
@@ -405,7 +388,7 @@ async function load(id?: number): Promise<void> {
     own.value = ownRes
     itemStats.value = itemRes
     recent.value = recentRes.receipts
-    committedKey.value = `${l}|${period.mode}|${period.range[0]}|${period.range[1]}|${period.labelQuery?.join(',') ?? ''}|${route.fullPath}`
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${route.path}|${subjectQuery()}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -480,6 +463,7 @@ function rankedRows(res: AnalysisResult | null, top = 5): StatsRow[] {
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
   const tail = sorted.slice(top)
   if (tail.length > 0 || res.truncated_rows > 0) {
@@ -652,8 +636,6 @@ const menuItems = computed<PageMenuItem[]>(() => {
         :title="view.title"
         :total="totals ? formatYen(totals.amount) : undefined"
         :sub="view.sub"
-        :parent-to="parentTo ?? { path: '/' }"
-        :back-label="view.backLabel"
         :parent="view.parentName"
       >
         <template
@@ -677,15 +659,13 @@ const menuItems = computed<PageMenuItem[]>(() => {
         :class="{ loading }"
       >
         <!-- TASK-146 §3: the content transition fires at the load commit -->
-        <ContentSwap
-          :swap-key="committedKey"
-          :dir="move.dir.value"
-        >
+        <ContentSwap :swap-key="committedKey">
           <div class="content-pane">
             <PeriodHeader
-              :label="`${period.label}の支出`"
+              :label="period.label"
               :total="totals.amount"
               data-test="axis-period"
+              :swap-key="committedKey"
             />
 
             <div class="dash-cols">
@@ -757,11 +737,11 @@ const menuItems = computed<PageMenuItem[]>(() => {
                         :key="`${p.date}-${i}`"
                         data-test="item-price-row"
                       >
-                        <span class="recent-row">
-                          <span class="recent-date">{{ shortDate(p.date) }}</span>
-                          <span class="recent-store truncate">{{ p.store_name ?? '店名なし' }}</span>
-                          <span class="amount">{{ formatYen(p.unit_price) }}</span>
-                        </span>
+                        <DataRow
+                          :name="p.store_name ?? '店名なし'"
+                          :amount="formatYen(p.unit_price)"
+                          :sub-figure="shortDate(p.date)"
+                        />
                       </li>
                     </ul>
                     <div class="zone-head">
@@ -778,11 +758,11 @@ const menuItems = computed<PageMenuItem[]>(() => {
                         :key="s.store_id ?? 'none'"
                         data-test="item-store-row"
                       >
-                        <span class="recent-row">
-                          <span class="recent-store truncate">{{ s.store_name }}</span>
-                          <span class="muted small">{{ s.count }}件・平均{{ formatYen(s.avg_unit_price ?? 0) }}</span>
-                          <span class="amount">{{ formatYen(s.amount) }}</span>
-                        </span>
+                        <DataRow
+                          :name="s.store_name"
+                          :amount="formatYen(s.amount)"
+                          :sub-figure="`${s.count}件・平均${formatYen(s.avg_unit_price ?? 0)}`"
+                        />
                       </li>
                     </ul>
                   </template>
@@ -877,19 +857,15 @@ const menuItems = computed<PageMenuItem[]>(() => {
                       v-for="r in recent"
                       :key="r.receipt_id"
                     >
-                      <RouterLink
+                      <DataRow
                         :to="{ path: `/receipts/${r.receipt_id}`, query: feedQuery }"
-                        class="recent-row"
                         :data-test="`recent-${r.receipt_id}`"
-                      >
-                        <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-                        <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-                        <span class="row-labels"><LabelDots
-                          :labels="r.labels ?? []"
-                          compact
-                        /></span>
-                        <span class="amount">{{ formatYen(r.amount) }}</span>
-                      </RouterLink>
+                        :name="r.store_name ?? '店名なし'"
+                        :amount="formatYen(r.amount)"
+                        :sub-text="topItemsText(r.top_items)"
+                        :sub-figure="shortDate(r.purchased_on)"
+                        :labels="r.labels ?? []"
+                      />
                     </li>
                   </ul>
                 </section>

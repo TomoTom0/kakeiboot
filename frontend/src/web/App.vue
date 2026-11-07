@@ -8,9 +8,23 @@ import LedgerSwitcher from './components/LedgerSwitcher.vue'
 import PopoverMenu from './components/PopoverMenu.vue'
 import StepUpDialog from './components/StepUpDialog.vue'
 import TopbarFilterBar from './components/TopbarFilterBar.vue'
-import { direction, navKind, pushToParent } from './composables/navDirection'
+import {
+  direction,
+  isWithinAppHistory,
+  navKind,
+  pushToParent,
+  recordHistoryBoundary,
+  setHistoryBoundaryToCurrent,
+} from './composables/navDirection'
 import { useBrowsingUrlSync } from './composables/useBrowsingUrlSync'
-import { markReady, notifyPageEntered, PAGE_READY_KEY, resetPageReady } from './composables/usePageReady'
+import {
+  markReady,
+  notifyPageEntered,
+  PAGE_READY_KEY,
+  resetPageData,
+  resetPageReady,
+} from './composables/usePageReady'
+import { usePeriodStore } from './stores/period'
 import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
@@ -27,7 +41,13 @@ import { useSessionStore } from './stores/session'
 const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
+const period = usePeriodStore()
 const showShell = computed(() => !route.meta.public && session.me !== null)
+
+// The shell-start history boundary (TASK-164 §2-4): everything behind the
+// current window.history.state.position is out of the app's own history — a
+// reload or a direct link never digs past it with the ‹.
+recordHistoryBoundary()
 
 // Single source of the section labels and their icons (TASK-35): the page
 // title and the nav / account-menu items all read from here.
@@ -45,13 +65,17 @@ type SectionName = keyof typeof SECTION_TITLES
 // Main navigation: to / name only — labels and icons come from SECTION_TITLES.
 // The four data sections feed the sidebar nav and the mobile tabbar; settings
 // joins the sidebar alone in a separated second group (TASK-56) and the
-// account screens stay in the top-right account menu as well.
+// account screens stay in the top-right account menu as well. TASK-164 §1:
+// home left the array — its affordances (the tabbar home tab, the brand, the
+// sidebar home link) are plain links sharing onHomePress below, whose press
+// on the home route resets the period instead of navigating. The tab count
+// still covers all four tabs.
 const NAV: { to: string; name: SectionName }[] = [
-  { to: '/', name: 'home' },
   { to: '/receipts', name: 'receipts' },
   { to: '/categories', name: 'categories' },
   { to: '/stores', name: 'stores' },
 ]
+const TAB_COUNT = NAV.length + 1
 
 /** Section of the current route, from route.meta (TASK-74 §4-2): the detail
  * routes and /search carry their own section and manage-* inherits 'settings'
@@ -69,14 +93,19 @@ const ledgerScoped = computed(() => route.meta.ledgerScoped === true)
 // guarded replace — one place for all the browsing pages.
 useBrowsingUrlSync()
 
-// --- the tabbar-外 screens' topbar ‹ (TASK-124 D3) -------------------------------
-// Every screen outside the bottom tabbar (search, the settings panels, the
-// manage screens, apps, usage) climbs to its parent section through a ‹ in
-// the topbar — the parent map is one static table here in the shell; the
-// browsing five, the axis detail (its PageHead ‹) and the feed (its 一覧
-// link) keep their existing navigation.
+// --- the topbar ‹: the browsing history back + the tabbar-外 climb ----------------
+// Two readings of one affordance, same placement and grammar (right after
+// the brand, icon-only). The BROWSING side (home / receipts / categories /
+// stores / the axes / search — the browsingSync routes, TASK-164 §2-4)
+// reads ‹ as "undo the last view move": the press is a router.back() over
+// the app's own history (the same entries the device back walks), bounded
+// by the shell-start position; at the boundary the axes and /search climb
+// to a statically derived parent instead, and the four root screens (no
+// parent of their own) hide the ‹ entirely. The tabbar-外 TEN screens
+// (TASK-124 D3 — search left them for the browsing side) keep the parentTo
+// push: no period change happens there, so "one view move back" and "climb
+// to the parent" barely differ and the guaranteed parent landing stays.
 const TOPBAR_BACK: Record<string, { to: string; label: string }> = {
-  search: { to: '/', label: 'ホーム' },
   'settings-general': { to: '/', label: 'ホーム' },
   'settings-auth': { to: '/', label: 'ホーム' },
   'settings-data': { to: '/', label: 'ホーム' },
@@ -88,14 +117,87 @@ const TOPBAR_BACK: Record<string, { to: string; label: string }> = {
   usage: { to: '/settings/others', label: 'その他' },
   'usage-topic': { to: '/settings/others', label: 'その他' },
 }
-const topbarBack = computed(() => {
+
+/** The browsing side's static fallback parent (TASK-164 §2-4), derived from
+ *  the path structure alone — the page's own view resolution never runs for
+ *  a fallback (it only fires on a boundary arrival: a direct link, a
+ *  reload), and the section list is a good enough landing. The four root
+ *  screens answer null: no fallback exists, the ‹ hides at the boundary. */
+function browsingFallbackParent(path: string): string | null {
+  if (path === '/search') return '/'
+  if (path.startsWith('/axes/category/')) return '/categories'
+  if (path.startsWith('/axes/store/')) return '/stores'
+  if (path.startsWith('/axes/item/') || path.startsWith('/axes/label/') || path.startsWith('/axes/payment/')) {
+    return '/'
+  }
+  return null
+}
+
+interface TopbarBackTarget {
+  /** the full aria-label text (「戻る」 / 「〈親名〉へ戻る」) */
+  label: string
+  /** the browsing side rides router.back(); the rest push the parent */
+  browsing: boolean
+  to?: string
+}
+const topbarBack = computed<TopbarBackTarget | null>(() => {
+  if (route.meta.browsingSync === true) {
+    // within the app's own history the back is real; at the boundary only
+    // the screens with a fallback parent keep the ‹
+    if (isWithinAppHistory() || browsingFallbackParent(route.path) !== null) {
+      return { label: '戻る', browsing: true }
+    }
+    return null
+  }
   const name = route.name
-  return typeof name === 'string' ? (TOPBAR_BACK[name] ?? null) : null
+  if (typeof name !== 'string') return null
+  const parent = TOPBAR_BACK[name]
+  return parent ? { label: `${parent.label}へ戻る`, browsing: false, to: parent.to } : null
 })
+
+// the browsing press: one press = one entry. The in-flight guard swallows a
+// second press until the press's navigation lands, so a burst of presses
+// never walks several entries at one boundary reading — for the back it
+// releases on afterEach, for the fallback climb on the push's own settle.
+const backInFlight = ref(false)
 function goTopbarBack(): void {
   const back = topbarBack.value
-  if (back) pushToParent(router, back.to)
+  if (!back) return
+  if (back.browsing) {
+    if (backInFlight.value) return
+    if (isWithinAppHistory()) {
+      backInFlight.value = true
+      router.back()
+      return
+    }
+    const parent = browsingFallbackParent(route.path)
+    if (parent === null) return
+    // the fallback climb (a push with the back slide). Locked like the back,
+    // and the boundary moves to the landing position ONLY when THIS push
+    // actually lands (review REVIEW-12 #1): a cancelled push — a burst
+    // superseded by another navigation — resolves as a NavigationFailure
+    // and must not consume the boundary move, or the stale boundary would
+    // let the next ‹ walk straight back into the screen this climb just
+    // left (§2-4 comparison (iii)'s ping-pong, resurrected)
+    backInFlight.value = true
+    void pushToParent(router, parent)
+      .then((failure) => {
+        if (!failure) setHistoryBoundaryToCurrent()
+      })
+      .catch(() => {})
+      .finally(() => {
+        backInFlight.value = false
+      })
+    return
+  }
+  if (back.to !== undefined) void pushToParent(router, back.to)
 }
+// the back's own navigation landed — release the guard (the fallback climb
+// releases on its push's settle instead; the boundary move is NOT handled
+// here: it belongs to the climb's landing alone)
+const removeBackAfterEach = router.afterEach(() => {
+  backInFlight.value = false
+})
 // The topbar center filter bar (TASK-44 §11-3/11-6): only on the browsing
 // routes that opted in via route.meta.filters, and only while the user can
 // actually view a ledger (no membership -> no shared filters to show).
@@ -180,6 +282,7 @@ onMounted(() => desktopQuery.addEventListener('change', onDesktopCross))
 onUnmounted(() => {
   desktopQuery.removeEventListener('change', onDesktopCross)
   document.documentElement.classList.remove('drawer-lock')
+  removeBackAfterEach()
 })
 
 // --- account menu (top-right) --------------------------------------------------
@@ -195,6 +298,28 @@ watch(navKey, () => {
   closeDrawer()
   accountOpen.value = false
 })
+
+// --- home affordances (TASK-164 §1) --------------------------------------------
+// The three home entry points (the tabbar home tab, the brand logo, the
+// sidebar home link) are plain links sharing this one press handler. Off
+// home it is the ordinary keys-less navigation (the shared period rides
+// along). ON the home route the press is the "back to base" gesture instead:
+// the period returns to the default (the press-time current month, month
+// mode) with NO navigation at all — the write-back paints the new keys onto
+// the URL as a replace. A same-path press never fires the navKey watcher
+// above, so the handler closes the drawer itself.
+function onHomePress(e: MouseEvent): void {
+  // a modified or non-primary press falls through to the browser's own link
+  // handling (a new tab etc.) — the same guards a RouterLink applies
+  if (e.metaKey || e.altKey || e.ctrlKey || e.shiftKey || e.defaultPrevented || e.button !== 0) return
+  e.preventDefault()
+  if (route.name === 'home') {
+    period.resetToDefault()
+    closeDrawer()
+    return
+  }
+  void router.push('/')
+}
 
 // --- shell page transition (TASK-74 §4-3) --------------------------------------
 // The shell RouterView slides by the navigation direction: forward enters
@@ -221,7 +346,22 @@ function onAfterEnter(): void {
 // pages report their data load through this (usePageReady); the parked scroll
 // restore of a pop waits for it alongside the finished enter
 provide(PAGE_READY_KEY, { markReady })
-watch(pageKey, () => resetPageReady())
+// a path change re-arms the page-ready gates for the incoming view: a new
+// first segment swaps the page (both gates — its enter refires), while a
+// same-segment path change (an axis → its cross axis, the list → the feed)
+// keeps the page mounted — no enter fires there, so only the data gate
+// re-arms and the view's reload markReady releases the parked restore.
+// Without this the restore of a non-remounting pop would wait for an enter
+// that never comes and die at the give-up (REVIEW-12 #5's gap); the park
+// itself also re-checks once on the next task (usePageReady) for the
+// markReady-beats-the-park ordering.
+watch(
+  () => route.path,
+  (path, prev) => {
+    if ((path.split('/')[1] ?? '') !== (prev.split('/')[1] ?? '')) resetPageReady()
+    else resetPageData()
+  },
+)
 
 async function logout(): Promise<void> {
   accountOpen.value = false
@@ -275,9 +415,13 @@ async function logout(): Promise<void> {
                read as a second hamburger); closed is the menu again -->
           <AppIcon :name="drawerOpen ? 'chevron-left' : 'menu'" />
         </button>
-        <RouterLink
-          to="/"
+        <!-- TASK-164 §1: one of the three home affordances — a plain link
+             sharing onHomePress, whose press on the home route resets the
+             period instead of navigating -->
+        <a
+          href="/"
           class="brand topbar-brand"
+          @click="onHomePress"
         >
           <BrandLogo
             variant="full"
@@ -288,15 +432,16 @@ async function logout(): Promise<void> {
             variant="compact"
             class="topbar-logo topbar-logo-compact"
           />
-        </RouterLink>
-        <!-- the tabbar-外 climb (TASK-124 D3): right after the brand, right
-             before the title — never next to the menu button. Icon-only; the
-             parent's name lives in the aria-label alone -->
+        </a>
+        <!-- the topbar ‹: the browsing history back (TASK-164 §2-4) or the
+             tabbar-外 climb (TASK-124 D3) — right after the brand, right
+             before the title, never next to the menu button. Icon-only; the
+             semantics live in the aria-label alone -->
         <button
           v-if="topbarBack"
           type="button"
           class="icon-btn topbar-back"
-          :aria-label="`${topbarBack.label}へ戻る`"
+          :aria-label="topbarBack.label"
           data-test="topbar-back"
           @click="goTopbarBack"
         >
@@ -413,6 +558,20 @@ async function logout(): Promise<void> {
             class="side-nav"
             aria-label="メインメニュー"
           >
+            <!-- TASK-164 §1: the home affordance of the sidebar — a plain
+                 link sharing onHomePress (its home-route press resets the
+                 period and closes the drawer instead of navigating) -->
+            <a
+              href="/"
+              class="side-link"
+              :class="{ active: section === 'home' }"
+              :aria-current="route.name === 'home' ? 'page' : undefined"
+              data-test="nav-home"
+              @click="onHomePress"
+            >
+              <AppIcon :name="SECTION_TITLES.home.icon" />
+              <span>{{ SECTION_TITLES.home.title }}</span>
+            </a>
             <RouterLink
               v-for="n in NAV"
               :key="n.name"
@@ -465,7 +624,9 @@ async function logout(): Promise<void> {
               <Transition
                 :name="transitionName"
                 :css="transitionName !== ''"
+                appear
                 @after-enter="onAfterEnter"
+                @after-appear="onAfterEnter"
               >
                 <component
                   :is="Component"
@@ -481,9 +642,25 @@ async function logout(): Promise<void> {
         class="tabbar"
         aria-label="タブ"
         data-test="tabbar"
-        :style="{ '--tab-count': String(NAV.length) }"
+        :style="{ '--tab-count': String(TAB_COUNT) }"
         :inert="drawerModal || undefined"
       >
+        <!-- TASK-164 §1: the home affordance of the tabbar — a plain link
+             sharing onHomePress (its home-route press resets the period
+             instead of navigating) -->
+        <a
+          href="/"
+          class="tab-link"
+          :class="{ active: section === 'home' }"
+          :aria-current="route.name === 'home' ? 'page' : undefined"
+          @click="onHomePress"
+        >
+          <AppIcon
+            :name="SECTION_TITLES.home.icon"
+            :size="22"
+          />
+          <span>{{ SECTION_TITLES.home.title }}</span>
+        </a>
         <RouterLink
           v-for="t in NAV"
           :key="t.name"

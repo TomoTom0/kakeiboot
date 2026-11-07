@@ -48,6 +48,46 @@
   --series-6: #A591FD;
   --series-7: #A02D5C;
   --series-rest: #8f9a94;
+  /* TASK-161 §6-1: the in-bar series-name labels' ink — the fixed contrast
+     counterpart of each series token (the values differ per theme, so the
+     ink rides as its own token; a palette change retunes these alone) */
+  --series-1-ink: #ffffff;
+  --series-2-ink: #1f2421;
+  --series-3-ink: #ffffff;
+  --series-4-ink: #1f2421;
+  --series-5-ink: #ffffff;
+  --series-6-ink: #1f2421;
+  --series-7-ink: #ffffff;
+  --series-rest-ink: #1f2421;
+  /* TASK-161 §7: the ONE horizontal row-bar thickness every surface reads.
+     TASK-162 §4 (指摘4): 12px -> 16px — the value that houses the §3-1
+     11px/600 in-bar label (11px + 2.5px breathing room each side) */
+  --row-bar-h: 16px;
+  /* TASK-162 §6-1 (指摘6): the ONE vertical trend-bar width cap — the twin
+     of --row-bar-h; bar width = min(cell, this), the upright vertical labels
+     (15px of need) ride inside it with room */
+  --trend-bar-w: 48px;
+  /* TASK-162 §3-2 (指摘3): the label family's type tokens — the in-bar
+     labels (the "small and thin" the指摘 read) and the axis/tick family.
+     One definition each, no per-surface literals (the styles.test grep
+     guards read these) */
+  --bar-label-size: 11px;
+  --bar-label-weight: 600;
+  --bar-label-tracking: 0.02em;
+  /* TASK-162 §2-1 (review 高1): the vertical bar label's NEEDED WIDTH — one
+     upright glyph (the size token) + the side breathing = 15px. The one
+     value every "a cell houses its label" floor reads (the Receipts daily
+     grid's track minimum); tokenized so the floor and the type share one
+     source */
+  --bar-label-w: 15px;
+  --tick-label-size: 0.7rem;
+  --tick-label-weight: 500;
+  /* TASK-162 §3-2/§3-3 (reviews 8): the AXIS labels' own type — the month
+     row and the year row read the same pair (0.8rem/500), the ≤420px band
+     its shrunk size. One definition each, no per-surface literals */
+  --axis-label-size: 0.8rem;
+  --axis-label-weight: 500;
+  --axis-label-size-narrow: 0.65rem;
   /* TASK-123 §4-4: the stacked segments' full-perimeter outline — a
      half-transparent ink that composes darker over light fills (the dark
      theme's white 40% composes lighter), one token for every fill */
@@ -109,6 +149,16 @@
     --series-6: #5D64AA;
     --series-7: #B57CB9;
     --series-rest: #5f6b65;
+    /* TASK-161 §6-1: the dark theme flips several slots' luminance — the in-bar
+       label ink flips with them */
+    --series-1-ink: #ffffff;
+    --series-2-ink: #10130f;
+    --series-3-ink: #ffffff;
+    --series-4-ink: #10130f;
+    --series-5-ink: #10130f;
+    --series-6-ink: #ffffff;
+    --series-7-ink: #10130f;
+    --series-rest-ink: #ffffff;
     /* TASK-123 §4-4: the outline token composes LIGHTER over dark fills */
     --seg-outline: rgb(255 255 255 / 0.4);
     --ledger-teal: #3cbfb3;
@@ -202,9 +252,22 @@ html.drawer-lock { overflow: hidden; }
   gap: 0.75rem;
   height: var(--topbar-h);
   padding: 0 1.5rem;
+  border-bottom: 1px solid var(--bb-border);
+}
+/* the frosted surface rides a pseudo-element, NOT the bar itself: a
+   backdrop-filter on the element makes it the containing block of its
+   position:fixed descendants, which glued the 480px bottom sheets
+   (.popover-dialog.is-narrow) and their scrim to the bar's own box instead
+   of the viewport — the sheet grew upward off-screen and its tab row sat
+   outside the viewport (TASK-164 T2 real-browser catch). On the ::before
+   the blur paints exactly the same while the bar stops containing */
+.topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: color-mix(in srgb, var(--bb-bg) 88%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--bb-border);
 }
 /* selected ledger paints a band on the bottom edge of the top bar; the band
    and the switcher chip cross-fade on a switch so the color change reads as
@@ -534,6 +597,20 @@ html.drawer-lock { overflow: hidden; }
   /* TASK-146 §3 #15: the anchored/sheet scrim fades with its panel */
   transition: opacity 0.15s;
 }
+/* TASK-162 browser pass: the .page fade's drift COMPOSES with the panel's
+   own transform. The bare .page-enter-from/-leave-to translateY is the same
+   specificity as .popover-dialog's translateX(var(--popover-shift)) and won
+   by source order for the whole 0.2s fade — an edge-shifted panel opened
+   outside the 16px viewport margin and the bottom sheet rode 8px under its
+   fixed floor until the fade ended (against popover.ts's own contract).
+   The composed selectors keep the shift on every frame; the sheet keeps its
+   fixed frame (transform none at rest): the drift rides its enter alone and
+   the close stays the pure fade it already was */
+.popover-dialog:not(.is-narrow).page-enter-from,
+.menu.page-enter-from { transform: translateX(var(--popover-shift, 0px)) translateY(8px); }
+.popover-dialog:not(.is-narrow).page-leave-to,
+.menu.page-leave-to { transform: translateX(var(--popover-shift, 0px)) translateY(-4px); }
+.popover-dialog.is-narrow.page-enter-from { transform: translateY(8px); }
 .avatar-btn {
   display: inline-flex;
   align-items: center;
@@ -668,8 +745,9 @@ html.drawer-lock { overflow: hidden; }
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+/* REVIEW-15 中2: the bare .more:hover went under the hover-capable media —
+   the AppsPage text link rides the .hover-ink family (D-4) instead */
 .more { font-size: 0.85rem; font-weight: 600; text-decoration: none; }
-.more:hover { text-decoration: underline; }
 
 .muted { color: var(--bb-muted); }
 .small { font-size: 0.85rem; }
@@ -876,8 +954,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .items { width: 100%; border-collapse: collapse; margin: 0.5rem 0; }
 .items th, .items td { padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--bb-border); text-align: left; }
 .items th { color: var(--bb-muted); font-size: 0.8rem; font-weight: 600; }
-.items tbody tr:hover { background: var(--bb-hover); }
 .items .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* TASK-167 D-6: the item rows are not pressable — no hover wash (D-4); the
+   amount cell takes the mid tier of the three-tier hierarchy (w600) */
+.items td.num { font-weight: 600; }
 .items .neg { color: var(--bb-danger); }
 .item-edit { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.4rem; align-items: center; }
 
@@ -933,8 +1013,13 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .card.kpi { padding: 12px; }
 .kpi { display: flex; flex-direction: column; gap: 0.15rem; }
 .kpi .label { color: var(--bb-muted); font-size: 0.8rem; font-weight: 600; }
-.kpi-head { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; margin: 0; }
-.kpi-value { font-size: 1.5rem; line-height: 1.2; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+/* TASK-161 §4 (review 中8): the Receipts KPI head rides the period header's
+   layout contract — the step pair hugs the label, the value breaks to the
+   far right (space-between + a 1.5rem floor) and a narrow band or a long
+   label wraps the value onto its own right-aligned row (the number never
+   shrinks) */
+.kpi-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 0.75rem 1.5rem; min-width: 0; margin: 0; }
+.kpi-value { font-size: 1.5rem; line-height: 1.2; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; margin-left: auto; }
 .chip {
   align-self: flex-start;
   padding: 0.1rem 0.6rem;
@@ -1000,12 +1085,17 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 }
 .bar {
   width: 100%;
-  max-width: 34px;
+  /* TASK-162 §6-1: the width cap reads the ONE token (the 34px literal is
+     gone; the JS mirror reads this same var through getComputedStyle) */
+  max-width: var(--trend-bar-w);
   border-radius: 6px 6px 2px 2px;
   background: var(--bb-accent-soft);
 }
 .bar-val {
-  font-size: 0.7rem;
+  /* TASK-162 §3-3: the tick family's type — 0.7rem/500/tabular-nums off the
+     tokens (the old weight-400 default is gone) */
+  font-size: var(--tick-label-size);
+  font-weight: var(--tick-label-weight);
   color: var(--bb-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1031,37 +1121,44 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   .bar-col:hover { background: var(--bb-hover); }
 }
 /* the trend card (TASK-100): a 2-column grid — the y-axis gutter and the
-   plot — over a label row. Dense month windows (> 6 bars) fix the wrap to
-   the container width (fit-content would let intrinsic track/label sizes
-   widen it past 360px); the minmax(0, 1fr) tracks split the rest equally */
+   plot — over the year row and the label row. Dense month windows (> 6 bars)
+   fix the wrap to the container width (fit-content would let intrinsic
+   track/label sizes widen it past 360px); the minmax(0, 1fr) tracks split
+   the rest equally. TASK-162 §6-2 (指摘6): the y-axis gutter narrows
+   2.5rem -> 2.25rem (tick-value width verified); TASK-162 §5 adds the third
+   row (.axis-years between .bars and .axis-labels) */
 .trend-wrap {
   width: fit-content;
   min-width: 100%;
   display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   column-gap: 0.25rem;
 }
 .trend-wrap.dense { width: 100%; }
 /* the y-axis: sticky at the scroll port's left edge (background = the zone
    surface, light/dark both) so it never drifts out of view on horizontal
    scrolls. The padding-top aligns the ticks with the bar area (below the
-   headroom); the font-size lives here, not in a template class */
+   headroom); TASK-162 §3-3: the type rides the tick tokens */
 .y-axis {
   position: sticky;
   left: 0;
   z-index: 1;
   background: var(--bb-surface);
   padding-top: 1rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
-  font-size: 0.7rem;
+  font-size: var(--tick-label-size);
+  font-weight: var(--tick-label-weight);
   color: var(--bb-muted);
   font-variant-numeric: tabular-nums;
 }
-.y-axis span { line-height: 1; }
+/* TASK-161 §5-4: the ticks come from axisTicksOf and sit at their own
+   computed ratio offsets (the headroom tops the max tick, ratio 0 sits on
+   the zero baseline) — N spans, no flex distribution */
+.y-axis span {
+  position: absolute;
+  right: 0;
+  line-height: 1;
+}
 .plot { position: relative; min-width: 0; }
 /* hairline guides: the max line sits at the 100%-height top (headroom
    below the top edge), the mid line at the bar area's middle. Never
@@ -1074,14 +1171,56 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   pointer-events: none;
 }
 /* the thinned tick row shares .bars' grid (same template + gap), so each
-   span centers under its bar; grid-column: 2 keeps it out of the y gutter */
+   span centers under its bar; grid-column: 2 keeps it out of the y gutter.
+   TASK-162 §3-3 (指摘3): the axis labels' own type — 0.8rem/500 (the old
+   .small class borrow is gone; the ≤420px band keeps its 0.65rem override) */
 .axis-labels {
   grid-column: 2;
+  grid-row: 3;
   display: grid;
   gap: 0.25rem; /* TASK-104: follows .bars' gap so each label keeps its bar's cell */
   margin-top: 0.4rem;
+  font-size: var(--axis-label-size);
+  font-weight: var(--axis-label-weight);
 }
 .axis-labels span { text-align: center; white-space: nowrap; }
+/* TASK-162 §5-2/§5-3 (指摘5): the YEAR tick row — the upper tier over the
+   month row, on the SAME grid (each tick pins its own column, so the sparse
+   row keeps every tick on its month's cell). The bare 4-digit year, one per
+   year at most (the head + the January boundaries), independent of the month
+   row's thinning; the month row hugs it from below. The type rides the axis
+   tokens the month row reads (§3-3) */
+.axis-years {
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: 0.2rem;
+  font-size: var(--axis-label-size);
+  font-weight: var(--axis-label-weight);
+  color: var(--bb-muted);
+}
+.axis-years span {
+  text-align: center;
+  white-space: nowrap;
+  justify-self: center;
+  line-height: 1;
+}
+/* TASK-162 §5-3 (review 中5): the year row's END-cell flush — the month row's
+   own end-flush grammar applied by CELL POSITION (.is-edge-start/end arrive
+   from the component: the tick on column 1 / the last column — never the DOM
+   order, which the per-window slide reading reorders). A ~28px year label on
+   a narrow dense/end cell would hang past the plot's edge centered; pinned
+   to the edge side the text grows INTO the plot. The dense band applies at
+   every width (its cells run ~17-43px); the ≤420px band mirrors the month
+   row's own narrow twin; a mid-window January keeps its centered cell (the
+   mid-tick overflow tolerance is §8's implementation-time item) */
+.trend-wrap.dense .axis-years span.is-edge-start { width: max-content; justify-self: start; }
+.trend-wrap.dense .axis-years span.is-edge-end { width: max-content; justify-self: end; }
+@media (max-width: 420px) {
+  .axis-years span.is-edge-start { width: max-content; justify-self: start; }
+  .axis-years span.is-edge-end { width: max-content; justify-self: end; }
+}
 /* the dense window-end ticks flush to their cell ends: a nowrap line
    wider than its ~17px cell overflows the span box, and no text-align
    moves that overflow (chromium clamps the line's start edge to the
@@ -1100,35 +1239,48 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    end like dense); at >=421px the cells hold the 0.8rem text centered, so
    the two rules part ways there */
 @media (max-width: 420px) {
-  .trend-wrap .axis-labels { font-size: 0.65rem; }
+  .trend-wrap .axis-labels { font-size: var(--axis-label-size-narrow); }
   .axis-labels span:last-child { width: max-content; justify-self: end; }
 }
+/* TASK-162 browser pass: the dense window's END value labels take the axis
+   end-flush's twin — a nowrap compactYen wider than its ~17px cell hung past
+   the plot's edge and fed the scroll port a phantom scroll (the axis row's
+   own guard above); pinned to the edge side the text grows INTO the plot,
+   over the neighbor columns the thinning left label-less */
+.trend-wrap.dense .bar-col:first-child .bar-val { align-self: flex-start; }
+.trend-wrap.dense .bar-col:last-child .bar-val { align-self: flex-end; }
 /* the window-ends axis (TASK-42) of ReceiptsPage's inline daily card —
    the trend card moved to .axis-labels (TASK-100) but this stays */
 .axis-ends { display: flex; justify-content: space-between; margin-top: 0.4rem; }
 
-/* the trend window's prev/next pair (TASK-104): fixed side columns around
-   the scroll port; the buttons center on the plot's vertical middle. The
-   pair rides PeriodPicker's .icon-btn vocabulary, resized to the shared
-   44px tap-target floor */
+/* the trend window's prev/next pair (TASK-104): PeriodPicker's .icon-btn
+   vocabulary at the shared 44px tap-target floor. TASK-162 §6-3 (指摘6,
+   review 8): the pair LEFT the grid's side columns — the two auto columns
+   (+gaps) squeezed the middle column ~88px, the narrow viewport's chief
+   margin. It rides an absolute band over the plot's top now: has-nav
+   reserves the 44px band so the chevrons never overlap a bar or its value
+   labels, and the chart column takes the full width back */
 .trend-window {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.25rem;
+  position: relative;
   overflow: hidden; /* clip the concatenated slide's travel past the pinned wrap (TASK-115) */
 }
-.trend-window > .hscroll { min-width: 0; } /* keep the middle column shrinkable */
-.trend-nav { width: 44px; height: 44px; }
+.trend-window.has-nav { padding-top: 44px; }
+.trend-window > .hscroll { min-width: 0; } /* keep the chart column shrinkable */
+.trend-nav { position: absolute; top: 0; width: 44px; height: 44px; }
+.trend-nav--prev { left: 0; }
+.trend-nav--next { right: 0; }
 /* the trend window's continuous slide (TASK-115): the old and new windows
    concatenate into ONE graph and .bars + .axis-labels carry the same
    translateX under one class (the bars row's transitionend is the single
    report source; the wrapper parks/resets the transform under .no-anim so
-   those steps never animate). The 220ms easing keeps TASK-108's grammar */
+   those steps never animate). The 220ms easing keeps TASK-108's grammar.
+   TASK-162 §5-4 (review 3): the year row rides the same machinery */
 .bars.is-sliding,
-.axis-labels.is-sliding { transition: transform 220ms cubic-bezier(.2, .7, .2, 1); }
+.axis-labels.is-sliding,
+.axis-years.is-sliding { transition: transform 220ms cubic-bezier(.2, .7, .2, 1); }
 .bars.no-anim,
-.axis-labels.no-anim { transition: none; }
+.axis-labels.no-anim,
+.axis-years.no-anim { transition: none; }
 /* the concatenated pair is twice the wrap wide: the wrap clips at the
    committed window's pinned width (its is-sliding rule) and the scroll
    port hides — the 2-window overflow never feeds a phantom scrollbar */
@@ -1170,8 +1322,13 @@ h3.zone-title { font-size: 0.85rem; }
    two-column band the side column's 24rem is the effective width */
 .zone--list { max-width: 38rem; }
 
-/* the period header: whitespace + hairline, typography leads — the total
-   at 2.25rem/700/tabular-nums is the whole statement */
+/* the period header (TASK-161 §4 rework): whitespace + hairline, typography
+   leads — one line of [‹] period label [›] against the far-right total at
+   2.25rem/700/tabular-nums (the number is the whole statement; no caption
+   word). The gap is two-staged: the step pair hugs the label (0.25rem), the
+   label group and the total split the space-between with a 1.5rem floor.
+   A narrow band or a long label wraps the total to its own right-aligned
+   row (flex-wrap — the number never shrinks) */
 .period-head {
   display: flex;
   flex-wrap: wrap;
@@ -1181,6 +1338,16 @@ h3.zone-title { font-size: 0.85rem; }
   padding: 0.25rem 0 0.75rem;
   border-bottom: var(--bb-rule);
 }
+.period-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+/* TASK-161 §3 (指摘4): the pair rides the 44px shared tap-target floor (the
+   .icon-btn default is 40px — the PeriodPicker pair's own resize, the
+   trend-nav twin) */
+.period-step .icon-btn { width: 44px; height: 44px; }
 .period-label { margin: 0 0 0.1rem; }
 .period-total {
   font-size: 2.25rem;
@@ -1188,7 +1355,23 @@ h3.zone-title { font-size: 0.85rem; }
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
+  margin-left: auto;
 }
+/* TASK-161 §2-2: the period label's direction micro move — a period change
+   slides the label ~1em toward the travel direction through a 150ms fade
+   (the pane itself never remounts); the JS side skips the class under a
+   reduced-motion preference */
+@keyframes bb-label-next {
+  from { opacity: 0; transform: translateX(1em); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes bb-label-prev {
+  from { opacity: 0; transform: translateX(-1em); }
+  to { opacity: 1; transform: none; }
+}
+.period-step-label { display: inline-flex; min-width: 0; }
+.period-step-label.label-move-next { animation: bb-label-next 150ms cubic-bezier(.2, .7, .2, 1); }
+.period-step-label.label-move-prev { animation: bb-label-prev 150ms cubic-bezier(.2, .7, .2, 1); }
 
 /* the stacked bars: segments stack bottom-up inside the column. TASK-115:
    the trim rescales the columns to the new window's niceMax — the height
@@ -1204,7 +1387,7 @@ h3.zone-title { font-size: 0.85rem; }
   display: flex;
   flex-direction: column-reverse;
   width: 100%;
-  max-width: 34px;
+  max-width: var(--trend-bar-w);
   transition: height 220ms cubic-bezier(.2, .7, .2, 1);
 }
 /* TASK-123 (design §4-4/§4-5 rule E): the segment separation is the
@@ -1221,62 +1404,93 @@ h3.zone-title { font-size: 0.85rem; }
   flex: none;
   border: 1px solid var(--seg-outline);
 }
+/* TASK-162 §2-1 (指摘2): the vertical bars' in-segment label — UPRIGHT
+   vertical-rl writing (the glyphs stand upright, flowing top→bottom; the
+   nakaguro centers itself), the ONE class the TrendBars and Receipts bars
+   share. The type rides the §3-1 bar-label tokens; the ink is the fill's
+   contrast token inline. The needed width is one em + the side paddings
+   (15px) — every granularity's narrowest cell houses it */
+.bar-seg-label {
+  display: block;
+  margin: 0 auto;
+  padding: 2px 0;
+  max-height: 100%;
+  overflow: hidden;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  font-size: var(--bar-label-size);
+  font-weight: var(--bar-label-weight);
+  letter-spacing: var(--bar-label-tracking);
+  line-height: 1;
+  white-space: nowrap;
+}
 .bar-col.stacked { position: relative; }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
-/* The one-line receipt row (TASK-75 §6-4): date / store (ellipsis) / labels
-   / amount on a 44px line — the 34px icon column is gone */
-.recent-row {
-  display: grid;
-  grid-template-columns: 3.2rem minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 44px;
-  padding: 0 0.5rem;
+/* TASK-167 D-1/D-2 (design_row_hierarchy.md §2): the ONE shared two-line
+   row grammar (the DataRow component) — the main line (the data name 16px
+   w600 + the amount w700 tabular at the right, the row's strongest figure)
+   over a sub line (the derived representative items, the secondary figure
+   and the label dots) at 0.8rem muted. The rows grow past the old one-line
+   44px; the per-surface recent-row definitions are gone. The row wash is
+   pressable-rows-only and lives in the hover media block below (D-4) */
+.data-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  row-gap: 2px;
+  min-height: 52px;
+  padding: 0.25rem 0.5rem;
   margin: 0 -0.5rem;
+  width: 100%;
   border-radius: 8px;
   color: inherit;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
-  transition: background-color 0.15s;
 }
-.recent-row:hover { background: var(--bb-hover); }
-.recent-date { color: var(--bb-muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+/* scoped under .data-row: the settings `.row` grammar keeps its own bare
+   .row-main (the manage block above, flex: 1 1 14rem) — unscoped, that
+   basis leaks into this column flex and stretches the row's main line to
+   14rem of height, and this flex/baseline leaks into the settings rows */
+.data-row .row-main { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; flex: none; }
+.row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.data-row .amount { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.row-sub {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--bb-muted);
+}
+.row-items { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-fig { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* TASK-167 D-4: the element-local hover family — a pressable in-row /
+   in-panel element (the detail links, the inline when-links, the link
+   buttons) reacts at its own boundary (underline + accent); non-pressable
+   text never reacts. Touch never sees hover, so the reactions live inside
+   the hover-capable media only (the TASK-130 §2-1 guard, extended); the
+   keyboard focus takes the same reaction outside the media */
+@media (hover: hover) {
+  .hover-ink:hover { text-decoration: underline; color: var(--bb-accent); }
+  a.data-row.is-link:hover,
+  button.data-row.is-link:hover,
+  a.week-row.is-link:hover,
+  button.week-row.is-link:hover { background-color: var(--bb-hover); }
+}
+.hover-ink:focus-visible { color: var(--bb-accent); text-decoration: underline; }
 /* --- /search (TASK-41): the two-row head, the flat result rows and the
-   item rows' two-line composition. The receipt rows reuse .recent-row with
-   its icon column dropped (date / store / amount) --- */
+   item rows' two-line composition. Both tabs' rows ride the shared
+   .data-row grammar (TASK-167; REVIEW-15 中1 moved the item tab over too —
+   the per-surface .search-item-* composition is gone) --- */
 .search-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
 .search-input { flex: 1 1 auto; min-width: 0; }
 .search-scope { flex: none; white-space: nowrap; }
 /* the tab strip stretches full width like the settings tabs */
 .search-tabs { display: flex; }
 .search-tabs .tab { flex: 1 1 auto; }
-.search-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-/* the search receipt row keeps its two-line composition (store over the
-   label dots) — its .recent-main cell is search-only now that the browsing
-   rows are one line (TASK-75 §6-4) */
-.search-row .recent-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
-.search-item-row { padding: 0.45rem 0.5rem; margin: 0 -0.5rem; border-radius: 8px; }
-.search-item-row:hover { background: var(--bb-hover); }
-.search-item-main {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-width: 0;
-  color: inherit;
-  text-decoration: none;
-}
-.search-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.search-item-sub {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  color: var(--bb-muted);
-  font-size: 0.85rem;
-}
-.search-item-category { color: var(--bb-muted); }
 .search-meta { margin: 0 0 0.5rem; color: var(--bb-muted); font-size: 0.9rem; }
-.recent-store { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 
 .empty { margin: 0.5rem 0 0; }
 .empty-state {
@@ -1355,28 +1569,12 @@ h3.zone-title { font-size: 0.85rem; }
 }
 .page-menu-trigger:hover, .page-menu-trigger[aria-expanded='true'] { box-shadow: 0 0 0 2px var(--bb-accent-soft); }
 
-/* The detail pages' heading row (PageHead, TASK-74 §4-5): ‹ 44px, the kind
-   label small, the name bold, the total at the right end, then the "..."
-   menu slot — one row plus the sub line. The final density pass is
-   TASK-75's; this is the minimal layout. */
+/* The detail pages' heading row (PageHead, TASK-74 §4-5; the ‹ is gone since
+   TASK-164 §2-4 — the topbar ‹ is the axis back now): the kind label small,
+   the name bold, the total at the right end, then the "..." menu slot — one
+   row plus the sub line. The final density pass is TASK-75's; this is the
+   minimal layout. */
 .page-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
-.page-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  flex: none;
-  margin-left: -0.5rem;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--bb-accent);
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-.page-back:hover { background: var(--bb-hover); }
 .page-head-kind { margin: 0; flex: none; color: var(--bb-muted); font-size: 0.8rem; }
 .page-head-parent { margin-right: 0.35rem; }
 .page-head-parent::after { content: '・'; color: var(--bb-muted); }
@@ -1425,7 +1623,8 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
   font-size: 0.85rem;
   cursor: pointer;
 }
-.link-btn:hover { text-decoration: underline; }
+/* TASK-167 D-4: the hover reaction moved into the shared .hover-ink family
+   (the media-guarded block at the row grammar) */
 
 /* The ranked row as one 44px line (TASK-75 §6-4, TASK-89): swatch / label /
    share % / amount / chevron on a five-track grid (TASK-105 adds the leading
@@ -1436,8 +1635,13 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
    carry the outline, the cap or the allocation rules). RankedList sets
    --rank-color via seriesColor for the swatch and the bar's single segment.
    No standalone meter element, no gap between rows for it */
-.ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ranked-row,
+.ranked { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; position: relative; }
+/* TASK-167 D-1: the ranked row rides the shared .data-row two-line grammar
+   (the DataRow component — main line: swatch + axis label + amount; sub
+   line: the axis value's derived top items + the share %). Only the bar
+   band stays ranked-specific. The week row keeps its own grid (its two-line
+   composition predates the shared grammar: label+amount over the full-width
+   bar track) */
 .week-row {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr) auto auto 12px;
@@ -1456,34 +1660,40 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
   text-decoration: none;
 }
 /* TASK-129: the containing block of the absolutely-positioned bottom track
-   (the track spans the row's full width including the 0.5rem side paddings) */
-.ranked-row { position: relative; }
+   (the track spans the row's full width including the side paddings).
+   TASK-161 §7 (review 中7): the bar owns the row's bottom band — the
+   padding keeps the text and the bar from sharing pixels */
+.ranked-row { position: relative; border-radius: 10px; padding-bottom: calc(var(--row-bar-h) + 4px); }
+.ranked-row .row-main { gap: 8px; }
 /* link rows (RankedList `to` / `select`, TASK-74 §4-6 / TASK-65): the same
-   box plus the affordances; the hover paints background-color so the share
-   gradient survives. `select` rows render as <button> (in-place filter) */
+   box plus the affordances — the wash lives in the hover media block above
+   (TASK-167 D-4). `select` rows render as <button> (in-place filter) */
 a.ranked-row.is-link,
 button.ranked-row.is-link,
+a.data-row.is-link,
+button.data-row.is-link,
 a.week-row.is-link,
 button.week-row.is-link { cursor: pointer; transition: background-color 0.15s; }
-a.ranked-row.is-link:hover,
-button.ranked-row.is-link:hover,
-a.week-row.is-link:hover,
-button.week-row.is-link:hover { background-color: var(--bb-hover); }
 a.ranked-row.is-link:focus-visible,
 button.ranked-row.is-link:focus-visible,
+a.data-row.is-link:focus-visible,
+button.data-row.is-link:focus-visible,
 a.week-row.is-link:focus-visible,
 button.week-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
 button.ranked-row,
+button.data-row,
 button.week-row { border: 0; background-color: transparent; }
-.ranked-label { min-width: 0; }
+.ranked-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ranked-share { color: var(--bb-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .ranked-chevron { color: var(--bb-muted); flex: none; }
 /* TASK-105: the leading series swatch — a 12px round dot in the row's
    seriesColor (the legend the graph never grows; rest rows paint grey).
-   Every row renders it so the label column never shifts */
+   Every row renders it so the label column never shifts. TASK-162 §4: the
+   square rides width + aspect-ratio (the styles guard bans bare
+   `height: 12px` literals — the thickness belongs to --row-bar-h alone) */
 .ranked-swatch {
   width: 12px;
-  height: 12px;
+  aspect-ratio: 1;
   border-radius: 50%;
   background: var(--rank-color);
 }
@@ -1495,42 +1705,174 @@ button.week-row { border: 0; background-color: transparent; }
    reads through weight, not color. This block MUST sit after the shared
    `.ranked-row, .week-row` block: the same-specificity
    grid-template-columns override wins by source order. */
-.week-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.week-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .week-row {
   /* the shared 4-track ranked grid overridden to the 2 cells (label,
      amount) over the full-width bar track row */
   grid-template-columns: minmax(0, 1fr) auto;
   align-content: center;
-  row-gap: 3px;
+  row-gap: 4px;
   cursor: pointer;
 }
 .week-label { min-width: 0; font-variant-numeric: tabular-nums; }
 .week-row.current .week-label,
 .week-row.current .amount { font-weight: 600; }
-/* TASK-123 (design §4-7/§4-4): the week row's DOM stacked bar — a 6px-high
-   flex-row track under the label/amount line (the readable replacement for
-   the old 2px gradient). The bar's width is the week total over the SCREEN's
+/* TASK-123 (design §4-7/§4-4): the week row's DOM stacked bar — a flex-row
+   track under the label/amount line (the readable replacement for the old
+   2px gradient). The bar's width is the week total over the SCREEN's
    absolute scale (TASK-129 web-common.bar-scale, JS-computed px — never the
    old max-week 100% peg). TASK-129 (web-common.row-bar-component): the bar
-   element is the ONE shared row-bar grammar both row kinds ride — .row-bar +
-   .row-seg below, defined exactly once with no per-surface forks. The ranked
-   row's bar spans the row's full width (padding included) through its own
-   absolutely-positioned track; the week row keeps this grid-row track */
-.week-bar-track { grid-column: 1 / -1; display: block; height: 6px; }
+   element is the ONE shared row-bar grammar both row kinds ride — the RowBar
+   component's .row-bar + .row-seg below, defined exactly once with no
+   per-surface forks. TASK-161 §7: the thickness reads --row-bar-h (12px —
+   one variable every horizontal bar references, no per-surface literals)
+   and the row gap widens so the thicker bars do not fuse into a band */
+.week-bar-track { grid-column: 1 / -1; display: block; height: var(--row-bar-h); }
 .ranked-bar-track {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 6px;
+  height: var(--row-bar-h);
 }
-.row-bar { display: flex; height: 6px; }
+/* TASK-161 §2-2/§7: the bar length eases on a period change (the width
+   transition — the same curve as the slide vocabulary). The SEGMENTS carry
+   it too: they paint at their own fixed px widths (flex: none), so the
+   outer bar's transition alone would swap the coloured shape at once while
+   only the empty remainder eased */
+.row-bar {
+  display: flex;
+  height: var(--row-bar-h);
+  transition: width 220ms cubic-bezier(.2, .7, .2, 1);
+  /* TASK-162 §1-10: the anchor a leaving segment's absolute frame rides (the
+     keyed enter/leave fade) */
+  position: relative;
+}
 .row-seg {
   height: 100%;
   flex: none;
   border: 1px solid var(--seg-outline);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  transition: width 220ms cubic-bezier(.2, .7, .2, 1);
 }
-.row-seg:last-child { border-radius: 0 1.5px 1.5px 0; }
+/* TASK-161 §7: the data-end cap follows min(2, thickness/4) — the DOM twin
+   of BarSegs' capR (2px at the 16px thickness; the base end stays square) */
+.row-seg:last-child { border-radius: 0 2px 2px 0; }
+/* TASK-162 §1-9 (review 4): the PRESSABLE segment — segSelect turns the
+   non-rest segments into buttons (BreakdownBar's one-bar links). The button
+   keeps the span's visual grammar exactly: the 24px box clears WCAG 2.5.8's
+   minimum over the 16px band, with background-clip: content-box confining
+   the fill to the middle 16px and an ::before carrying the 1px outline +
+   the inherited data-end cap inside that band (the band above/below stays
+   transparent) */
+button.row-seg {
+  height: 24px;
+  padding: 4px 0;
+  border: 0;
+  background-clip: content-box;
+  /* TASK-162 review 中2: the 24px box CENTERS on the 16px bar (stretch would
+     top-pin it and drop the painted band 4px below the spans' band); the
+     content-box fill then lands exactly on the .row-seg spans' own 16px —
+     the whole one-bar band stays level */
+  align-self: center;
+  position: relative;
+  cursor: pointer;
+  font: inherit;
+}
+button.row-seg::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  right: 0;
+  border: 1px solid var(--seg-outline);
+  border-radius: inherit;
+  pointer-events: none;
+}
+button.row-seg:focus-visible {
+  outline: 2px solid var(--bb-accent);
+  outline-offset: -2px;
+}
+/* TASK-162 §1-10 (review 9): the one-bar's state-change vocabulary — a
+   segment enter/leave fades (150ms, the bb-appear grade) and a label-text
+   change crossfades; the width transition above carries the moves (the
+   stable series keys make the moves keyed) */
+.row-seg-enter-active,
+.row-seg-leave-active { transition: opacity 150ms; }
+.row-seg-enter-from,
+.row-seg-leave-to { opacity: 0; }
+.row-seg-leave-active { position: absolute; }
+.row-seg-label-enter-active,
+.row-seg-label-leave-active { transition: opacity 150ms; }
+.row-seg-label-enter-from,
+.row-seg-label-leave-to { opacity: 0; }
+/* TASK-161 §6-1 + TASK-162 §3-1 (指摘3): the in-bar series-name label — the
+   bar-label tokens (11px/600/0.02em, line-height 1) inside the 16px bar, in
+   the fill's contrast ink token, centred in the segment with the 4px end
+   paddings */
+.row-seg-label {
+  display: block;
+  width: 100%;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--bar-label-size);
+  font-weight: var(--bar-label-weight);
+  letter-spacing: var(--bar-label-tracking);
+  line-height: 1;
+  text-align: center;
+}
+/* TASK-162 §1 (指摘1): the Home breakdown's ONE bar — the full-width track
+   (the 24px band: the 16px bar centred with the press margin), the absolute
+   graduation over it (axisTicksOf's 5 cumulative-amount steps, renamed from
+   the ranked-list's .ranked-ticks — §1-5) and the headroom the tick values
+   occupy above */
+.breakdown-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 24px;
+  margin-top: 1.35rem;
+}
+.breakdown-ticks {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+.breakdown-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--bb-border);
+}
+/* the gridlines stay UNDER the bar (z-order: ticks < bar — the lines never
+   cross the segment fills, §1-5); the values ride above the track's top
+   edge in the tick tokens (§3-3) */
+.breakdown-ticks { z-index: 0; }
+.breakdown-track .row-bar { position: relative; z-index: 1; }
+.breakdown-tick-val {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateY(-100%);
+  padding-bottom: 0.15rem;
+  font-size: var(--tick-label-size);
+  font-weight: var(--tick-label-weight);
+  line-height: 1;
+  color: var(--bb-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* the % share column drops on the absolute-reading surfaces (the header
+   breakdown): the five-track grid loses its third track */
+/* TASK-167: the no-share surfaces drop the sub figure through the component
+   (no grid override — the row is the shared flex grammar now) */
 
 .detail-kpi { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; margin: 0 0 0.5rem; }
 .detail-kpi .amount { font-size: 1.5rem; }
@@ -1547,8 +1889,8 @@ button.week-row { border: 0; background-color: transparent; }
   text-decoration: none;
 }
 .sub-row > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-a.sub-row { transition: background-color 0.15s; }
-a.sub-row:hover { background: var(--bb-hover); }
+/* REVIEW-15 中2: the a.sub-row link pair (the transition + the media-bare
+   row wash) is gone — no template renders an anchor .sub-row anymore */
 
 /* TASK-131 (design §3): the padding: 0 reset is gone — at the same
    specificity it beat .bar-col's TASK-100 headroom (1rem top padding) on
@@ -1585,8 +1927,13 @@ a.sub-row:hover { background: var(--bb-hover); }
 }
 .chip-x:hover { background: color-mix(in srgb, var(--bb-accent) 20%, transparent); }
 
+/* TASK-162 §2-6/§6-1 (reviews 高1/中6): the track's column floor is the
+   vertical label's needed width (--bar-label-w, the template's minmax reads
+   it) and the whole grid scrolls in the .hscroll wrapper when a period's
+   columns cannot fit the card — every cell stays at label width or wider, so
+   the in-segment labels never hang outside their segments */
 .daily-bars { display: grid; align-items: end; gap: 2px; height: 110px; }
-.daily-col { display: flex; align-items: flex-end; height: 100%; border-radius: 3px; }
+.daily-col { display: flex; align-items: flex-end; justify-content: center; height: 100%; border-radius: 3px; }
 .daily-col:hover { background: var(--bb-hover); }
 /* TASK-116 (design §3-2): the daily/weekly/monthly bar became a stacked
    container — the same segment grammar as the trend's .bar-stack (bottom =
@@ -1596,11 +1943,15 @@ a.sub-row:hover { background: var(--bb-hover); }
    where the static 2px container radius + overflow clip recreated the pill
    shape — the corner lives on the top segment's JS cap radius alone), and
    the segments carry the full-perimeter 1px outline consumed inside their
-   allocated px heights (allocateStack always fits — nothing clips) */
+   allocated px heights (allocateStack always fits — nothing clips).
+   TASK-162 §6-1 (review 中6): the bar's width follows the ONE rule the trend
+   bars read — min(cell, --trend-bar-w) — centered in its cell like the
+   trend .bar-stack (wide cells with few columns no longer stretch the bar) */
 .daily-bar {
   display: flex;
   flex-direction: column-reverse;
   width: 100%;
+  max-width: var(--trend-bar-w);
 }
 .daily-seg {
   display: block;
@@ -1768,7 +2119,10 @@ a.sub-row:hover { background: var(--bb-hover); }
    while the dialog lower tier keeps the 6px form; the foot + clear button
    move with it */
 .label-filter-dots { display: inline-flex; gap: 2px; }
-.label-filter-dot { width: 6px; height: 6px; border-radius: 50%; }
+/* TASK-161 §7 note: the square 6px is written through aspect-ratio so the
+   stylesheet carries no bare `height: 6px` literal (the row-bar thickness
+   rule greps for it — every horizontal bar reads --row-bar-h) */
+.label-filter-dot { width: 6px; aspect-ratio: 1; border-radius: 50%; }
 .label-filter-foot { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
 .label-clear-btn {
   padding: 0.25rem 0.5rem;
@@ -1837,7 +2191,6 @@ a.sub-row:hover { background: var(--bb-hover); }
   border-radius: var(--bb-radius);
 }
 .feed-back { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.9rem; font-weight: 600; text-decoration: none; }
-.feed-back:hover { text-decoration: underline; }
 .feed-position { font-variant-numeric: tabular-nums; }
 .feed-nav-buttons { display: inline-flex; gap: 0.25rem; }
 .feed-nav-buttons .icon-btn { width: 44px; height: 44px; }
@@ -1915,29 +2268,32 @@ a.sub-row:hover { background: var(--bb-hover); }
 .io-field input[type='file'] { min-width: 12rem; max-width: 100%; }
 .io-row .msg { width: 100%; margin: 0.75rem 0 0; }
 
-/* receipt detail */
+/* receipt detail — TASK-167: the head's chip tags row is gone (the payment
+   method and the store category ride as inline muted links on the datetime
+   line), the edit action is the pencil ibtn at the head's top-right, and
+   the item list takes the three-tier typography (the zone h2s are gone) */
 .receipt-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
 .receipt-head p { margin: 0.1rem 0; }
-.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.4rem !important; }
-.tag { padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--bb-surface-2); color: var(--bb-muted); font-size: 0.78rem; font-weight: 600; }
+.receipt-side { display: flex; flex-direction: column; align-items: flex-end; gap: 0.4rem; }
+.receipt-when { font-size: 0.85rem; }
+.when-link { color: inherit; text-decoration: none; }
 /* detail links into the hierarchy pages (TASK-74 §4-8): the item category
- * keeps the small size but widens its tap target past the text box; the
- * store name keeps the accent link look, the store-category tag its chip
- * look (muted, no underline until hovered) */
-.cat-link { display: inline-block; padding: 4px 6px; margin: -4px -6px; font-size: 0.85rem; text-decoration: none; }
-.cat-link:hover { text-decoration: underline; }
+ * is an inline muted small string after the name (TASK-167 D-5 — no chip
+ * padding, never its own line); the store name keeps the link look. Both
+ * react through the shared .hover-ink family (D-4) */
+.items td .cat-link, .items td .small { font-size: 0.78rem; }
+.cat-link { color: var(--bb-muted); text-decoration: none; }
 .store-link { text-decoration: none; }
-.store-link:hover { text-decoration: underline; }
-.tag-link { text-decoration: none; }
-.tag-link:hover { text-decoration: underline; }
 .receipt-total { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
 .receipt-total strong { font-size: 1.9rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .receipt-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
 .receipt-body .card { margin-bottom: 0; }
 .receipt-body .card:only-child { grid-column: 1 / -1; }
-.items tfoot td { border-bottom: 0; font-weight: 700; }
-.note { margin: 0.75rem 0 0; padding: 0.6rem 0.75rem; border-radius: var(--bb-radius); background: var(--bb-surface-2); }
-.receipt-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 1rem; }
+/* TASK-167 D-6: the 明細合計 row — the rule above it, a muted small w600
+   label and the w700 tabular value (the top tier under the head total) */
+.items tfoot td { border-top: 1px solid var(--bb-border); border-bottom: 0; }
+.items tfoot td:first-child { font-size: 0.85rem; font-weight: 600; color: var(--bb-muted); }
+.items tfoot td.num { font-weight: 700; }
 .btn-quiet { border-color: transparent; background: transparent; color: var(--bb-muted); font-weight: 500; }
 .btn-quiet:hover:not(:disabled) { color: var(--bb-fg); }
 .deleted-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 1rem; }
@@ -2144,7 +2500,7 @@ a.sub-row:hover { background: var(--bb-hover); }
   height: 150px;
   margin-top: 0.75rem;
 }
-.skeleton .sk-bar { flex: 1; max-width: 34px; height: 100%; }
+.skeleton .sk-bar { flex: 1; max-width: var(--trend-bar-w); height: 100%; }
 .skeleton .card { display: flex; flex-direction: column; justify-content: flex-start; }
 
 @media (max-width: 720px) {
@@ -2223,9 +2579,11 @@ a.sub-row:hover { background: var(--bb-hover); }
   .slide-back-leave-to { transform: none; }
   /* the trend window's continuous slide is off as well (TASK-115): the JS
      side never assembles one under reduced motion — these rules are the
-     second guard (an instant swap, the height rescale included) */
+     second guard (an instant swap, the height rescale included). TASK-162
+     §5-4: the year row rides the same guard */
   .bars.is-sliding,
-  .axis-labels.is-sliding { transition: none; }
+  .axis-labels.is-sliding,
+  .axis-years.is-sliding { transition: none; }
   .bar-stack { transition: none; }
   .msg, .skeleton .sk { animation: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
@@ -2246,4 +2604,17 @@ a.sub-row:hover { background: var(--bb-hover); }
   .bb-appear-enter-active,
   .bb-appear-leave-active { transition: none; }
   .zone { transition: none; }
+  /* TASK-161 §2-2/§7: the period-move vocabulary's new members are off as
+     well — the row-bar width transition and the label's micro move (the JS
+     side skips them too; these are the second guard) */
+  .row-bar { height: var(--row-bar-h); transition: none; }
+  .row-seg { transition: none; }
+  /* TASK-162 §1-10: the one-bar's enter/leave fades and the label crossfade
+     are off as well (the JS side skips them too; second guard) */
+  .row-seg-enter-active,
+  .row-seg-leave-active,
+  .row-seg-label-enter-active,
+  .row-seg-label-leave-active { transition: none; }
+  .period-step-label.label-move-next,
+  .period-step-label.label-move-prev { animation: none; }
 }

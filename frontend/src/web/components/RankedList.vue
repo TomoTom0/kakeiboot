@@ -1,38 +1,30 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from 'vue'
 import type { RouteLocationRaw } from 'vue-router'
 import type { AnalysisAxis, StatsRow } from '../api/data'
-import AppIcon from './AppIcon.vue'
-import { formatYen } from '../composables/format'
+import AppearList from './AppearList.vue'
+import DataRow from './DataRow.vue'
+import RowBar from './RowBar.vue'
+import TweenYen from './TweenYen.vue'
+import { topItemsText } from '../composables/format'
 // TASK-116: the mapping lives in shared/lib (web + widget, same palette)
 import { SERIES_REST, SERIES_SLOT_COUNT, seriesColor } from '@/shared/lib/seriesColor'
 import { allocateStack, type AllocatedSegment } from '@/shared/lib/stackedBars'
 
-// Ranked rows as one 44px line (TASK-75 §6-4): swatch / label / share % /
-// amount / chevron on a single grid. TASK-89: the donut is gone, so the
-// per-row color dots and the `colors` palette prop are gone too. TASK-105:
-// the row color is the deterministic seriesColor of the row's key
-// (`--rank-color` drives the leading swatch — the same color the trend
-// segment paints), past the first SERIES_SLOT_COUNT rows the color drops to
-// the rest grey (color belongs to the visible top set only). A row whose
-// `to` returns a location renders as a RouterLink with the trailing chevron
-// (TASK-74 §4-6); null / no `to` renders a plain non-link span — the
-// aggregates without a destination of their own (ほか n件 rest rows / 店不明)
-// and the payment breakdown. Both branches share one row markup through
-// `component :is`, and every cell renders (empty when valueless) so the
-// columns line up across rows.
+// TASK-167 D-1/D-2/D-3: the ranked rows ride the ONE shared two-line row
+// grammar (DataRow: .data-row > .row-main + .row-sub). The main line keeps
+// the leading 12px series swatch (TASK-105) and the axis label; the sub line
+// carries the axis value's derived representative items (top_items, amount
+// desc k=2) with the share % as the secondary figure — the client-built rest
+// rows carry no top items and render no sub line at all. The TASK-129
+// proportional bar stays the shared DOM bar (.row-bar + .row-seg) inside the
+// absolutely-positioned track spanning the row; the old five-column
+// one-line grid is gone.
 //
-// TASK-129 (design §4-2/§4-3, web-common.row-bar-component): the row's
-// proportional bar is the shared 6px DOM bar (.row-bar + .row-seg — the same
-// component the week rows ride) inside an absolutely-positioned track
-// spanning the row (padding included). The bar is the row's single-color
-// segment at the SCREEN's absolute scale (value / scale × the measured track
-// width — the old list-local max=100% gradient and its --rank-fill variable
-// are gone), sized through the shared allocateStack (rule F drops the
-// outline on a sub-3px bar), with no bar-specific title (the row label's
-// title, the amount and the share % already carry the visible information).
-// A zero-value row draws no bar element at all.
+// TASK-162 §1-11: the absolute-tick overlay is GONE from the ranked list
+// (the Home breakdown became the ONE bar — BreakdownBar owns the graduation
+// now). The % share column stays optional (`share: false` on the
+// absolute-reading surfaces).
 const props = withDefaults(
   defineProps<{
     rows: StatsRow[]
@@ -46,26 +38,32 @@ const props = withDefaults(
     /** the breakdown's axis — 'label' reads the managed label palette;
      *  unset (and every other axis) keeps the common mapping */
     axis?: AnalysisAxis
+    /** the % share sub figure (off on the absolute-reading surfaces) */
+    share?: boolean
   }>(),
-  { to: undefined, select: undefined, axis: undefined },
+  { to: undefined, select: undefined, axis: undefined, share: true },
 )
 
 // TASK-123 §4-5 rule E: the allocation works in px, so the track's real
 // width feeds it (measured at mount / on resize; jsdom keeps 0 and the bar
 // renders at size 0 with its color until then — the same pattern WeekRows
-// uses)
-const rowsEl = ref<HTMLElement | null>(null)
+// uses). The ref rides the AppearList carrier (TASK-161 §2-2: the rows
+// enter/leave/move through the shared bb-appear grammar), so the root ul is
+// the instance's $el
+const rowsEl = ref<ComponentPublicInstance | null>(null)
 const trackW = ref(0)
 let ro: ResizeObserver | null = null
 function measure(): void {
-  const track = rowsEl.value?.querySelector('.ranked-bar-track') ?? null
+  const root = rowsEl.value?.$el
+  const track = root instanceof HTMLElement ? (root.querySelector('.ranked-bar-track') ?? null) : null
   trackW.value = track ? track.clientWidth : 0
 }
 onMounted(() => {
   measure()
   if (typeof ResizeObserver === 'undefined') return
   ro = new ResizeObserver(measure)
-  if (rowsEl.value) ro.observe(rowsEl.value)
+  const root = rowsEl.value?.$el
+  if (root instanceof HTMLElement) ro.observe(root)
 })
 onBeforeUnmount(() => {
   ro?.disconnect()
@@ -86,6 +84,9 @@ const items = computed(() =>
       label: r.labels[0] ?? '',
       value: r.value,
       share: r.share ?? null,
+      // TASK-167 D-3: the derived representative items of the axis value
+      // (empty on the client-built rest rows)
+      top: topItemsText(r.top_items),
       to: props.to ? props.to(r) : null,
       // the select branch keeps the null-key aggregate rows inert (TASK-65:
       // ほか / 支払方法不明 press to nothing — they render as plain spans)
@@ -98,51 +99,59 @@ const items = computed(() =>
 </script>
 
 <template>
-  <ul
+  <AppearList
     ref="rowsEl"
     class="ranked"
+    :class="{ 'no-share': !share }"
     data-test="rows"
   >
     <li
       v-for="r in items"
       :key="r.label"
     >
-      <component
-        :is="r.to ? RouterLink : r.onSelect ? 'button' : 'span'"
+      <DataRow
         class="ranked-row"
         :class="{ 'is-link': !!r.to || !!r.onSelect }"
-        v-bind="r.to ? { to: r.to } : r.onSelect ? { type: 'button', onClick: r.onSelect } : {}"
+        :to="r.to"
+        :on-select="r.onSelect"
         :data-test="`row-${r.label}`"
         :style="{ '--rank-color': r.color }"
+        :chevron="!!r.to"
       >
-        <span class="ranked-swatch" />
-        <span
-          class="ranked-label truncate"
-          :title="r.label"
-        >{{ r.label }}</span>
-        <span class="ranked-share">{{ r.share !== null ? `${Math.round(r.share * 100)}%` : '' }}</span>
-        <span class="amount">{{ formatYen(r.value) }}</span>
-        <AppIcon
-          v-if="r.to"
-          class="ranked-chevron"
-          name="chevron-right"
-          :size="12"
-        />
-        <span class="ranked-bar-track">
+        <template #main>
+          <span class="ranked-swatch" />
           <span
-            v-if="r.bar"
-            class="row-bar"
-            :style="{ width: `${r.bar.width}px` }"
-          >
-            <span
-              v-for="(s, i) in r.bar.segs"
-              :key="i"
-              class="row-seg"
-              :style="{ width: `${s.size}px`, background: s.color, border: s.outline ? undefined : 'none' }"
+            class="ranked-label truncate"
+            :title="r.label"
+          >{{ r.label }}</span>
+        </template>
+        <template #amount>
+          <TweenYen :value="r.value" />
+        </template>
+        <template
+          v-if="r.top"
+          #sub
+        >
+          <span class="row-items truncate">{{ r.top }}</span>
+        </template>
+        <template
+          v-if="share && r.share !== null"
+          #figure
+        >
+          <span class="ranked-share">{{ `${Math.round(r.share * 100)}%` }}</span>
+        </template>
+        <template
+          v-if="r.bar"
+          #bar
+        >
+          <span class="ranked-bar-track">
+            <RowBar
+              :width="r.bar.width"
+              :segs="r.bar.segs"
             />
           </span>
-        </span>
-      </component>
+        </template>
+      </DataRow>
     </li>
-  </ul>
+  </AppearList>
 </template>

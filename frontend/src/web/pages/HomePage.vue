@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
-import LabelDots from '@/shared/components/LabelDots.vue'
 import {
   useDataApi,
   type AnalysisAxis,
@@ -13,17 +12,17 @@ import {
   type StatsRow,
 } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
+import BreakdownBar from '../components/BreakdownBar.vue'
 import ContentSwap from '../components/ContentSwap.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
+import DataRow from '../components/DataRow.vue'
 import PeriodHeader from '../components/PeriodHeader.vue'
-import RankedList from '../components/RankedList.vue'
 import TrendWindow from '../components/TrendWindow.vue'
 import WeekRows from '../components/WeekRows.vue'
 import type { WeekRow } from '../components/WeekRows.vue'
-import { errorMessage, formatYen } from '../composables/format'
+import { errorMessage, formatYen, topItemsText } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { shiftDate, shortDate, weekStart } from '../composables/period'
-import { usePeriodMove } from '../composables/periodMove'
 import { bucketSpan, currentTrendKey } from '../composables/trend'
 import { usePageReady } from '../composables/usePageReady'
 import { barScale, stackedOf } from '@/shared/lib/stackedBars'
@@ -51,10 +50,12 @@ const error = ref('')
 const loading = ref(false)
 
 // TASK-146 §3: the content transition's committed key (bumped only at the
-// load commit — mid-refetch the old content stays dimmed) and the move's
-// direction off the shared period store
+// load commit — mid-refetch the old content stays dimmed). TASK-161 §2
+// (web-common.period-move-voice): the key drops the PERIOD range — a period
+// step never remounts the pane; the value-level vocabulary (the label micro
+// move, the amount tweens, the bar width transitions) owns the change. A
+// mode / label / ledger change still bumps it (the fade vocabulary)
 const committedKey = ref('')
-const move = usePeriodMove(committedKey)
 
 // TASK-146 §2: the month mode's week rows cover every week overlapping the
 // selected month — from the Monday of the week holding the 1st to the
@@ -106,9 +107,10 @@ async function load(id?: number): Promise<void> {
     analysis.value = a
     recent.value = r.receipts
     weekRes.value = wk ?? null
-    // the pane's committed identity (the content transition fires here,
-    // at the commit — never at the press)
-    committedKey.value = `${l}|${period.mode}|${period.range[0]}|${period.range[1]}|${period.labelQuery?.join(',') ?? ''}`
+    // the pane's committed identity (the content transition fires here, at
+    // the commit — never at the press); TASK-161 §2: the period range is NOT
+    // part of it — a period move renders in place
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -194,41 +196,41 @@ function onWeekSelect(key: string): void {
   period.setWeek(key)
 }
 
-// --- the category breakdown (§4 案: RankedList + the rest row) --------------------
+// --- the category breakdown (TASK-162 §1: the ONE stacked bar) --------------------
+// the analysis rows, amount-desc — BreakdownBar's stackedOfRows keeps the
+// top-5 series + the「ほか」residual (closing against the total) off them
 const breakdownRows = computed<StatsRow[]>(() => {
   const res = analysis.value
   if (!res) return []
-  const sorted = [...res.rows].sort((a, b) => b.amount - a.amount)
-  const out: StatsRow[] = sorted.slice(0, 5).map((r) => ({
+  return [...res.rows].sort((a, b) => b.amount - a.amount).map((r) => ({
     keys: [r.key],
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
-  const tail = sorted.slice(5)
-  if (tail.length > 0 || res.truncated_rows > 0) {
-    const restAmount = tail.reduce((a, r) => a + r.amount, 0)
-    out.push({
-      keys: [null],
-      labels: [`ほか ${tail.length + res.truncated_rows}件・計${formatYen(restAmount)}`],
-      value: restAmount,
-      share: undefined,
-    })
-  }
-  return out
 })
 
-function categoryTo(row: StatsRow): RouteLocationRaw | null {
-  return axisTo('category', row.keys[0] ?? null, row.labels[0] ?? '')
+/** a breakdown segment's destination: the category's AxisDetail with this
+ *  screen's period + label context (the null key climbs to uncategorized) */
+function categoryTo(key: string | number | null, label: string): RouteLocationRaw | null {
+  return axisTo('category', key, label)
 }
 
 // TASK-129 (web-common.bar-scale): the screen's ONE absolute scale — the max
-// over every bar's outer amount on the screen (the breakdown rows' values
-// and the week totals; the trend bars join this aggregation at TASK-126).
-// Every row bar then renders value / scale × its track, so the same amount
-// paints the same length wherever it appears on the screen.
+// over every bar's outer amount on the screen. TASK-162 §1-3 adds the
+// breakdown bar's own TOTAL (totals.amount — the one bar is the screen's
+// longest, so the scale must cover it; the week bars shrink relatively, the
+// one-scale consequence). The trend bars join this aggregation at TASK-126.
 const screenScale = computed(() =>
-  barScale(Math.max(0, ...breakdownRows.value.map((r) => r.value), ...weeks.value.map((w) => w.total))),
+  barScale(
+    Math.max(
+      0,
+      totals.value?.amount ?? 0,
+      ...breakdownRows.value.map((r) => r.value),
+      ...weeks.value.map((w) => w.total),
+    ),
+  ),
 )
 
 /** Per-receipt feed links carry this screen's period + filter as context. */
@@ -261,15 +263,41 @@ const recentQuery = computed(() => {
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old
            content stays right here, dimmed by the loading class above -->
-      <ContentSwap
-        :swap-key="committedKey"
-        :dir="move.dir.value"
-      >
+      <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
-            :label="`${period.label}の支出`"
+            :label="period.label"
             :total="totals.amount"
+            :swap-key="committedKey"
           />
+
+          <!-- TASK-161 §5 (指摘7): the category breakdown sits DIRECTLY under
+               the period header as a full-width zone with no heading of its
+               own. TASK-162 §1 (指摘1): the surface is ONE right-growing
+               stacked bar (BreakdownBar) — the segments are the pressable
+               category links, the labels sit inside the bar, and the absolute
+               graduation over the track reads the cumulative amounts.
+               TASK-165 §2: the lone /categories chevron's .zone-head row is
+               gone (the tabbar tab + the shared period store carry it) -->
+          <section
+            class="zone zone--breakdown"
+            data-test="breakdown"
+          >
+            <p
+              v-if="breakdownRows.length === 0"
+              class="muted empty"
+            >
+              この期間の記録はありません。
+            </p>
+            <BreakdownBar
+              v-else
+              :rows="breakdownRows"
+              :total="totals.amount"
+              :scale="screenScale"
+              :truncated="analysis.truncated_rows"
+              :to="categoryTo"
+            />
+          </section>
 
           <div class="dash-cols">
             <div class="col-main">
@@ -323,39 +351,6 @@ const recentQuery = computed(() => {
 
               <section
                 class="zone zone--list"
-                data-test="breakdown"
-              >
-                <div class="zone-head">
-                  <h2 class="zone-title">
-                    支出の内訳
-                  </h2>
-                  <RouterLink
-                    :to="{ path: '/categories', query: { ...period.urlQuery } }"
-                    class="ibtn"
-                    aria-label="カテゴリ別に見る"
-                    title="カテゴリ別に見る"
-                    data-test="breakdown-more"
-                  >
-                    <AppIcon name="chevron-right" />
-                  </RouterLink>
-                </div>
-                <p
-                  v-if="breakdownRows.length === 0"
-                  class="muted empty"
-                >
-                  この期間の記録はありません。
-                </p>
-                <RankedList
-                  v-else
-                  :rows="breakdownRows"
-                  :to="categoryTo"
-                  axis="category"
-                  :scale="screenScale"
-                />
-              </section>
-
-              <section
-                class="zone zone--list"
                 data-test="recent"
               >
                 <div class="zone-head">
@@ -390,19 +385,15 @@ const recentQuery = computed(() => {
                     v-for="r in recent"
                     :key="r.receipt_id"
                   >
-                    <RouterLink
+                    <DataRow
                       :to="{ path: `/receipts/${r.receipt_id}`, query: recentQuery }"
-                      class="recent-row"
                       :data-test="`recent-${r.receipt_id}`"
-                    >
-                      <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-                      <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-                      <span class="row-labels"><LabelDots
-                        :labels="r.labels ?? []"
-                        compact
-                      /></span>
-                      <span class="amount">{{ formatYen(r.amount) }}</span>
-                    </RouterLink>
+                      :name="r.store_name ?? '店名なし'"
+                      :amount="formatYen(r.amount)"
+                      :sub-text="topItemsText(r.top_items)"
+                      :sub-figure="shortDate(r.purchased_on)"
+                      :labels="r.labels ?? []"
+                    />
                   </li>
                 </ul>
               </section>

@@ -38,8 +38,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import TrendWindow from '@/web/components/TrendWindow.vue'
+import TrendBars from '@/web/components/TrendBars.vue'
 import type { StackedBar } from '@/web/components/TrendBars.vue'
-import { allocateStack } from '@/shared/lib/stackedBars'
+// TASK-162 landed: the series-key / labelMin / stackedOfRows contracts live
+// in shared/lib/stackedBars.ts now (the test-first module augmentation that
+// typed them before the implementation is gone)
+import { allocateStack, stackedOf, stackedOfRows, type StackedSegment } from '@/shared/lib/stackedBars'
 import { setDataApi, type AnalysisAxis, type AnalysisTrendQuery, type AnalysisTrendResult, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { useTrendWindow } from '@/web/composables/trendWindow'
@@ -105,7 +109,6 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
     expect(win.active.value).toBe(true)
     expect(win.granularity.value).toBe('month')
-    expect(win.offset.value).toBe(0)
     expect(trendSpy).toHaveBeenCalledWith(1, {
       axis: 'category',
       metric: 'amount',
@@ -126,12 +129,12 @@ describe('useTrendWindow (composable, TASK-104)', () => {
       to: '2026-04-30',
       limit: 5,
     })
-    // TASK-108: prev turns the whole page — offset += span (month 6): the
-    // window swaps to 2025-11..2026-04, sharing no month with the page before
+    // TASK-108: prev turns the whole page — the absolute window swaps to
+    // 2025-11..2026-04 (TASK-161: the window IS the {from, to} pair now, the
+    // offset model is gone), sharing no month with the page before
     const initialMonths = monthsBetween(win.window.value[0], win.window.value[1])
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(6)
     expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
     expect(
       initialMonths.filter((m) => monthsBetween(win.window.value[0], win.window.value[1]).includes(m)),
@@ -141,8 +144,9 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     // re-fetch of 2025-11 — the only new call is the NEXT adjacent prefetch
     expect(callsFrom(trendSpy, 1, '2025-11-01'), 'the prefetched window is not re-fetched').toHaveLength(1)
     expect(callsFrom(trendSpy, 1, '2025-05-01')).toHaveLength(1)
-    // year mode: the anchor is the year's December — offset=0 equals
-    // period.range exactly (v2 REVIEW-21 no-regress guarantee)
+    // year mode: the canonical window is the year itself (the December
+    // right-edge rule — equals period.range, the v2 REVIEW-21 no-regress
+    // guarantee)
     period.mode = 'year'
     await settle()
     expect(win.window.value).toEqual(period.range)
@@ -152,7 +156,6 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     const initialYearMonths = monthsBetween(win.window.value[0], win.window.value[1])
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(12)
     expect(win.window.value).toEqual(['2025-01-01', '2025-12-31'])
     expect(initialYearMonths.filter((m) => monthsBetween(win.window.value[0], win.window.value[1]).includes(m))).toEqual(
       [],
@@ -174,93 +177,93 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.window.value).toEqual(['2026-10-03', '2026-10-15'])
   })
 
-  it('[covers:web-home.trend-window] offset操作: nextはoffset=0で無効（canNext=offset>0・未来方向なし）・prev→offset=6・next→0へ一発復帰（span刻み・中間offset非経由）・focus変更（月・ラベル・家計簿）でoffset=0リセット', async () => {
+  it('[covers:web-home.trend-window] 窓移動の対称性: 初期状態はprev/nextとも有効（絶対窓で未来pagingも解禁）・prev→nextで一発復帰・focus移動（E2a）は窓保持・label変更（E4）は窓保持で再fetch・家計簿切替（E3）は正規窓へ', async () => {
     const period = usePeriodStore()
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const win = await mountWindow()
-    // the initial window offers no future slide: next is a no-op at 0
-    expect(win.canNext.value).toBe(false)
-    win.next()
-    await settle()
-    expect(win.offset.value).toBe(0)
-    expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1)
+    // TASK-161 §1-3: the symmetric all-zero floor — no move history keeps
+    // BOTH directions open (the old canNext = offset > 0 pinned the initial
+    // window's next shut forever — half of the §0-2 lead closing)
+    expect(win.canNext.value).toBe(true)
+    expect(win.canPrev.value).toBe(true)
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(6)
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
     expect(win.canNext.value).toBe(true)
     // TASK-115: the press hit the prefetched cache — the window itself was
     // not re-fetched (only the next adjacent prefetch appears)
     expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(1)
     win.next()
     await settle()
-    // one press pays the whole span back: 6 -> 0 directly, never through an
-    // intermediate offset (the page-turn contract, TASK-108 §1-2)
-    expect(win.offset.value).toBe(0)
+    // one press pays the whole span back: the window returns to the initial
+    // one directly (the page-turn contract, TASK-108 §1-2)
     expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
     expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1) // the cache return never re-fetches
-    // a focus change resets the window to the new month's initial one
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(6)
-    period.setMonth('2026-09')
+    // E2a (TASK-161 §1): a focus move INSIDE the committed window keeps the
+    // window — no re-anchor, no re-fetch, the adjacent bars stay
+    period.setMonth('2026-01')
     await settle()
-    expect(win.offset.value).toBe(0)
-    expect(win.window.value).toEqual(['2026-04-01', '2026-09-30'])
-    expect(callsFrom(trendSpy, 1, '2026-04-01').at(-1)![1]).toMatchObject({ from: '2026-04-01', to: '2026-09-30' })
-    // the label query rides the fetch and resets the offset too
-    win.prev()
-    await settle()
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
+    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(1)
+    // E4: a label change keeps the window and re-fetches under the new
+    // conditions (the args-keyed cache never serves another condition)
     period.setLabelColors(['red'])
     await settle()
-    expect(win.offset.value).toBe(0)
-    expect(callsFrom(trendSpy, 1, '2026-04-01').at(-1)![1]).toMatchObject({ label_colors: ['red'] })
-    // a ledger switch resets as well and fetches the new ledger (the window
-    // stays anchored to the CURRENT selected month — September here)
-    win.prev()
-    await settle()
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
+    expect(callsFrom(trendSpy, 1, '2025-11-01').at(-1)![1]).toMatchObject({ label_colors: ['red'] })
+    // E3: a ledger switch resets to the canonical window (right edge = the
+    // selected month — January here) and fetches the new ledger
     useSessionStore().selectedLedgerId = 2
     await settle()
-    expect(win.offset.value).toBe(0)
-    expect(callsFrom(trendSpy, 2, '2026-04-01').at(-1)![1]).toMatchObject({ from: '2026-04-01', to: '2026-09-30' })
+    expect(win.window.value).toEqual(['2025-08-01', '2026-01-31'])
+    expect(callsFrom(trendSpy, 2, '2025-08-01').at(-1)![1]).toMatchObject({ from: '2025-08-01', to: '2026-01-31' })
   })
 
-  it('[covers:web-home.trend-window] refreshの冪等ガード: 最終成功fetch・進行中fetchと同一引数の再発行はskip（AxisDetailの二重発火でも実fetch1回）', async () => {
+  it('[covers:web-home.trend-window] refreshは明示無効化（cache clear+再fetch）: 完了済み同引数は再発行するが進行中の同一引数だけskip（AxisDetailの二重発火は1 fetch）', async () => {
     // bind the real method before the spy: the in-flight gate below calls it
     const orig = api.getAnalysisTrend.bind(api)
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const win = await mountWindow()
     expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1)
-    // the same args as the last successful fetch: no re-issue
+    // TASK-161 §1-4 (review 中4): an explicit refresh INVALIDATES — the same
+    // args as the last successful fetch re-issue (the lastDone guard is the
+    // double-fire suppression for IN-FLIGHT args alone now, and the cleared
+    // cache makes the refreshed commit re-prefetch its pages)
     win.refresh()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1)
-    // while a fetch is in flight, the identical re-fire is skipped too —
+    expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(2)
+    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(2) // the ±span prev re-prefetched
+    // while a fetch is in flight, the identical re-fire is skipped —
     // AxisDetail's route watch fires alongside the composable's own watch.
     // TASK-115: the gate lets ONLY the display window's from through it —
     // the commit's prefetch (a different from) must never stick in the gate
-    // (design §5-1)
+    // (design §5-1). TASK-161: the focus move is a k=2 E2b (setMonth
+    // 2026-12 from the initial window → 2026-07..12 — an E2a inside move
+    // would fetch nothing at all)
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
     trendSpy.mockImplementation(async (...args: Parameters<typeof orig>) => {
-      if (args[1]!.from === '2026-04-01') await gate
+      if (args[1]!.from === '2026-07-01') await gate
       return orig(...args)
     })
-    usePeriodStore().setMonth('2026-09')
+    usePeriodStore().setMonth('2026-12')
     await settle()
-    expect(callsFrom(trendSpy, 1, '2026-04-01')).toHaveLength(1) // the new window's fetch, in flight
+    expect(callsFrom(trendSpy, 1, '2026-07-01')).toHaveLength(1) // the new window's fetch, in flight
     win.refresh()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2026-04-01')).toHaveLength(1) // identical to the in-flight args
+    expect(callsFrom(trendSpy, 1, '2026-07-01')).toHaveLength(1) // identical to the in-flight args
     release()
     await settle()
-    // the gated display commit landed; its prefetch of the adjacent window
-    // (2025-10..2026-03) went through ungated — counted by from, exactly once
-    expect(callsFrom(trendSpy, 1, '2026-04-01')).toHaveLength(1)
-    expect(callsFrom(trendSpy, 1, '2025-10-01')).toHaveLength(1)
-    // completed now: another identical refresh stays skipped
+    // the gated display commit landed; its prefetch of the ±span prev window
+    // (2026-01..06) went through ungated — counted by from, exactly once
+    expect(callsFrom(trendSpy, 1, '2026-07-01')).toHaveLength(1)
+    expect(callsFrom(trendSpy, 1, '2026-01-01')).toHaveLength(1)
+    // completed now: another explicit refresh invalidates and re-issues
     win.refresh()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2026-04-01')).toHaveLength(1)
+    expect(callsFrom(trendSpy, 1, '2026-07-01')).toHaveLength(2)
   })
 
   it('[covers:web-home.trend-window] ledger未確定（selectedLedgerId=null）ではfetchしない（prefetchもしない）・確定（null→id）で初回fetch+隣接窓prefetch', async () => {
@@ -271,11 +274,12 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.result.value).toBeNull()
     useSessionStore().selectedLedgerId = 1
     await settle()
-    // TASK-115: the first commit brings the display fetch AND the first
-    // prev-adjacent prefetch — two calls, one window each
+    // TASK-115 + TASK-161 §1-2: the first commit brings the display fetch
+    // AND its prefetches around the window — the ±span pages both ways plus
+    // the ±1-month move windows (month mode) — five calls, one window each
     expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1)
     expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(1)
-    expect(trendSpy).toHaveBeenCalledTimes(2)
+    expect(trendSpy).toHaveBeenCalledTimes(5)
   })
 
   it('[covers:web-home.trend-window-slide] windowKey・direction・slide: 初回fetchまでkey=null（TrendBarsのv-if源）・確定でkeyは<from>..<to>と即時描画（slide不発火）・同窓再fetchでkey不変・prev/nextは方向別slide・focus変更はslideなし・連打は最終窓のみ採用・nextはspan未満offsetを0へクランプ', async () => {
@@ -312,7 +316,6 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     win.prev()
     await settle()
     expect(win.direction.value).toBe('prev')
-    expect(win.offset.value).toBe(6)
     expect(win.windowKey.value).toBe('2025-11-01..2026-04-30')
     expect(win.slide.value?.dir).toBe('prev')
     expect(win.slide.value!.bars.map((b) => b.key)).toEqual([
@@ -331,58 +334,48 @@ describe('useTrendWindow (composable, TASK-104)', () => {
       ...monthsBetween('2026-05-01', '2026-10-31'),
     ])
     win.finishSlide()
-    // the guards record no direction and fire no fetch (a disable-state
-    // press never moves the window — the §1-2 contract)
+    // the guard records no direction and fires no fetch (a disable-state
+    // press never moves the window — the §1-2 contract). TASK-161: the floor
+    // is the symmetric zero rule, so the disable state is staged through the
+    // ref the chevron reads
     const calls = trendSpy.mock.calls.length
-    win.next() // offset=0: no-op
     win.canPrev.value = false
     win.prev()
     win.canPrev.value = true
     await settle()
     expect(win.direction.value).toBe('next')
     expect(trendSpy.mock.calls.length).toBe(calls)
-    // a focus change mid-fetch keeps the OLD key until the response lands
-    // (the bars never leave the last committed window) — and when it lands
-    // the commit does NOT assemble a slide: the flush cleared the request
-    // (TASK-115 M1: focus changes never slide — the direction inheritance
-    // of the out-in era is gone)
+    // a far focus change mid-fetch keeps the OLD key until the response
+    // lands (the bars never leave the last committed window) — and when it
+    // lands the commit does NOT assemble a slide: the E2c reset cleared the
+    // request (TASK-115 M1's focus rule carried over: only an un-interrupted
+    // E2b ever slides)
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
     trendSpy.mockImplementation(async (...args: Parameters<typeof orig>) => {
-      if (args[1]!.from === '2026-04-01') await gate // only the display window gates
+      if (args[1]!.from === '2027-01-01') await gate // only the display window gates
       return orig(...args)
     })
-    period.setMonth('2026-09')
+    period.setMonth('2027-06')
     await settle()
     expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
     release()
     await settle()
-    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
+    expect(win.windowKey.value).toBe('2027-01-01..2027-06-30')
     expect(win.slide.value).toBeNull()
     // a double prev fires two fetches; the seq guard keeps only the last —
-    // the committed key is the offset=12 page, swapped in once (the page is
-    // anchored to September, the month set above: 2025-04..2025-09). The
-    // finished slide is the LAST press's concatenation
+    // the committed key is the second page back (2027-01..06 → 2026-07..12
+    // → 2026-01..06), swapped in once. The finished slide is the LAST
+    // press's union
     win.prev()
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(12)
-    expect(win.windowKey.value).toBe('2025-04-01..2025-09-30')
+    expect(win.windowKey.value).toBe('2026-01-01..2026-06-30')
     expect(win.slide.value?.dir).toBe('prev')
     expect(win.slide.value!.bars.map((b) => b.key)).toEqual([
-      ...monthsBetween('2025-04-01', '2025-09-30'),
-      ...monthsBetween('2025-10-01', '2026-03-31'),
+      ...monthsBetween('2026-01-01', '2026-06-30'),
+      ...monthsBetween('2026-07-01', '2026-12-31'),
     ])
-    win.finishSlide()
-    // the Math.max clamp guard: a hypothetical sub-span offset (only reachable
-    // by a future change) still returns to 0 in one press — and being a
-    // next-press window change it slides [old, new]
-    win.offset.value = 3
-    win.next()
-    expect(win.offset.value).toBe(0)
-    await settle()
-    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
-    expect(win.slide.value?.dir).toBe('next')
     win.finishSlide()
   })
 
@@ -578,37 +571,39 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     const win = await mountWindow()
     // the initial page (2026-05..2026-10) holds the June / October records
     expect(win.canPrev.value).toBe(true)
-    // page 2 (offset=6): the 2025-12 record keeps the bucket total > 0 —
-    // prev stays enabled (the old offset=1..4 walk collapses into this page)
+    // page 2 (2025-11..2026-04): the 2025-12 record keeps the bucket total
+    // > 0 — prev stays enabled (the old offset=1..4 walk collapses into this
+    // page)
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(6)
     expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
     expect(win.canPrev.value).toBe(true)
-    // page 3 (offset=12) is all zero: prev disables (the practical floor
-    // against the zero-filling endpoint). TASK-115: the page was prefetched
-    // and cached, so the press commits the cached result at once — canPrev
-    // recomputes on the very same expression IMMEDIATELY (no fetch wait)
+    // page 3 (2025-05..2025-10) is all zero: prev alone disables (the
+    // practical floor against the zero-filling endpoint — TASK-161 §1-3's
+    // symmetric rule). TASK-115: the page was prefetched and cached, so the
+    // press commits the cached result at once — canPrev recomputes on the
+    // very same expression IMMEDIATELY (no fetch wait)
     win.prev()
     expect(win.canPrev.value).toBe(false)
     await settle()
-    expect(win.offset.value).toBe(12)
     expect(win.window.value).toEqual(['2025-05-01', '2025-10-31'])
     expect(win.canPrev.value).toBe(false)
+    expect(win.canNext.value).toBe(true) // the floor is direction-local
     // next returns to the 2025-12 page and prev re-enables
     win.next()
     await settle()
-    expect(win.offset.value).toBe(6)
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
     expect(win.canPrev.value).toBe(true)
-    // an all-zero INITIAL window (2025-04 selected: 2024-11..2025-04) never
-    // disables prev — a record-less month must still show the months before
+    // an all-zero window with NO move history (the E2c reset to 2025-04's
+    // canonical 2024-11..2025-04) never disables either direction — a
+    // record-less month must still show the months before
     period.setMonth('2025-04')
     await settle()
     expect(win.window.value).toEqual(['2024-11-01', '2025-04-30'])
     expect(win.canPrev.value).toBe(true)
+    expect(win.canNext.value).toBe(true)
     win.prev()
     await settle()
-    expect(win.offset.value).toBe(6)
     expect(win.window.value).toEqual(['2024-05-01', '2024-10-31'])
     expect(win.canPrev.value).toBe(false) // the paged-to window is all zero
   })
@@ -643,7 +638,7 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.loading.value).toBe(true)
     // back to the cached initial window while B is still in flight
     win.next()
-    expect(win.offset.value).toBe(0)
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
     expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
     // the cached return took over the pending fetch's cleanup: loading is
     // off and inFlight cleared (a later prev re-issues a real fetch)
@@ -658,7 +653,7 @@ describe('useTrendWindow (composable, TASK-104)', () => {
 
   // --- TASK-115 (design §5-1 新規): the cache / prefetch / slide contracts ---
 
-  it('[covers:web-home.trend-window][covers:web-home.trend-window-prefetch] 窓cacheのflush: mode/range/labelQuery/家計簿の各変更と復帰でcache・prefetch発行済みがクリアされ同じ窓でも再fetchする', async () => {
+  it('[covers:web-home.trend-window][covers:web-home.trend-window-prefetch] 窓cacheのclearはE3（mode/家計簿）のみ: 復帰で再fetchする・focus移動（E2a）とlabelQuery（E4）はcache保持で同期commit', async () => {
     const period = usePeriodStore()
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     await mountWindow()
@@ -682,15 +677,18 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     await settle()
     expect(disp('2026-05-01')).toHaveLength(3)
     expect(disp('2025-11-01')).toHaveLength(3)
-    // range source (setMonth): 2026-09 -> 2026-10
+    // focus move INSIDE the window (TASK-161 §1 E2a): no fetch at all — the
+    // window never moves for an in-window focus change
     period.setMonth('2026-09')
     await settle()
     period.setMonth('2026-10')
     await settle()
-    expect(disp('2026-05-01')).toHaveLength(4)
-    expect(disp('2025-11-01')).toHaveLength(4)
-    // labelQuery: red -> none -> red. The second red phase returns to the
-    // EXACT key of the first — only a cache clear makes it fetch again
+    expect(disp('2026-05-01'), 'an E2a focus move re-fetches nothing').toHaveLength(3)
+    expect(disp('2025-11-01')).toHaveLength(3)
+    // labelQuery: red -> none -> red. TASK-161 §1-4 (E4): the cache SURVIVES
+    // a label change (the args-keyed cache never serves another condition),
+    // so the red return commits synchronously off the first red phase's
+    // cached response — no re-fetch
     const redDisp = (from: string) =>
       trendSpy.mock.calls.filter(([l, q]) => l === 1 && q.from === from && q.label_colors?.[0] === 'red')
     period.setLabelColors(['red'])
@@ -699,8 +697,8 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     await settle()
     period.setLabelColors(['red'])
     await settle()
-    expect(redDisp('2026-05-01'), 'the label return re-fetches (cache flushed)').toHaveLength(2)
-    expect(redDisp('2025-11-01')).toHaveLength(2)
+    expect(redDisp('2026-05-01'), 'the label return serves the cached red window').toHaveLength(1)
+    expect(redDisp('2025-11-01')).toHaveLength(1)
   })
 
   it('[covers:web-home.trend-window] cacheヒットコミット: prev押下で表示fetchなし・windowKey即時コミット・loadingにならない・canPrev即時再計算（nextも同様）', async () => {
@@ -715,7 +713,6 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(win.windowKey.value).toBe('2025-11-01..2026-04-30')
     expect(win.loading.value).toBe(false)
     expect(win.canPrev.value).toBe(false)
-    expect(win.offset.value).toBe(6)
     await settle()
     expect(callsFrom(trendSpy, 1, '2025-11-01'), 'no display fetch for the cached window').toHaveLength(1)
     // next returns on the cached initial window the same way
@@ -775,7 +772,12 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     const orig = api.getAnalysisTrend.bind(api)
     let failAdjacent = false
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend').mockImplementation(async (...args: Parameters<typeof orig>) => {
-      if (failAdjacent && args[1]!.from === '2025-10-01') throw new Error('prefetch failed')
+      // the gate pins the NO-LABEL ±1 prev-move window alone (the red one of
+      // the same months was issued successfully earlier — TASK-161: the
+      // prefetch cache is args-keyed, so the two never collide)
+      if (failAdjacent && args[1]!.from === '2025-10-01' && (args[1]!.label_colors?.length ?? 0) === 0) {
+        throw new Error('prefetch failed')
+      }
       return orig(...args)
     })
     // label + subject filters ride BOTH the display fetch and the prefetch
@@ -794,38 +796,48 @@ describe('useTrendWindow (composable, TASK-104)', () => {
       label_colors: ['red'],
       item_query: '牛乳',
     })
-    // a same-args re-commit (refresh) re-issues neither display nor prefetch
+    // TASK-161 §1-4 (review 中4): an explicit refresh INVALIDATES — the
+    // display window re-fetches and the cleared cache re-prefetches its
+    // pages (the suppression covers IN-FLIGHT identical args alone)
     win.refresh()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(1)
-    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(1)
-    // cached windows are never prefetched again: prev's cache-hit commit
-    // prefetches the NEXT adjacent page (2025-05), then next's commit finds
-    // the first adjacent page cached+issued and skips it
+    expect(callsFrom(trendSpy, 1, '2026-05-01')).toHaveLength(2)
+    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(2)
+    // cached windows are never prefetched again: the refresh's re-prefetch
+    // re-cached the adjacent page, so prev's press is a cache HIT whose
+    // commit prefetches the NEXT adjacent page (2025-05), then next's commit
+    // finds the first adjacent page cached+issued and skips it
     win.prev()
     await settle()
     expect(callsFrom(trendSpy, 1, '2025-05-01')).toHaveLength(1)
     win.next()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(1)
+    expect(callsFrom(trendSpy, 1, '2025-11-01')).toHaveLength(2)
     win.prev()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2025-11-01'), 'the cached page is not re-fetched nor re-prefetched').toHaveLength(1)
+    expect(callsFrom(trendSpy, 1, '2025-11-01'), 'the cached page is not re-fetched nor re-prefetched').toHaveLength(2)
     // a rejected prefetch is silent: no loading, no onError, the display is
-    // untouched — and the failed key is retried on the NEXT commit
+    // untouched — and the failed key is retried on the NEXT commit. TASK-161:
+    // the gated key is the window's no-label ±1 prev-move target
+    // (2025-10..03 — counted apart from the red-keyed window of the same
+    // months); the commit that retries it is the E4 label roundtrip BACK to
+    // the same no-label condition (an E2a focus move fetches nothing, so it
+    // can never retry a prefetch)
+    const plainMove = () =>
+      trendSpy.mock.calls.filter(([l, q]) => l === 1 && q.from === '2025-10-01' && (q.label_colors?.length ?? 0) === 0)
     failAdjacent = true
-    period.setMonth('2026-09')
+    period.setLabelColors([])
     await settle()
     expect(win.loading.value).toBe(false)
     expect(onError).not.toHaveBeenCalled()
-    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
-    expect(callsFrom(trendSpy, 1, '2025-10-01')).toHaveLength(1) // tried once, failed
+    expect(win.windowKey.value).toBe('2025-11-01..2026-04-30')
+    expect(plainMove()).toHaveLength(1) // tried once, failed
     failAdjacent = false
-    period.setMonth('2026-10')
+    period.setLabelColors(['red'])
     await settle()
-    period.setMonth('2026-09')
+    period.setLabelColors([])
     await settle()
-    expect(callsFrom(trendSpy, 1, '2025-10-01')).toHaveLength(2) // retried and landed
+    expect(plainMove()).toHaveLength(2) // retried and landed
     // inactive windows never prefetch: the week window's adjacent computation
     // is the same key as its own display fetch
     period.setWeek('2026-10-05')
@@ -863,35 +875,38 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     win.finishSlide()
   })
 
-  it('[covers:web-home.trend-window-slide] スライド中のfocus変更: flushでslide即null化・slideRequestもクリア（確定コミットでもslide不発火）・cacheもクリア', async () => {
+  it('[covers:web-home.trend-window-slide] スライド中のfocus変更: 即時trim・slideRequestもクリア（確定コミットでもslide不発火）・label切替（E4）はcache保持', async () => {
     const period = usePeriodStore()
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const win = await mountWindow()
     win.prev()
     expect(win.slide.value).not.toBeNull()
-    // a month-chip focus change flushes mid-slide: the slide is gone at once
+    // a month-chip focus change lands mid-slide (TASK-161 §1: the interrupted
+    // E2b): the slide trims at once, the window still moves its k=5 minimum
+    // (2025-11..04 + 5 = 2026-04..09) and the commit swaps in place
     period.setMonth('2026-09')
     expect(win.slide.value).toBeNull()
     await settle()
     expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
     expect(win.slide.value, 'the focus commit never assembles a slide').toBeNull()
-    // the same for a label switch mid-slide (the other flush source)
+    // the same trim for a label switch mid-slide (E4 — the window stays)
     win.prev()
     expect(win.slide.value).not.toBeNull()
     period.setLabelColors(['red'])
     expect(win.slide.value).toBeNull()
     await settle()
     expect(win.slide.value).toBeNull()
-    // the flush also cleared the cache: returning to the RED key fetched a
-    // moment ago re-fetches it instead of serving the earlier response
+    // TASK-161 §1-4 (E4): the cache SURVIVES the label switch — the red
+    // return commits synchronously off the cached red response (the old
+    // flush cleared it and re-fetched)
     period.setLabelColors([])
     await settle()
     period.setLabelColors(['red'])
     await settle()
-    const redApril = trendSpy.mock.calls.filter(
-      ([l, q]) => l === 1 && q.from === '2026-04-01' && q.label_colors?.[0] === 'red',
+    const redOct = trendSpy.mock.calls.filter(
+      ([l, q]) => l === 1 && q.from === '2025-10-01' && q.label_colors?.[0] === 'red',
     )
-    expect(redApril, 'the flushed cache re-fetches on return').toHaveLength(2)
+    expect(redOct, 'the label return serves the cached red window').toHaveLength(1)
   })
 
   it('[covers:web-home.trend-window-slide] slide不発火経路: 初回コミット・refresh・同窓再fetch（labelQuery）・focus変更はいずれもslideを組まない・対照にprev→nextのcache復帰は表示fetchなしでslide組み立て', async () => {
@@ -909,25 +924,26 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     await settle()
     expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
     expect(win.slide.value).toBeNull()
-    // a focus change: the key changes but the request was cleared — no slide
+    // a focus move INSIDE the committed window (TASK-161 §1 E2a): the window
+    // never moves, nothing re-fetches — September keeps October's bar
     period.setLabelColors([])
     await settle()
     period.setMonth('2026-09')
     await settle()
-    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
     expect(win.slide.value).toBeNull()
-    // the CONTRAST: a prev/next round trip on the cached September windows
-    // assembles slides with no display fetch at all
-    const adjacent = callsFrom(trendSpy, 1, '2025-10-01').length // the September prefetch
+    // the CONTRAST: a prev/next round trip on the cached pages assembles
+    // slides with no display fetch at all
+    const adjacent = callsFrom(trendSpy, 1, '2025-11-01').length // the ±span prev prefetch
     win.prev()
     expect(win.slide.value).not.toBeNull()
     win.finishSlide()
     win.next()
     expect(win.slide.value).not.toBeNull()
-    expect(win.windowKey.value).toBe('2026-04-01..2026-09-30')
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
     win.finishSlide()
     await settle()
-    expect(callsFrom(trendSpy, 1, '2025-10-01'), 'no display fetch beyond the prefetch').toHaveLength(adjacent)
+    expect(callsFrom(trendSpy, 1, '2025-11-01'), 'no display fetch beyond the prefetch').toHaveLength(adjacent)
   })
 })
 
@@ -942,13 +958,15 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     ],
   }
 
-  /** a slide state shaped as the composable's SlideState (TASK-115 §3-1) —
-   * the structural contract the wrapper consumes: dir + the concatenated
-   * bars + the per-window bucket keys for the axis computation */
+  /** a slide state shaped as the composable's SlideState (TASK-115 §3-1,
+   * TASK-161 §1-2 adds moveCols) — the structural contract the wrapper
+   * consumes: dir + the concatenated bars + the per-window bucket keys for
+   * the axis computation + the slide's distance in columns */
   interface SlideLike {
     dir: 'prev' | 'next'
     bars: StackedBar[]
     axisWindows: string[][]
+    moveCols: number
   }
   const col = (key: string): StackedBar => ({ ...COL, key, title: `${key} 100円` })
 
@@ -1003,7 +1021,7 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     // a 6+6 month concatenation (prev: [new 2025-11..2026-04, old 2026-05..10])
     const NEW = monthsBetween('2025-11-01', '2026-04-30')
     const OLD = monthsBetween('2026-05-01', '2026-10-31')
-    const slide: SlideLike = { dir: 'prev', bars: [...NEW, ...OLD].map(col), axisWindows: [NEW, OLD] }
+    const slide: SlideLike = { dir: 'prev', bars: [...NEW, ...OLD].map(col), axisWindows: [NEW, OLD], moveCols: 6 }
     const w = mount(TrendWindow, {
       props: {
         nav: true,
@@ -1020,6 +1038,14 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     // both transformed elements carry the sliding class together
     expect(w.find('[data-test="trend"]').classes()).toContain('is-sliding')
     expect(w.find('[data-test="trend-axis"]').classes()).toContain('is-sliding')
+    // TASK-162 §5-4 (review 3): the YEAR row rides the same slide machinery —
+    // .axis-years sits over .axis-labels on the shared grid, carries
+    // is-sliding together, and its ticks compute PER WINDOW (the new
+    // 2025-11..2026-04 window's start year 2025 + the 2026-01 boundary), so
+    // the trim changes nothing about them either
+    expect(w.find('[data-test="axis-years"]').exists()).toBe(true)
+    expect(w.find('[data-test="axis-years"]').classes()).toContain('is-sliding')
+    expect(w.findAll('[data-test="axis-years"] span').map((s) => s.text())).toEqual(['2025', '2026'])
     // the axis labels follow the PER-WINDOW computation (REVIEW-1 M3): each
     // 6-bar window thins [0,2,4,5] on its own — the whole-12 array would
     // thin [0,3,6,9,11] and reshuffle the labels at slide start and trim
@@ -1043,6 +1069,47 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     expect(w.find('[data-test="trend"]').classes()).not.toContain('is-sliding')
     expect(w.find('.trend-wrap').classes()).toContain('dense')
     expect(w.findAll('.bar-val').length).toBeLessThan(12)
+    // the year row resets with the chrome but the ticks themselves are
+    // trim-invariant (the concatenated window spans 2025-11..2026-10: the
+    // start year + the boundary stay put)
+    expect(w.find('[data-test="axis-years"]').classes()).not.toContain('is-sliding')
+    expect(w.findAll('[data-test="axis-years"] span').map((s) => s.text())).toEqual(['2025', '2026'])
+  })
+
+  // TASK-161 §1-2 (review 中2): an E2b minimal slide's UNION holds months
+  // both windows share — the NEW window's thinning decides every month it
+  // CONTAINS (a shared month the new window thins out stays unlabelled
+  // mid-slide exactly as it will be after the trim); only the old window's
+  // LEAVING months (the keys the new window does not hold at all) keep their
+  // outgoing labels. The old implementation revived the old window's labels
+  // on the shared thinned months (7月・9月 appeared mid-slide and vanished at
+  // the trim — the trim-invariance violation).
+  it('[covers:web-home.trend-window-min-slide] E2b unionの軸label: 共有月は新窓の間引きが決める（trim前後で不変）・旧窓由来のlabelは去る月のみ', () => {
+    const OLD = monthsBetween('2026-05-01', '2026-10-31')
+    const NEW = monthsBetween('2026-06-01', '2026-11-30')
+    const UNION = [...OLD, '2026-11']
+    const w = mount(TrendBars, {
+      props: {
+        stacked: UNION.map(col),
+        granularity: 'month',
+        axisWindows: [OLD, NEW],
+        axisDir: 'next',
+        sliding: true,
+      },
+    })
+    // jsdom (unmeasured) → the count fallback: the NEW window's ticks are
+    // [0,2,4,5] of 06..11 → 6月・8月・10月・11月; the OLD window's own ticks
+    // ([0,2,4,5] of 05..10) contribute 5月 alone (05 is the only key the new
+    // window lacks) — the shared 7月・9月 stay EMPTY exactly as the trimmed
+    // window will leave them
+    const labels = () => w.findAll('[data-test="trend-axis"] span').map((s) => s.text())
+    expect(labels()).toEqual(['5月', '6月', '', '8月', '', '10月', '11月'])
+    // the trim: the same labels survive on the surviving months, the leaving
+    // month's label leaves with its bar
+    const trimmed = mount(TrendBars, { props: { stacked: NEW.map(col), granularity: 'month' } })
+    expect(trimmed.findAll('[data-test="trend-axis"] span').map((s) => s.text())).toEqual(['6月', '', '8月', '', '10月', '11月'])
+    w.unmount()
+    trimmed.unmount()
   })
 
   /** one rAF hop — the slide's move is a three-hop chain (design §3-3);
@@ -1090,7 +1157,7 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     Object.defineProperty(wrap, 'offsetWidth', { configurable: true, get: () => 360 })
     // the first press (prev): the committed 6-bar window measures one cell —
     // (360px − 5 gaps of 4px) / 6 — and the pin writes the 2-window width
-    const S1: SlideLike = { dir: 'prev', bars: [...NEW1, ...OLD].map(col), axisWindows: [NEW1, OLD] }
+    const S1: SlideLike = { dir: 'prev', bars: [...NEW1, ...OLD].map(col), axisWindows: [NEW1, OLD], moveCols: 6 }
     await w.setProps({ slide: S1, stacked: S1.bars, windowKey: '2025-11-01..2026-04-30' })
     await nextTick()
     const first = trackCell(bars)
@@ -1100,15 +1167,21 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     // the trim's cleanup, so the DOM still wears the pin above — a fresh
     // offsetWidth read there returns the 2-window 724px and would solve
     // ~117px cells. The re-slide must reuse the recorded cell instead
-    const S2: SlideLike = { dir: 'prev', bars: [...NEW2, ...NEW1].map(col), axisWindows: [NEW2, NEW1] }
+    const S2: SlideLike = { dir: 'prev', bars: [...NEW2, ...NEW1].map(col), axisWindows: [NEW2, NEW1], moveCols: 6 }
     await w.setProps({ slide: S2, stacked: S2.bars, windowKey: '2025-05-01..2025-10-31' })
     await nextTick()
     expect(trackCell(bars), 'the re-slide reuses the recorded cell, not the pinned DOM width').toBeCloseTo(first, 10)
-    // the trim drops the pin entirely (the next slide re-measures — a
-    // resize between slides re-pins at the true geometry)
+    // the trim drops the pin (the next slide re-measures — a resize between
+    // slides re-pins at the true geometry). gridTemplateColumns keeps the
+    // committed :style binding the trim's own patch re-wrote: clearing it
+    // would strip the grid entirely for the frame the ResizeObserver samples
+    // (TrendBars' colW would read a full-width cell and the axis thinning
+    // silently stops) — the pin's px template is what must be gone, and the
+    // width with it
     await w.setProps({ slide: undefined, stacked: NEW2.map(col) })
     await nextTick()
-    expect(bars.style.gridTemplateColumns).toBe('')
+    expect(trackCell(bars), 'no pinned px cell template survives the trim').toBe(0)
+    expect(bars.style.gridTemplateColumns).toBe('repeat(6, minmax(1.25rem, 1fr))')
     expect(bars.style.width).toBe('')
     w.unmount()
   })
@@ -1132,7 +1205,7 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     // a next slide parks on translateX(0) and its queued hop repaints the
     // target transform — with no layout jsdom solves boundary 0, so the
     // stale re-apply would land as 'translateX(0px)' on a cleared '' style
-    const S: SlideLike = { dir: 'next', bars: [...OLD, ...NEW].map(col), axisWindows: [OLD, NEW] }
+    const S: SlideLike = { dir: 'next', bars: [...OLD, ...NEW].map(col), axisWindows: [OLD, NEW], moveCols: 6 }
     await w.setProps({ slide: S, stacked: S.bars, windowKey: '2025-11-01..2026-04-30' })
     await nextTick()
     expect(bars.style.transform, 'the next slide parks on the old window').toBe('translateX(0px)')
@@ -1214,7 +1287,7 @@ describe('TrendWindow (component, TASK-104 / TASK-115)', () => {
     // a window move (the slide carries a new windowKey with it — the
     // cache-hit commit lands the key synchronously): the slide is the ONLY
     // motion — no fade classes fire and the .bars DOM node is not remounted
-    const S: SlideLike = { dir: 'prev', bars: [...PAGED, ...NEXT].map(col), axisWindows: [PAGED, NEXT] }
+    const S: SlideLike = { dir: 'prev', bars: [...PAGED, ...NEXT].map(col), axisWindows: [PAGED, NEXT], moveCols: 6 }
     await w.setProps({ slide: S, stacked: S.bars, windowKey: '2025-11-01..2026-04-30' })
     await nextTick()
     expect(charts()).toHaveLength(1)
@@ -1253,8 +1326,10 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     const INIT = ['bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09', 'bar-2026-10']
     const SLID = ['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04']
     expect(keys()).toEqual(INIT)
-    // the initial window offers no future slide
-    expect(wrapper.find('[data-test="trend-next"]').attributes('disabled')).toBeDefined()
+    // TASK-161 §1-3: the symmetric floor keeps the initial window's next
+    // OPEN (the old canNext = offset > 0 pinned it shut — the future pages
+    // freely now, all-zero alone floors a direction)
+    expect(wrapper.find('[data-test="trend-next"]').attributes('disabled')).toBeUndefined()
     const monthFrom = (from: string) => trendSpy.mock.calls.filter(([, q]) => q.granularity === 'month' && q.from === from)
     const weekCalls = () => trendSpy.mock.calls.filter(([, q]) => q.granularity === 'week')
     const a0 = analysisSpy.mock.calls.length
@@ -1290,52 +1365,59 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     const store = (await import('@/web/stores/period')).usePeriodStore()
     expect(store.mode).toBe('month')
     expect(store.month).toBe('2026-10')
-    // next returns to the initial window (concatenation, then trim) and
-    // disables again — a cache hit, so the display fetch never re-runs
+    // next returns to the initial window (concatenation, then trim) — a cache
+    // hit, so the display fetch never re-runs. TASK-161 §1-3: the floor is
+    // symmetric, so the recorded window stays open on both sides (the
+    // initial window holds records — all-zero alone floors a direction)
     expect(wrapper.find('[data-test="trend-next"]').attributes('disabled')).toBeUndefined()
     await wrapper.find('[data-test="trend-next"]').trigger('click')
     expect(keys()).toEqual([...SLID, ...INIT])
     await finishTrendSlide(wrapper)
     expect(keys()).toEqual(INIT)
-    expect(wrapper.find('[data-test="trend-next"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="trend-next"]').attributes('disabled')).toBeUndefined()
     expect(monthFrom('2026-05-01'), 'the cached return never re-fetches').toHaveLength(1)
   })
 
-  it('[covers:web-home.trend-window] 時期チップの月切替と棒押下はfocus移動として窓を初期化（offset リセット・slideなしの即時差し替え）', async () => {
+  it('[covers:web-home.trend-window] 時期チップの月切替はE2b最小slide（窓外k<=span）でtrim後は新月近傍の6本・棒押下の窓内focus（E2a）は窓不変', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
     const keys = () => wrapper.findAll('[data-test="trend-card"] .bar-col').map((b) => b.attributes('data-test'))
     const store = (await import('@/web/stores/period')).usePeriodStore()
-    await wrapper.find('[data-test="trend-prev"]').trigger('click') // offset=6, the slide is on
+    await wrapper.find('[data-test="trend-prev"]').trigger('click') // page back, the slide is on
     await finishTrendSlide(wrapper)
     expect(keys()).toEqual(['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04'])
-    // the period chip's month step (2026-10 -> 2026-09) resets the window to
-    // September's initial one — the offset did not survive the focus change,
-    // and TASK-115 swaps the chart in instantly (exactly six bars, never a
-    // concatenation: a focus change never slides)
+    // the period chip's month step (2026-10 -> 2026-09) is a k=5 E2b from
+    // the paged window (2025-11..2026-04): the window slides its minimum —
+    // the union concatenation shows old+new while it moves, the trim leaves
+    // the new window's six bars (2026-04..09, September on the right edge —
+    // the same shape as September's canonical window)
     await wrapper.find('[data-test="filter-period"]').trigger('click')
     await settle()
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await settle()
     expect(store.month).toBe('2026-09')
+    expect(keys()).toEqual(monthsBetween('2025-11-01', '2026-09-30').map((m) => `bar-${m}`))
+    await finishTrendSlide(wrapper)
     expect(keys()).toEqual(['bar-2026-04', 'bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09'])
-    // picking 2026-10 again restores the initial window
+    // picking 2026-10 again: k=1 from the window's right edge — the same
+    // minimal slide, trimmed to the initial window
     await wrapper.find('[data-test="period-next"]').trigger('click')
     await settle()
     expect(store.month).toBe('2026-10')
+    expect(keys()).toEqual(monthsBetween('2026-04-01', '2026-10-31').map((m) => `bar-${m}`))
+    await finishTrendSlide(wrapper)
     expect(keys()).toEqual(['bar-2026-05', 'bar-2026-06', 'bar-2026-07', 'bar-2026-08', 'bar-2026-09', 'bar-2026-10'])
-    // a bar press is a focus move (setMonth): the window resets around the
-    // pressed month even from a paged position — bar-2025-12 sits inside the
-    // paged window (2025-11..2026-04), a month clearly outside the initial
-    // one (TASK-108 §4-8: the old bar-2026-04 press landed on the window
-    // edge, where the reset's before/after were indistinguishable)
+    // a bar press is a focus move (setMonth): bar-2025-12 sits INSIDE the
+    // paged window, so the E2a rule keeps the window untouched (TASK-161 §1:
+    // the pressed month's neighbours never vanish — the old reset-around-
+    // the-press re-anchored instead)
     await wrapper.find('[data-test="trend-prev"]').trigger('click')
     await finishTrendSlide(wrapper)
     await wrapper.find('[data-test="bar-2025-12"]').trigger('click')
     await settle()
     expect(store.mode).toBe('month')
     expect(store.month).toBe('2025-12')
-    expect(keys()).toEqual(['bar-2025-07', 'bar-2025-08', 'bar-2025-09', 'bar-2025-10', 'bar-2025-11', 'bar-2025-12'])
+    expect(keys()).toEqual(['bar-2025-11', 'bar-2025-12', 'bar-2026-01', 'bar-2026-02', 'bar-2026-03', 'bar-2026-04'])
   })
 
   it('[covers:web-home.trend-window] 年モードは12本のまま12か月分ページ送り（bar-2025-01〜12・連結は24本→トリムで12本）・週・期間モードは前次buttonなし（窓は選択期間・7本日棒のまま）', async () => {
@@ -1396,7 +1478,9 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     await mountApp('/axes/category/1?month=2026-10')
     const monthCalls = () => trendSpy.mock.calls.filter(([, q]) => q.granularity === 'month')
-    expect(monthCalls()).toHaveLength(2) // display + the adjacent prefetch, no double fire
+    // TASK-161 §1-2: display + the four prefetches around the window (±span
+    // pages both ways + the ±1-month move windows), no double fire
+    expect(monthCalls()).toHaveLength(5)
     const display = monthCalls().find(([, q]) => q.from === '2026-05-01')
     const prefetch = monthCalls().find(([, q]) => q.from === '2025-11-01')
     expect(display).toBeDefined()
@@ -1446,27 +1530,268 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     await wrapper.find('[data-test="period-next"]').trigger('click')
     await settle()
     // mid-race: the reload is still pending (dim, the two-stage render) and
-    // the chart already committed the new window (2026-06..11) — in place,
-    // un-remounted, no fade classes of its own
+    // the chart already committed the new window — un-remounted, no fade
+    // classes of its own. The k=1 E2b committed synchronously off the ±1
+    // prefetch, so its slide is already assembled: the display array is the
+    // union (the six committed months + the entering 2026-11, one graph
+    // moving — TASK-161 §1-2; the trim lands on the transitionend)
     expect(wrapper.find('.view-stack').classes()).toContain('loading')
     expect(bars().findAll('.bar-col').map((b) => b.attributes('data-test'))).toEqual(
-      monthsBetween('2026-06-01', '2026-11-30').map((m) => `bar-${m}`),
+      monthsBetween('2026-05-01', '2026-11-30').map((m) => `bar-${m}`),
     )
     expect(charts()).toHaveLength(1)
     expect(noFade()).toBe(true)
     expect(bars().element).toBe(before)
 
-    // the pane commit is the single motion of the move: the step's
-    // slide-forward fires on the pane children; the chart (inside the fresh
-    // pane) keeps no classes of its own
+    // TASK-161 §2 (web-common.period-move-voice): a period step never
+    // remounts the pane anymore — the committedKey drops the period range
+    // so the commit renders in place (no slide-forward/back classes on the
+    // pane children; the value-level vocabulary owns the change) and the
+    // chart's DOM stays identical through it
     release()
     await flushPromises()
     const kids = Array.from(wrapper.find('.view-stack .content-swap').element.children)
-    expect(kids.some((el) => el.classList.contains('slide-forward-enter-active'))).toBe(true)
-    expect(kids.some((el) => el.classList.contains('slide-forward-leave-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('slide-forward-enter-active'))).toBe(false)
+    expect(kids.some((el) => el.classList.contains('slide-back-enter-active'))).toBe(false)
     expect(noFade()).toBe(true)
     await settle()
-    expect(wrapper.find('.view-stack .content-swap').element.children).toHaveLength(1)
-    expect(wrapper.find('.period-label').text()).toBe('2026年11月の支出')
+    expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+  })
+})
+
+// TASK-161 (design: tmp/tasks/tm-161/design_period_ui.md v2 §1): the window
+// becomes an EXPLICIT absolute {from, to} range — the offset/anchor model is
+// gone. A focus move INSIDE the committed window (E2a) keeps the window
+// untouched (no re-anchor, no re-fetch — the adjacent month's bar stays: the
+// §0-2 bug where focusing September killed October's lead); a focus move
+// k ≤ span outside it (E2b) slides the MINIMUM k months over the union
+// concatenation; a k > span jump (E2c) resets to the canonical window (right
+// edge = the new month) in place, no slide. The floor goes symmetric (both
+// enabled with no move history; the direction that paged into an all-zero
+// window alone disables) and each commit prefetches the ±1-month move
+// windows both ways. Test-first: red until the composable revision lands.
+describe('useTrendWindow (composable, TASK-161 absolute window)', () => {
+  it('[covers:web-home.trend-window-absolute] E2a窓保持: 窓内focus移動はwindowKey不変・表示fetch再発行なし（隣接月barが消えない）・slide不組立 / E2c: 窓外k>spanはslideなしの正規窓reset（右端=新月）', async () => {
+    const period = usePeriodStore()
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
+    const win = await mountWindow()
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    const before = callsFrom(trendSpy, 1, '2026-05-01').length
+    // E2a: September sits INSIDE the committed window — the window must not
+    // re-anchor (the §0-2 mechanism reset the window on every focus change,
+    // which is what closed the October lead)
+    period.setMonth('2026-09')
+    await settle()
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.window.value).toEqual(['2026-05-01', '2026-10-31'])
+    expect(callsFrom(trendSpy, 1, '2026-05-01').length).toBe(before) // no re-fetch
+    expect(win.slide.value).toBeNull()
+    // the adjacent bars stay drawn (指摘2: October never disappears)
+    expect(win.stacked.value.map((b) => b.key)).toEqual(monthsBetween('2026-05-01', '2026-10-31'))
+    // E2c: k > span (popover / URL jump) resets to the canonical window with
+    // the new month on the RIGHT edge — no slide, an in-place swap
+    period.setMonth('2027-06')
+    await settle()
+    expect(win.windowKey.value).toBe('2027-01-01..2027-06-30')
+    expect(win.slide.value).toBeNull()
+  })
+
+  it('[covers:web-home.trend-window-min-slide] E2b最小slide: 窓外k<=spanのfocus移動はkか月の最小slide（旧窓+新月のbucket和集合の連結・trim後は新窓のみで前月は窓内に残る）', async () => {
+    const period = usePeriodStore()
+    const win = await mountWindow()
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    // k=1 into November: the union concatenation (the 6 committed months +
+    // the entering 2026-11, duplicated keys kept once) assembles a slide —
+    // the old implementation reset the window instead, leaving slide null
+    period.setMonth('2026-11')
+    await settle()
+    expect(win.slide.value).not.toBeNull()
+    expect(win.slide.value?.bars.map((b) => b.key)).toEqual([
+      ...monthsBetween('2026-05-01', '2026-10-31'),
+      '2026-11',
+    ])
+    win.finishSlide()
+    await nextTick()
+    // the window moved by exactly k=1: the previous month stays inside
+    expect(win.window.value).toEqual(['2026-06-01', '2026-11-30'])
+    expect(win.stacked.value.map((b) => b.key)).toEqual(monthsBetween('2026-06-01', '2026-11-30'))
+  })
+
+  it('[covers:web-home.trend-window-floor] 対称全zero floor: 移動履歴なしの初期状態はcanPrev/canNextともにtrue（絶対窓化でoffset依存条件は廃止）', async () => {
+    const win = await mountWindow()
+    // no move history: both directions stay available. The old model derived
+    // canNext = offset > 0 and disabled the next chevron on the initial
+    // window forever — half of the §0-2 lead closing
+    expect(win.canPrev.value).toBe(true)
+    expect(win.canNext.value).toBe(true)
+  })
+
+  it('[covers:web-home.trend-window-prefetch][covers:web-home.trend-window-min-slide] prefetch双方向化: コミット確定後に未来側（±1か月移動窓）もprefetchされ、k=1のfocus移動は再fetchしない', async () => {
+    const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
+    await mountWindow()
+    await settle()
+    // TASK-161 §1-2: every commit prefetches the ±1-month MOVE windows (so
+    // the E2b k=1 case commits synchronously from cache) — the future side
+    // (from=2026-06-01) is new; the old code prefetched the prev side only
+    const future = callsFrom(trendSpy, 1, '2026-06-01').length
+    expect(future).toBeGreaterThanOrEqual(1)
+    // the k=1 focus move then commits from that cache: no additional fetch
+    // for the same window
+    const period = usePeriodStore()
+    period.setMonth('2026-11')
+    await settle()
+    expect(callsFrom(trendSpy, 1, '2026-06-01').length).toBe(future)
+  })
+})
+
+// TASK-162 (design: tmp/tasks/tm-162/design_breakdown_stack.md v2 — §1-6/§1-8/
+// §2-2, 指摘1/2): the Home breakdown's one-bar assembly helpers. (1)
+// stackedOfRows — the analysis-rows-driven pure helper that keeps the TOP 5
+// series +「ほか」with the residual closed against the TOTAL (合計 − kept
+// sum, never the tail sum + truncated_rows) and the rest count as the number
+// of merged CATEGORIES (not transactions); (2) the series key survives the
+// assembly and the allocation (the transition identifier — no label/color
+// reverse lookup); (3) allocateStack's opts.labelMin — the fold threshold
+// that guarantees every drawn segment houses its (at minimum「○…」) label.
+// Test-first: red until shared/lib/stackedBars.ts lands them.
+describe('stackedOfRows / series key / allocateStack labelMin (TASK-162)', () => {
+  /** one analysis row: a category key + label + value */
+  const row = (key: number | string | null, label: string, value: number) => ({
+    keys: [key],
+    labels: [label],
+    value,
+  })
+
+  it('[covers:web-common.stacked-of-rows] 上位5+「ほか」: 残余=合計−保持系列和（truncated込みで正確）・件数=分類数・値0系列はsegmentなし・空rowsは空', () => {
+    // seven rows totalling 1328: the top FIVE stay series segments, the tail
+    // 本50+交通30 closes against the total as rest { value: 80, count: 2 }
+    const rows = [
+      row(1, '食費', 550),
+      row(4, '日用品', 398),
+      row(7, '交際', 120),
+      row(2, '娯楽', 100),
+      row(6, '衣服', 80),
+      row(3, '本', 50),
+      row(5, '交通', 30),
+    ]
+    const out = stackedOfRows(rows, 1328)
+    expect(out.segments.map((s) => s.label)).toEqual(['食費', '日用品', '交際', '娯楽', '衣服'])
+    expect(out.rest.value).toBe(1328 - (550 + 398 + 120 + 100 + 80))
+    expect(out.rest.count).toBe(2)
+    // the residual closes against the TOTAL, not the tail: a total above the
+    // rows' sum (records the limit-50 fetch never returned) still lands in
+    // the rest value — the tail-sum reading would under-report it; review 中3:
+    // the COUNT merges the truncated rows too (the 6 categories the limit-50
+    // fetch never returned join the tail's 2 — value-only verification hid it)
+    const sparse = stackedOfRows(rows, 1600)
+    expect(sparse.rest.value).toBe(1600 - 1248)
+    const sparseTruncated = stackedOfRows(rows, 1600, 6)
+    expect(sparseTruncated.rest.value).toBe(1600 - 1248)
+    expect(sparseTruncated.rest.count).toBe(2 + 6)
+    // a value-0 row draws no segment (the existing zero-omission contract)
+    const zero = stackedOfRows([row(1, '食費', 550), row(4, '日用品', 0)], 550)
+    expect(zero.segments.map((s) => s.label)).toEqual(['食費'])
+    expect(zero.rest.value).toBe(0)
+    // empty rows: nothing drawn
+    expect(stackedOfRows([], 0).segments).toEqual([])
+  })
+
+  it('[covers:web-common.stacked-of-rows] 5%未満の上位系列は「ほか」へ合流（value加算・count+1）し次位が繰り上がる', () => {
+    // 交際 40/1328 = 3.0% < 5% folds: the kept five promote 本, and the rest
+    // gains the folded value AND the folded category count
+    const rows = [
+      row(1, '食費', 550),
+      row(4, '日用品', 398),
+      row(7, '交際', 40),
+      row(2, '娯楽', 100),
+      row(6, '衣服', 80),
+      row(3, '本', 90),
+      row(5, '交通', 70),
+    ]
+    const total = 550 + 398 + 40 + 100 + 80 + 90 + 70
+    const out = stackedOfRows(rows, total)
+    expect(out.segments.map((s) => s.label)).toEqual(['食費', '日用品', '娯楽', '衣服', '本'])
+    expect(out.rest.value).toBe(40 + 70)
+    expect(out.rest.count).toBe(2)
+  })
+
+  it('[covers:web-common.stack-series-key] 系列keyはstackedOf/stackedOfRowsからallocateStack後まで保持（restはkey=null・label/color逆引き禁止の識別子）', () => {
+    // stackedOf: each series segment carries the API key as-is (number,
+    // string, and the null 未分類), the「ほか」segment is key=null + rest
+    const res: AnalysisTrendResult = {
+      axis: 'category',
+      metric: 'amount',
+      granularity: 'month',
+      period: { from: '2026-10-01', to: '2026-10-31', label: '2026年10月' },
+      buckets: ['2026-10'],
+      series: [
+        { key: 1, label: '食費', values: [550], total: 550 },
+        { key: null, label: '未分類', values: [100], total: 100 },
+        { key: 'coffee', label: 'コーヒー', values: [50], total: 50 },
+      ],
+      // 750 = the three series' 700 + a 50 residual the limit-5 fetch never
+      // returned as a series row — the「ほか」segment this test reads needs
+      // one (an exact-sum fixture would omit it)
+      bucket_totals: [750],
+      truncated_rows: 0,
+    }
+    const bars = stackedOf(res)
+    const segs = bars[0]!.segments
+    const byLabel = (label: string) => segs.find((s) => s.label === label)!
+    expect(byLabel('食費').key).toBe(1)
+    expect(byLabel('コーヒー').key).toBe('coffee')
+    expect(byLabel('未分類').key).toBeNull()
+    expect(byLabel('未分類').rest).toBeUndefined()
+    expect(byLabel('ほか').key).toBeNull()
+    expect(byLabel('ほか').rest).toBe(true)
+    // the key survives the allocation (the sizes were computed but the
+    // identity did not change)
+    const allocated = allocateStack(segs, 400)
+    expect(allocated.map((s) => s.key)).toEqual(segs.map((s) => s.key))
+    // stackedOfRows keeps the row keys the same way
+    const out = stackedOfRows([row(1, '食費', 550), row(4, '日用品', 100)], 650)
+    expect(out.segments.map((s) => s.key)).toEqual([1, 4])
+  })
+
+  it('[covers:web-common.allocate-label-min] opts.labelMin: labelMin未満セグメントはrestへfold（規則B ladderの基準引き上げ）・rule C terminalも同基準・未指定は現行3px規則のまま', () => {
+    const seg = (label: string, value: number): StackedSegment => ({ label, value, color: 'var(--series-1)' })
+    // (a) the fold ladder: a 20px-at-ratio segment under labelMin 26 folds
+    // into the rest; the survivors all clear 26px (the bar's length is 400:
+    // 交際's 50/1000 share draws 20px — the original draft's 1000 was the
+    // typo its own "20px-at-ratio" comment pins)
+    const a = allocateStack(
+      [
+        seg('食費', 500),
+        seg('日用品', 300),
+        seg('交際', 50),
+        { label: 'ほか', value: 150, color: 'var(--series-rest)', rest: true },
+      ],
+      400,
+      { labelMin: 26 },
+    )
+    expect(a.map((s) => s.label)).toEqual(['食費', '日用品', 'ほか'])
+    expect(a.find((s) => s.label === 'ほか')!.value).toBe(200)
+    for (const s of a) expect(s.size).toBeGreaterThanOrEqual(26)
+    // (b) rule C at the raised bar: a bar too short for even 1 series + the
+    // rest at labelMin collapses to the first series alone (whose label fits
+    // — the single-colour terminal carries ITS label)
+    const b = allocateStack(
+      [
+        seg('食費', 500),
+        seg('日用品', 300),
+        { label: 'ほか', value: 150, color: 'var(--series-rest)', rest: true },
+      ],
+      40,
+      { labelMin: 26 },
+    )
+    expect(b).toHaveLength(1)
+    expect(b[0]!.label).toBe('食費')
+    expect(b[0]!.size).toBeCloseTo(40, 5)
+    // (c) labelMin unset: the current SEG_MIN=3 rule stays (backward
+    // compatible — horizontal bars / widget keep the old minimums)
+    const c = allocateStack([seg('食費', 500), seg('交際', 5)], 1000)
+    expect(c.map((s) => s.label)).toEqual(['食費', '交際'])
+    expect(c[1]!.size).toBeGreaterThanOrEqual(3)
+    expect(c[1]!.size).toBeLessThan(26)
   })
 })

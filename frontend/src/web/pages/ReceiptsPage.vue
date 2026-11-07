@@ -1,26 +1,30 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import type { Label, LabelColor } from '@/shared/labels'
 import { useDataApi, type AnalysisResult, type AnalysisTrendResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
 import AppearList from '../components/AppearList.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
 import ContentSwap from '../components/ContentSwap.vue'
+import DataRow from '../components/DataRow.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
 import PopoverPanel from '../components/PopoverPanel.vue'
 import RankedList from '../components/RankedList.vue'
-import { errorMessage, formatYen } from '../composables/format'
+import PeriodStep from '../components/PeriodStep.vue'
+import { errorMessage, formatYen, topItemsText } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { usePageReady } from '../composables/usePageReady'
-import { usePeriodMove } from '../composables/periodMove'
+import { useTweenNumber } from '../composables/useTweenNumber'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { axisMonthLabels, dayLabel, monthLabel, periodDays, shortDate, shortTime } from '../composables/period'
 import { feedReturn, listQueryToContext } from '../composables/receiptContext'
 import { bucketSpan, spanGranularity } from '../composables/trend'
 import { allocateStack, barScale, stackedOf } from '@/shared/lib/stackedBars'
+import { seriesInk } from '@/shared/lib/seriesColor'
+import { barWidthCap } from '@/shared/lib/barWidth'
+import { verticalSegLabel } from '@/shared/format'
 import { useLabelsStore } from '../stores/labels'
 import { usePeriodStore } from '../stores/period'
 
@@ -72,10 +76,11 @@ const trendRes = ref<AnalysisTrendResult | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-// TASK-146 §3: the pane's committed key (bumped at the load commit) and the
-// move's direction off the shared period store
+// TASK-146 §3: the pane's committed key (bumped at the load commit). TASK-161
+// §2 (web-common.period-move-voice): the key drops the PERIOD range (the
+// from/to of listQuery) — a period step never remounts the pane
+// (periodMove is gone); the query itself keeps its period part
 const committedKey = ref('')
-const move = usePeriodMove(committedKey)
 // first load finished at least once: until then the screen shows the
 // skeleton; later reloads keep the grid and dim it (TASK-39 D)
 const loaded = ref(false)
@@ -131,9 +136,11 @@ async function load(id?: number): Promise<void> {
     nextCursor.value = list.next_cursor
     payments.value = pm
     trendRes.value = tr
-    // the pane's committed identity: the query (period + every filter) as it
-    // was answered, so the content transition fires here — never at the press
-    committedKey.value = `${l}|${JSON.stringify(listQuery())}`
+    // the pane's committed identity: every filter of the query as it was
+    // answered — the PERIOD part alone drops out (a period move keeps the
+    // pane; TASK-161 §2-1), so the content transition fires here — never at
+    // the press — only for a real content change
+    committedKey.value = `${l}|${JSON.stringify({ ...listQuery(), from: undefined, to: undefined })}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -281,6 +288,11 @@ const perDay = computed(() => {
   const [from, to] = period.range
   return Math.round(sumAmount.value / periodDays(from, to))
 })
+/** TASK-161 §2-2: the KPI value tweens on a period change (the pane no
+ *  longer remounts — the value-level vocabulary owns the change); a change
+ *  that bumps the committed key is a content swap and lands at once (the
+ *  pane's fade is the motion) */
+const sumView = useTweenNumber(() => sumAmount.value, { swapKey: () => committedKey.value })
 
 /** the payment ranking rows: amount desc + the muted rest row (the old
  *  by_payment_method "その他" fold is the client's now). */
@@ -293,6 +305,7 @@ const paymentRows = computed<StatsRow[]>(() => {
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
   if (res.truncated_rows > 0) {
     // the folded tail's amount: the period total minus the shown rows (the
@@ -330,12 +343,19 @@ const trendTitle = computed(() =>
 /** the .daily-bars track's fixed height (styles.css) — the allocation's px
  * basis; the columns' measured width feeds the corner cap */
 const DAILY_TRACK_H = 110
+/** TASK-162 §2-2/§2-6: the label fold bar — the same 26px the TrendBars
+ * vertical bars pass allocateStack (a series that cannot house「○…」folds
+ * into「ほか」) */
+const SEG_LABEL_MIN = 26
 const dailyBarsEl = ref<HTMLElement | null>(null)
 const dailyColW = ref(0)
 let dailyRo: ResizeObserver | null = null
 function measureDaily(): void {
   const col = dailyBarsEl.value?.querySelector('.daily-col') ?? null
-  dailyColW.value = col ? col.clientWidth : 0
+  // the cap arithmetic's width base is the BAR's own width min(cell, cap) —
+  // TASK-162 §6-1: the cap reads the shared --trend-bar-w token helper (the
+  // single source the TrendBars bars read too, no JS mirror literal)
+  dailyColW.value = col ? Math.min(col.clientWidth, barWidthCap(dailyBarsEl.value)) : 0
 }
 onMounted(() => {
   measureDaily()
@@ -376,10 +396,17 @@ const trendCols = computed(() => {
     const value = totals[i] ?? 0
     const ratio = value > 0 ? value / max : 0
     // the stack's px length and its % height are the same raw ratio — the
-    // allocation's sizes close over the px length exactly (§4-5 rule A)
+    // allocation's sizes close over the px length exactly (§4-5 rule A).
+    // TASK-162 §2-6: the label fold bar rides here too (the SAME rule the
+    // TrendBars vertical bars pass — a sub-26px series folds into「ほか」so
+    // every drawn segment houses its label; the bar DOM itself stays this
+    // card's own — the TASK-126 consolidation boundary)
     const length = ratio * DAILY_TRACK_H
-    const allocated = value > 0 ? allocateStack(stacked[i]?.segments ?? [], length) : []
+    const allocated = value > 0 ? allocateStack(stacked[i]?.segments ?? [], length, { labelMin: SEG_LABEL_MIN }) : []
     const segTotal = allocated.reduce((a, s) => a + s.value, 0)
+    // 例外A: a bar under the fold bar carries no labels (the bar itself is
+    // beneath readability)
+    const labelable = length >= SEG_LABEL_MIN
     return {
       key,
       value,
@@ -390,6 +417,7 @@ const trendCols = computed(() => {
         segHeight: s.size,
         top: j === allocated.length - 1,
         pct: segTotal > 0 ? Math.round((s.value / segTotal) * 100) : null,
+        vLabel: labelable && s.size >= SEG_LABEL_MIN ? verticalSegLabel(s.label, s.size) : null,
       })),
     }
   })
@@ -525,23 +553,32 @@ const groups = computed(() => {
       class="view-stack"
       :class="{ loading }"
     >
-      <!-- TASK-146 §3: the content transition fires at the load commit -->
-      <ContentSwap
-        :swap-key="committedKey"
-        :dir="move.dir.value"
-      >
+      <!-- TASK-146 §3: the content transition fires at the load commit.
+           TASK-161 §2: a period move renders in place (dir stays 'swap') -->
+      <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <section
             class="card kpi"
             data-test="summary"
           >
             <p class="kpi-head">
-              <span class="label">{{ period.label }}の支出</span>
-              <strong class="kpi-value">{{ formatYen(sumAmount) }}</strong>
+              <!-- TASK-161 §3/§4 (指摘5): the label is period.label alone
+                   (no「の支出」suffix) with the step pair around it -->
+              <PeriodStep><span class="label">{{ period.label }}</span></PeriodStep>
+              <strong class="kpi-value">{{ formatYen(sumView) }}</strong>
             </p>
-            <p class="kpi-sub">
-              レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }}
-            </p>
+            <!-- TASK-161 §2-2 (review 中6): the summary line crosses through
+                 the fade vocabulary on a PERIOD move (keyed by the range —
+                 the pane itself never remounts); a filter change re-renders
+                 it in place, its numbers carrying no motion vocabulary -->
+            <Transition name="page">
+              <p
+                :key="`${period.range[0]}..${period.range[1]}`"
+                class="kpi-sub"
+              >
+                レシート {{ totalCount }}件 ・ 1日あたり {{ formatYen(perDay) }} ・ 1件あたり {{ formatYen(average) }}
+              </p>
+            </Transition>
           </section>
 
           <div class="dash-cols">
@@ -555,42 +592,59 @@ const groups = computed(() => {
                     {{ trendTitle }}
                   </h2>
                 </div>
-                <div
-                  ref="dailyBarsEl"
-                  class="daily-bars"
-                  :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(0.25rem, 1fr))` }"
-                >
-                  <span
-                    v-for="c in trendCols"
-                    :key="c.key"
-                    class="daily-col"
-                    :title="c.title"
+                <!-- TASK-162 §2-6 (review 高1): the track's floor is the
+                     vertical label's needed width (--bar-label-w: 15px) — a
+                     whole-period day grid (31 columns) at the 360px band
+                     solved cells down to ~7px, narrower than the 11px glyphs,
+                     and the labels hung outside their segments. The floor
+                     keeps every cell at label width or wider; a period whose
+                     columns cannot fit the card scrolls in the shared .hscroll
+                     grammar (the trend card's own overflow vessel) -->
+                <div class="hscroll">
+                  <div
+                    ref="dailyBarsEl"
+                    class="daily-bars"
+                    :style="{ gridTemplateColumns: `repeat(${trendCols.length || 1}, minmax(var(--bar-label-w), 1fr))` }"
                   >
-                    <!-- TASK-116 (design §3-2): the bar is a stacked container —
+                    <span
+                      v-for="c in trendCols"
+                      :key="c.key"
+                      class="daily-col"
+                      :title="c.title"
+                    >
+                      <!-- TASK-116 (design §3-2): the bar is a stacked container —
                      column-reverse puts the first (top) series at the base;
                      a zero bucket keeps the height-0 element with no
                      segments (the same drawing as before: no visible bar).
                      TASK-123: explicit px segment heights off allocateStack,
                      the full-perimeter 1px outline (rule F drops it inline)
-                     and the top segment's cap radius -->
-                    <span
-                      class="daily-bar"
-                      :style="{ height: `${c.height}%` }"
-                    >
+                     and the top segment's cap radius. TASK-162 §2-6: the
+                     segments carry the SAME upright vertical label class the
+                     TrendBars bars read (the labelMin fold above guarantees
+                     the room; 例外A/B keep the colour-only fallback) -->
                       <span
-                        v-for="(seg, i) in c.segments"
-                        :key="i"
-                        class="daily-seg"
-                        :style="{
-                          height: `${seg.segHeight}px`,
-                          background: seg.color,
-                          ...(seg.outline ? {} : { border: 'none' }),
-                          ...(seg.top ? { borderRadius: `${dailyRadius}px ${dailyRadius}px 0 0` } : {}),
-                        }"
-                        :title="`${seg.label} ${formatYen(seg.value)}${seg.pct !== null ? `（${seg.pct}%）` : ''}`"
-                      />
+                        class="daily-bar"
+                        :style="{ height: `${c.height}%` }"
+                      >
+                        <span
+                          v-for="(seg, i) in c.segments"
+                          :key="i"
+                          class="daily-seg"
+                          :style="{
+                            height: `${seg.segHeight}px`,
+                            background: seg.color,
+                            ...(seg.outline ? {} : { border: 'none' }),
+                            ...(seg.top ? { borderRadius: `${dailyRadius}px ${dailyRadius}px 0 0` } : {}),
+                            ...(seg.vLabel !== null ? { color: seriesInk(seg.color) } : {}),
+                          }"
+                          :title="`${seg.label} ${formatYen(seg.value)}${seg.pct !== null ? `（${seg.pct}%）` : ''}`"
+                        ><span
+                          v-if="seg.vLabel !== null"
+                          class="bar-seg-label"
+                        >{{ seg.vLabel }}</span></span>
+                      </span>
                     </span>
-                  </span>
+                  </div>
                 </div>
                 <div
                   v-if="trendAxis"
@@ -670,30 +724,32 @@ const groups = computed(() => {
                   :key="r.receipt_id"
                   :data-test="`receipt-${r.receipt_id}`"
                 >
-                  <RouterLink
+                  <DataRow
                     :to="{ path: `/receipts/${r.receipt_id}`, query: listQueryToContext(listQuery()) }"
-                    class="recent-row receipt-row"
+                    class="receipt-row"
                     :class="{ deleted: r.deleted_at }"
+                    :amount="formatYen(r.amount)"
+                    :sub-text="topItemsText(r.top_items)"
+                    :labels="r.labels ?? []"
                   >
-                    <!-- the day head carries the date (TASK-63/57): the row's
-                     column is the time; the 日付なし group shows '-' too -->
-                    <span class="recent-date">{{ g.date ? shortTime(r.purchased_time) : '-' }}</span>
-                    <span
-                      class="recent-store truncate"
-                      data-test="store-name"
-                    >{{ r.store_name ?? '店名なし' }}</span>
-                    <span
-                      class="row-labels"
-                      data-test="row-labels"
-                    ><span
-                      v-if="r.deleted_at"
-                      class="badge badge-danger"
-                    >削除済み</span><LabelDots
-                      :labels="r.labels ?? []"
-                      compact
-                    /></span>
-                    <span class="amount">{{ formatYen(r.amount) }}</span>
-                  </RouterLink>
+                    <!-- the day head carries the date (TASK-63/57): the sub
+                         figure is the time; the 日付なし group shows '-' too -->
+                    <template #main>
+                      <span
+                        class="row-name truncate"
+                        data-test="store-name"
+                      >{{ r.store_name ?? '店名なし' }}</span>
+                    </template>
+                    <template #sub-end>
+                      <span
+                        v-if="r.deleted_at"
+                        class="badge badge-danger"
+                      >削除済み</span>
+                    </template>
+                    <template #figure>
+                      <span class="row-fig">{{ g.date ? shortTime(r.purchased_time) : '-' }}</span>
+                    </template>
+                  </DataRow>
                 </li>
               </AppearList>
             </div>

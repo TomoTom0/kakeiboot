@@ -432,6 +432,11 @@ describe('Feed controls', () => {
 
     s.intoView.length = 0
     const replace = vi.spyOn(router, 'replace')
+    // TASK-168: the move's motion is the smooth scrollIntoView ALONE — the
+    // heading focus that follows must pass preventScroll, or the browser's
+    // own reveal-scroll lands instantly and eats the smooth scroll (the
+    // real-device report: the prev/next move jumps with no animation)
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
     await next().trigger('click')
     await settle()
     expect(scrolledTo(103)).toBe(true)
@@ -445,6 +450,11 @@ describe('Feed controls', () => {
     const focused = document.activeElement
     expect(focused?.closest('[data-test="receipt-panel-103"]')).not.toBeNull()
     expect(focused?.getAttribute('tabindex')).toBe('-1')
+    // the focus that landed the heading scrolled nothing: every move-time
+    // focus call carries preventScroll: true
+    const moveFocus = focusSpy.mock.calls.filter(([opts]) => opts?.preventScroll === true)
+    expect(moveFocus.length).toBeGreaterThan(0)
+    focusSpy.mockRestore()
 
     intersect(panel(wrapper, 102))
     await settle()

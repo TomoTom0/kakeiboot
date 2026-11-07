@@ -12,11 +12,17 @@
 // the store's current value — the shared "画面間で共有" behavior — and the
 // write-back below puts it on the URL at once instead of resetting it.
 //
-// Write-back (store -> URL, D2-6): every write is a router.replace (no
-// history entry, navKind 'replace' → no slide, no scroll) behind a diff
-// guard — the keys the composable owns are only written when the URL's
-// current values differ from the store, so an import that agrees with the
-// store and the echo of our own replace never issue another navigation.
+// Write-back (store -> URL, D2-6 + TASK-164 §2-2-1): every write lands
+// behind a diff guard — the keys the composable owns are only written when
+// the URL's current values differ from the store, so an import that agrees
+// with the store and the echo of our own write never issue another
+// navigation. Only a USER period change (the store's one-shot nextWrite
+// flag, raised by step / setMonth / setWeek / setMode / setRange) rides a
+// router.push — one history entry per operation, so the ‹ back and the
+// device back walk back through the period changes too; every system write
+// (a keys-less completion, an import normalization, the reset, a
+// labels-only change, the /search strip) stays the history-free
+// router.replace (navKind 'replace' → no slide, no scroll).
 // /search writes the period keys only while scope=period (D1 — with
 // scope=all the period never affects the results) and drops a stray
 // inflow's period keys on the first write-back (TASK-145 D1-2 — the rule
@@ -27,7 +33,7 @@
 // in), so its CONTEXT_FIELDS URL stays the truth and the store keeps the
 // list's period. /receipts' filter sync writes only the filter keys and
 // from/to (D2-5), never the mode keys or labels — those belong here.
-import { watch } from 'vue'
+import { nextTick, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { formatLabelQuery, parseLabelQuery } from '@/shared/labels'
 import { firstString } from './receiptContext'
@@ -67,7 +73,20 @@ export function useBrowsingUrlSync(): void {
   }
 
   function writeBack(): void {
-    if (!isTarget()) return
+    if (!isTarget()) {
+      // residue rule 3, store-watch side (review REVIEW-12 #4): the store
+      // moved while OFF a sync target — this change will never be written,
+      // so the one-shot flag must not stand for the NEXT arrival's
+      // keys-less completion to misread as a user change (the feed and the
+      // other off-target screens carry real period filters, so the user can
+      // genuinely change the period there)
+      period.nextWrite = 'system'
+      return
+    }
+    // consume the one-shot flag whatever the diff turns out to be
+    // (TASK-164 §2-2-1): the marking belongs to THIS write alone
+    const who = period.nextWrite
+    period.nextWrite = 'system'
     const next: LocationQueryRaw = { ...route.query }
     const owned: string[] = ['labels']
     const writes = writesPeriod()
@@ -90,14 +109,21 @@ export function useBrowsingUrlSync(): void {
     delete next.labels
     if (period.labelColors.length > 0) next.labels = formatLabelQuery(period.labelColors)
     // diff guard: an import that agrees with the URL, or the echo of our own
-    // replace, stops here — no navigation is issued. The guard compares the
+    // write, stops here — no navigation is issued. The guard compares the
     // owned keys only, and on the strip side above the period keys are not
     // owned — so a PERIOD_KEY the current URL still holds counts as a diff
     // on its own: with no labels diff the deletion alone would read as "no
     // diff" and the stale bookmark shape would survive (review MED1)
     const strayPeriodKeys = !writes && PERIOD_KEYS.some((k) => k in route.query)
     if (ownedKeysMatch(next, route.query, owned) && !strayPeriodKeys) return
-    void router.replace({ query: next })
+    // TASK-164 §2-2-1: only a USER period change stacks a history entry —
+    // one push per operation, carrying a simultaneous labels diff on the
+    // same entry. Every system write (a keys-less completion, an import
+    // normalization, the reset, a labels-only change, the /search strip)
+    // stays the history-free replace.
+    const userPeriodChange =
+      writes && who === 'user' && !ownedKeysMatch(next, route.query, [...PERIOD_KEYS])
+    void (userPeriodChange ? router.push({ query: next }) : router.replace({ query: next }))
   }
 
   // Import on every navigation of a target route (immediate: the initial
@@ -106,7 +132,14 @@ export function useBrowsingUrlSync(): void {
   watch(
     () => route.fullPath,
     () => {
-      if (!isTarget()) return
+      if (!isTarget()) {
+        // an off-target navigation: nothing to import, nothing to write —
+        // writeBack's guard discards a standing one-shot flag here (residue
+        // rule 3, the navigation side: a later arrival's completion must
+        // never mistake a stale marking for a user change)
+        writeBack()
+        return
+      }
       if (PERIOD_KEYS.some((k) => k in route.query)) period.fromQuery(route.query)
       if ('labels' in route.query) {
         const url = parseLabelQuery(firstString(route.query.labels) ?? '')
@@ -124,8 +157,10 @@ export function useBrowsingUrlSync(): void {
   )
 
   // The store moved (the period chip, a trend bar press, the label dialog):
-  // put the owned keys on the URL — a replace, so the history keeps the
-  // screen entries and the browser back returns per entry (D2-2)
+  // put the owned keys on the URL. A USER period change rides a push — one
+  // history entry per operation, so the ‹ back (a router.back, TASK-164
+  // §2-4) and the device back return through the period changes too — while
+  // every system write stays the history-free replace (§2-2-1)
   watch(
     [
       () => period.mode,
@@ -137,5 +172,22 @@ export function useBrowsingUrlSync(): void {
       () => period.labelColors,
     ],
     () => writeBack(),
+  )
+
+  // residue rule 1, same-tick round trip (review REVIEW-12 #3): step(-1)
+  // then step(1) within one tick ends where it started — the value watch
+  // above never fires (nothing changed), and the 'user' marking the first
+  // step legitimately raised would stand for a later keys-less completion
+  // to misread as a user change. Sweep it at the end of the tick: a real
+  // value change has been consumed through writeBack by then, so only a
+  // marking with no write behind it resets here.
+  watch(
+    () => period.nextWrite,
+    (w) => {
+      if (w !== 'user') return
+      void nextTick(() => {
+        if (period.nextWrite === 'user') period.nextWrite = 'system'
+      })
+    },
   )
 }

@@ -1,5 +1,5 @@
 // LabelPicker in the ReceiptPanel labels slot (TASK-17, reshaped in
-// TASK-26): the assigned labels show as chips at the end of the tags row
+// TASK-26): the assigned labels show as chips at the end of the when line
 // and a small tag-plus button opens the popover with the five-label toggle
 // group — with per-receipt serialization, diff composition, per-color
 // rollback and the applyReceipt write-back through the real Feed mount.
@@ -259,16 +259,26 @@ describe('LabelPicker (Feed)', () => {
     await p.find('[data-test="f-note"]').setValue('特売')
     await p.find('[data-test="edit-form"]').trigger('submit')
     await settle()
-    expect(p.find('[data-test="revision"]').text()).toBe('2')
-    // the label reply arrives after the save: the revision stays at 2 and the
-    // chip (desired) stays on the row (the popover closed on selection)
+    // the label reply arrives after the save: the revision stays at the
+    // post-save value and the chip (desired) stays on the row
     release!({ receipt_id: 101, labels: [{ color: 'red', title: null }] })
     await settle()
-    expect(wrapper.find('[data-test="receipt-panel-101"] [data-test="revision"]').text()).toBe('2')
     expect(picker(wrapper).find('.label-chip').exists()).toBe(true)
     await openPopover(wrapper)
     expect(isPressed(wrapper, 'red')).toBe(true)
     expect(set).toHaveBeenCalledTimes(1)
+    // TASK-167 D-8: the panel shows no revision readout — the revision
+    // still riding the post-save value is proven by a probe save after
+    // closing the popover with Escape
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await settle()
+    const update = vi.spyOn(api, 'updateReceipt')
+    const after = wrapper.find('[data-test="receipt-panel-101"]')
+    await after.find('[data-test="edit"]').trigger('click')
+    await after.find('[data-test="f-note"]').setValue('再修正')
+    await after.find('[data-test="edit-form"]').trigger('submit')
+    await settle()
+    expect(update).toHaveBeenLastCalledWith(1, 101, { revision: 2, set: { note: '再修正' } })
   })
 
   it('[covers:web-receipts.label-picker] 送信中でないとき props.receipt.labels から confirmed/desired を取り直す', async () => {
@@ -296,18 +306,18 @@ describe('LabelPicker (Feed)', () => {
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('[covers:web-receipts.label-picker-compact] ボタンは .tags 内末尾・押下で PopoverPanel・Escape・外側押下で閉じトリガへ・editing で disabled', async () => {
+  it('[covers:web-receipts.label-picker-compact] ボタンは .receipt-when 内末尾・押下で PopoverPanel・Escape・外側押下で閉じトリガへ・editing で disabled', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     injectSetLabels(async (_l, r) => ({ receipt_id: r, labels: [] }))
     const { wrapper } = await mountApp(DETAIL, { attach: true })
     const p = wrapper.find('[data-test="receipt-panel-101"]')
 
-    // the button rides at the end of the tags row (no dedicated label row)
+    // the button rides at the end of the when line (no dedicated label row)
     const btn = addBtn(wrapper)
-    expect(btn.element.closest('.tags')).not.toBeNull()
-    const tags = p.find('.receipt-head .tags').element
-    expect(tags.lastElementChild?.contains?.(btn.element)).toBe(true)
+    expect(btn.element.closest('.receipt-when')).not.toBeNull()
+    const when = p.find('.receipt-head .receipt-when').element
+    expect(when.lastElementChild?.contains?.(btn.element)).toBe(true)
     expect(btn.attributes('aria-label')).toBe('ラベルを付ける・外す')
 
     // pressing it opens the PopoverPanel dialog with the toggle group

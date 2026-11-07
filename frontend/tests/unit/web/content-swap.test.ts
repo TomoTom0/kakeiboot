@@ -6,17 +6,16 @@
 // prefers-reduced-motion probe navDirection.ts / trendWindow.ts used to
 // implement privately). Written test-first: none of the three modules exist
 // yet, so this file is red until the implementation lands.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { defineComponent, h, nextTick, ref } from 'vue'
+import { h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import AppearList from '@/web/components/AppearList.vue'
 import ContentSwap, { ContentSwapActive } from '@/web/components/ContentSwap.vue'
-import { usePeriodMove } from '@/web/composables/periodMove'
 import { prefersReducedMotion } from '@/web/composables/reducedMotion'
-import { usePeriodStore } from '@/web/stores/period'
+import { useTweenNumber } from '@/web/composables/useTweenNumber'
 
 // the reduced-motion probe doubles: helpers' matchMedia stub belongs to
 // mountApp, and this file mounts the component directly
@@ -122,122 +121,142 @@ describe('ContentSwap (component, TASK-146 §3)', () => {
   })
 })
 
-describe('periodMove (composable, TASK-146 §3 + review MED1)', () => {
-  it('[covers:web-common.content-swap] 方向確定: mode 変化→swap・range from 増→forward・減→back・range 不変の変化→swap（flush sync で即時）', () => {
-    const period = usePeriodStore()
-    const move = usePeriodMove(ref('k0'))
-    // the initial value before any move (the first commit appears, it never
-    // slides) — 'swap' is the neutral member
-    expect(move.dir.value).toBe('swap')
-    // a later month: the from date moves up -> forward
-    period.setMonth('2026-11')
-    expect(move.dir.value).toBe('forward')
-    // an earlier month -> back
-    period.setMonth('2026-09')
-    expect(move.dir.value).toBe('back')
-    // a mode change wins over the range move -> swap
-    period.mode = 'week'
-    expect(move.dir.value).toBe('swap')
-    // within the same mode, a later week -> forward again
-    period.setWeek('2026-10-19')
-    expect(move.dir.value).toBe('forward')
-    // a change that leaves the range alone (labels, a refetch) -> swap
-    period.setLabelColors(['red'])
-    expect(move.dir.value).toBe('swap')
-  })
-
-  it('[covers:web-common.content-swap] consume (review MED1): dir は commit（committedKey 変化）1回で消費され swap へ戻る。局所filter変更の commit は fade のままで・次の移動は正しい方向を再導出する', async () => {
-    const period = usePeriodStore()
-    const committedKey = ref('k0')
-    const move = usePeriodMove(committedKey)
-    // a step forward, then the step's load settles (the commit)
-    period.setMonth('2026-11')
-    expect(move.dir.value).toBe('forward')
-    committedKey.value = 'k1'
-    await nextTick()
-    // the direction served exactly one commit — the value is consumed
-    expect(move.dir.value).toBe('swap')
-    // a LOCAL filter change (a commit with no period move: a listQuery
-    // context, a search tab) must cross through the fade, never a stale slide
-    committedKey.value = 'k1|filter'
-    await nextTick()
-    expect(move.dir.value).toBe('swap')
-    // the consumption never breaks the derivation: the next step still
-    // derives its own direction along the pressed way
-    period.setMonth('2026-09')
-    expect(move.dir.value).toBe('back')
-    committedKey.value = 'k2'
-    await nextTick()
-    expect(move.dir.value).toBe('swap')
-    period.setMonth('2026-12')
-    expect(move.dir.value).toBe('forward')
+// TASK-161 §2-4 (web-common.period-move-voice, 指摘3): periodMove.ts is GONE
+// — a period move no longer slides/remounts the pane (the committedKey drops
+// the period range), the slide vocabulary stays shell-only (RouterView) and
+// the §4 micro move gets its direction straight from the press. The old
+// direction / consume tests (which exercised the composable and the step→
+// slide wiring) left together with the module.
+describe('periodMove 廃止 (TASK-161 §2-4)', () => {
+  it('[covers:web-common.period-move-voice] periodMove.ts は存在せず SearchPage も usePeriodMove を import しない（slide語彙はshell RouterView専用）', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/web/composables/periodMove.ts'))).toBe(false)
+    const search = readFileSync(resolve(process.cwd(), 'src/web/pages/SearchPage.vue'), 'utf8')
+    expect(search.includes('periodMove')).toBe(false)
   })
 })
 
-// MED1 end-to-end: the page grammar (ContentSwap fed by periodMove bound to
-// the page's committedKey) — the slide serves exactly the stepped commit and
-// every later local-filter commit crosses through the fade
-const SwapHost = defineComponent({
-  components: { ContentSwap },
-  setup() {
-    const period = usePeriodStore()
-    const committedKey = ref('k0')
-    const move = usePeriodMove(committedKey)
-    let n = 0
-    return {
-      committedKey,
-      dir: move.dir,
-      // the load commit every page performs when its response lands (a step
-      // and a local filter change both end here — only the step moves dir)
-      commit: () => {
-        n += 1
-        committedKey.value = `k${n}`
-      },
-      stepNext: () => period.setMonth('2026-11'),
-      stepBack: () => period.setMonth('2026-09'),
+// TASK-161 §2-2 (web-common.period-move-voice): the amount tween — the value
+// vocabulary a period move rides when the pane no longer remounts. The
+// review-高1 regressions: a mid-tween change to 0 (or a swapKey bump) must
+// kill the running frames so the superseded amount can never come back, and
+// a mid-tween re-target interpolates from the DISPLAYED value. rAF and the
+// performance clock are pumped manually so the tween is deterministic
+// without real 300ms waits.
+describe('useTweenNumber (composable, TASK-161 §2-2)', () => {
+  type Frame = () => void
+  const handles = new Map<number, Frame>()
+  let clock = 0
+  let seq = 0
+  beforeEach(() => {
+    handles.clear()
+    clock = 0
+    seq = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: Frame) => {
+      seq += 1
+      handles.set(seq, cb)
+      return seq
+    })
+    vi.stubGlobal('cancelAnimationFrame', (h: number) => handles.delete(h))
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  /** advance `ms` of tween time across `n` frames (each frame steps the
+   *  clock before the batch runs, like the compositor would) */
+  const frames = (n: number, ms = 100): void => {
+    for (let i = 0; i < n; i++) {
+      clock += ms
+      const batch = [...handles.values()]
+      handles.clear()
+      for (const cb of batch) cb()
     }
-  },
-  template: `
-    <main>
-      <ContentSwap :swap-key="committedKey" :dir="dir">
-        <p data-test="pane">{{ committedKey }}</p>
-      </ContentSwap>
-      <button data-test="next" @click="stepNext">next</button>
-      <button data-test="back" @click="stepBack">back</button>
-      <button data-test="commit" @click="commit">commit</button>
-    </main>`,
-})
+  }
 
-/** the motion classes of the pane currently showing the given key */
-function paneMotion(w: ReturnType<typeof mount>, key: string): string[] {
-  const panes: Element[] = Array.from(w.element.querySelectorAll('[data-test="pane"]'))
-  const pane = panes.find((el) => el.textContent === key)
-  return pane === undefined ? [] : Array.from<string>(pane.classList)
-}
+  it('[covers:web-common.period-move-voice] 出現（最初の変更）は即時確定・以後の変更はtween（0遷移もtween）', async () => {
+    const src = ref(0)
+    const shown = useTweenNumber(() => src.value)
+    expect(shown.value).toBe(0)
+    // the first change off the initial value is an appearance: instant
+    src.value = 948
+    await nextTick()
+    expect(shown.value).toBe(948)
+    // a later change tweens — a collapse to 0 included (a period move into
+    // an empty month counts down on the live pane, review 中6): the first
+    // frame lands part-way and further frames keep rolling
+    src.value = 500
+    await nextTick()
+    frames(1)
+    expect(shown.value).toBeGreaterThan(500)
+    expect(shown.value).toBeLessThan(948)
+    frames(10)
+    expect(shown.value).toBe(500)
+    src.value = 0
+    await nextTick()
+    expect(shown.value).toBeGreaterThan(0) // the tween to 0 is under way
+    frames(10)
+    expect(shown.value).toBe(0)
+  })
 
-describe('ContentSwap x periodMove consume (review MED1)', () => {
-  it('[covers:web-common.content-swap] step→commit は slide・その後の局所filter変更の commit は fade（stale slide しない）・逆方向stepは常に正しい方向', async () => {
-    const w = mount(SwapHost, { global: { stubs: { transition: false } } })
-    // the first appearance fades whatever dir holds (requirement: appear)
-    expect(paneMotion(w, 'k0')).toContain('page-enter-active')
+  it('[covers:web-common.period-move-voice] tween中の0への変更は旧frameを殺す（確定後も旧金額が復活しない）・swapKey bumpも即時', async () => {
+    const src = ref(0)
+    const key = ref('a')
+    const shown = useTweenNumber(() => src.value, { swapKey: () => key.value })
+    src.value = 948
+    await nextTick()
+    expect(shown.value).toBe(948)
+    // roll toward 2000, then interrupt with a collapse to 0 mid-tween: the
+    // displayed value retargets DOWN immediately (the old target's frames
+    // die) and settles at 0 — never bouncing back up to 2000
+    src.value = 2000
+    await nextTick()
+    frames(2)
+    expect(shown.value).toBeGreaterThan(948)
+    const beforeZero = shown.value
+    src.value = 0
+    await nextTick()
+    frames(1)
+    expect(shown.value).toBeLessThan(beforeZero) // retargeted down from the DISPLAYED value
+    frames(20)
+    expect(shown.value).toBe(0)
+    // the superseded tween's frames are gone: no resurrection ever
+    frames(20)
+    expect(shown.value).toBe(0)
+    // a change that bumps the pane key lands at once (the pane fade carries
+    // it) — and kills its own running frames the same way
+    key.value = 'b'
+    src.value = 700
+    await nextTick()
+    expect(shown.value).toBe(700)
+    frames(20)
+    expect(shown.value).toBe(700)
+  })
 
-    // a step forward, then its load settles: the slide-forward serves it
-    await w.find('[data-test="next"]').trigger('click')
-    await w.find('[data-test="commit"]').trigger('click')
-    const stepped = paneMotion(w, 'k1')
-    expect(stepped.some((c) => c.startsWith('slide-forward-enter-'))).toBe(true)
-
-    // a local filter change commits next: the consumed dir must NOT slide
-    await w.find('[data-test="commit"]').trigger('click')
-    const filtered = paneMotion(w, 'k2')
-    expect(filtered.some((c) => c.startsWith('page-enter-'))).toBe(true)
-    expect(filtered.some((c) => c.startsWith('slide-'))).toBe(false)
-
-    // the opposite step still slides its own way (the reset broke nothing)
-    await w.find('[data-test="back"]').trigger('click')
-    await w.find('[data-test="commit"]').trigger('click')
-    expect(paneMotion(w, 'k3').some((c) => c.startsWith('slide-back-enter-'))).toBe(true)
-    w.unmount()
+  it('[covers:web-common.period-move-voice] tween中の再targetは現在の表示値から補間する（旧source起点に戻らない）', async () => {
+    const src = ref(0)
+    const shown = useTweenNumber(() => src.value)
+    src.value = 948
+    await nextTick()
+    expect(shown.value).toBe(948)
+    src.value = 2000
+    await nextTick()
+    frames(1) // clock 100/300: eased = 1-(2/3)^3 = 19/27 → ~1610
+    const mid = shown.value
+    expect(mid).toBeGreaterThan(948)
+    expect(mid).toBeLessThan(2000)
+    // re-target: the NEXT frame continues from `mid`, not from 948 — after
+    // another 100ms the from-displayed interpolation sits at
+    // mid + 19/27*(3000-mid) ≈ 0.704 of the way, strictly above the
+    // from-stale value (mid stays queued nowhere)
+    src.value = 3000
+    await nextTick()
+    frames(1)
+    const fromDisplayed = mid + (19 / 27) * (3000 - mid)
+    const fromStale = 948 + (19 / 27) * (3000 - 948)
+    expect(shown.value).toBeGreaterThan(fromStale)
+    expect(shown.value).toBeCloseTo(fromDisplayed, 0)
+    frames(10)
+    expect(shown.value).toBe(3000)
   })
 })
 

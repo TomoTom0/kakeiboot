@@ -20,6 +20,7 @@ import type {
   ReceiptSummary,
   ReceiptView,
   StoreRow,
+  TopItem,
 } from './types'
 import { LABEL_COLORS, MAX_LABEL_TITLE_CHARS, isLabelColor, labelColorsOf } from '@/shared/labels'
 import type { LabelColor } from '@/shared/labels'
@@ -181,14 +182,14 @@ function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: bool
     }
   }
   const receipts = [
-    // bareTags (TASK-60 design_browser-extension.md §9-1 alt-2): the
-    // popover-shift spec needs the picker host at the tags row's left edge —
-    // at both 390px and 360px the full tags row keeps the host near the
-    // row's end (measured panel left 223 of 390, shift 0px), so this seed
-    // strips 101 down (no tags, no assigned labels) to put a minimal host at
-    // the row head: the panel's preferred minimum then exceeds the host and
-    // crosses the 16px viewport margin. The default keeps the full tags +
-    // image + red-label composition.
+    // bareTags (TASK-60 design_browser-extension.md §9-1 alt-2): strips 101
+    // down (no payment/category, no assigned labels) — originally built to
+    // park the picker host at the tags row's head for the popover-shift
+    // spec's non-vacuous proof. TASK-167 D-10 dissolved the tags row (the
+    // host rides the receipt head's datetime line now) and that spec moved
+    // to the account menu, so no spec consumes this seed anymore; it stays
+    // as the minimal-host variation. The default keeps the full
+    // payment/category + image + red-label composition.
     opts.bareTags
       ? {
           ...receipt(101, 1, '2026-10-10', [
@@ -307,6 +308,14 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
     r.total_diff = r.total_amount === null ? null : r.total_amount - r.items_total
   }
 
+  // TASK-167 D-3: the derived representative items — amount desc top 2, the
+  // line_no tie-break (backend parity of the window-function derivation)
+  const topItemsOf = (items: ReceiptItem[]): TopItem[] =>
+    [...items]
+      .sort((a, b) => b.amount_incl - a.amount_incl || a.line_no - b.line_no)
+      .slice(0, 2)
+      .map((it) => ({ name: it.name, amount: it.amount_incl }))
+
   const summary = (r: ReceiptView): ReceiptSummary => ({
     receipt_id: r.receipt_id,
     purchased_on: r.purchased_on,
@@ -317,6 +326,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
     has_image: r.has_image,
     deleted_at: r.deleted_at,
     labels: clone(r.labels ?? []),
+    top_items: topItemsOf(r.items),
   })
 
   // --- analysis helpers (TASK-89) ------------------------------------------
@@ -392,6 +402,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
   label: string
   amount: number
   receipts: Set<number>
+  items: ReceiptItem[]
   }
   type Sel = (x: Fact) => { group: string; key: string | number | null; label: string }[]
 
@@ -448,9 +459,10 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
   const map = new Map<string, Agg>()
   for (const x of xs) {
   for (const s of sel(x)) {
-  const e = map.get(s.group) ?? { key: s.key, label: s.label, amount: 0, receipts: new Set<number>() }
+  const e = map.get(s.group) ?? { key: s.key, label: s.label, amount: 0, receipts: new Set<number>(), items: [] }
   e.amount += x.it.amount_incl
   e.receipts.add(x.r.receipt_id)
+  e.items.push(x.it)
   map.set(s.group, e)
   }
   }
@@ -462,6 +474,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
 
   /** the period's axis rows: metric value desc, top limit, no folded row. */
   function breakdownOf(
+  axis: AnalysisAxis,
   sel: Sel,
   metric: AnalysisMetric,
   cur: Fact[],
@@ -478,6 +491,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
   count,
   unit: count ? round1(e.amount / count) : null,
   share: metric === 'unit' ? null : axisTotal ? metricOfAgg(e, metric) / axisTotal : 0,
+    ...(axis !== 'item' ? { top_items: topItemsOf(e.items) } : {}),
   }
   })
   rows.sort(
@@ -620,7 +634,7 @@ export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; b
       const ct = totalOf(cur)
       const dayCount = (f: string, t: string) => Math.round((Date.parse(t) - Date.parse(f)) / 86_400_000) + 1
       const limit = Math.min(Math.max(q.limit ?? 50, 1), 50)
-      const b = breakdownOf(selectOf(axis, lg2, q), metric, cur, limit)
+      const b = breakdownOf(axis, selectOf(axis, lg2, q), metric, cur, limit)
       return {
         axis,
         metric,

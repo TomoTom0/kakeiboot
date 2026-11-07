@@ -484,7 +484,7 @@ watch(ledgerId, () => {
         </button>
         <button
           type="button"
-          class="link-btn"
+          class="link-btn hover-ink"
           data-test="show-archived"
           :aria-pressed="showArchived ? 'true' : 'false'"
           @click="showArchived = !showArchived"

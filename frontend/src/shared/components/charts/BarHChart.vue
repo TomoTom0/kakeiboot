@@ -10,15 +10,15 @@
 // ONE common renderer (BarSegs): the full-perimeter viewBox-unit stroke, the
 // data-end (right) cap alone rounded — the old four-corner rx=2 is gone.
 import { computed } from 'vue'
-import { formatYen, truncateLabel } from '@/shared/format'
+import { formatYen, truncateLabelWidth } from '@/shared/format'
 import { seriesColor } from '@/shared/lib/seriesColor'
 import { allocateStack, barScale, type AllocatedSegment } from '@/shared/lib/stackedBars'
 import BarSegs from './BarSegs.vue'
 import { type ChartDatum, seriesColorAt } from './types'
 
 const props = withDefaults(
-  defineProps<{ data: ChartDatum[]; labelChars?: number; scale?: number }>(),
-  { labelChars: 9, scale: undefined },
+  defineProps<{ data: ChartDatum[]; scale?: number }>(),
+  { scale: undefined },
 )
 
 const W = 320
@@ -28,6 +28,8 @@ const ROW = 30
 const BAR_W = W - LABEL_W - VALUE_W
 /** the row bar's stroke-inclusive height (ROW − 14, unchanged) */
 const BAR_H = ROW - 14
+/** the label column's type size (viewBox units — .bb-chart text 11px) */
+const LABEL_FONT = 11
 
 // TASK-116: the row color is the KEY-based shared mapping (the same color the
 // web ranking rows and the bar_v segments paint); keyless data falls back to
@@ -41,7 +43,9 @@ const rows = computed(() =>
     // allocator (rule F owns the sub-3-unit outline drop)
     const width = (value / scale.value) * BAR_W
     return {
-      label: truncateLabel(d.label, props.labelChars),
+      // TASK-161 §6-2: the fixed 9-char cap is gone — the truncation fills
+      // the label column's 110 viewBox units by the estimated glyph width
+      label: truncateLabelWidth(d.label, LABEL_W, LABEL_FONT),
       full: d.label,
       value: d.value,
       width,

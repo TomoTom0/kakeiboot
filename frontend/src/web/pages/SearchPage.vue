@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter, type LocationQueryRaw, type RouteLocationRaw } from 'vue-router'
-import LabelDots from '@/shared/components/LabelDots.vue'
-import { formatLabelQuery } from '@/shared/labels'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { useDataApi, type ItemSummary, type ReceiptListQuery, type ReceiptSummary } from '../api/data'
 import AppearList from '../components/AppearList.vue'
 import ContentSwap from '../components/ContentSwap.vue'
-import { errorMessage, formatYen } from '../composables/format'
+import DataRow from '../components/DataRow.vue'
+import { errorMessage, formatYen, topItemsText } from '../composables/format'
 import { useLedger } from '../composables/ledger'
-import { usePeriodMove } from '../composables/periodMove'
 import { jstToday, shortDate } from '../composables/period'
 import { firstString, listQueryToContext } from '../composables/receiptContext'
 import { usePageReady } from '../composables/usePageReady'
@@ -163,10 +161,10 @@ const nextCursor = ref<string | null>(null)
 const error = ref('')
 const loading = ref(false)
 
-// TASK-146 §3: the results' committed key (bumped at the load commit) and
-// the move's direction off the shared period store
+// TASK-146 §3: the results' committed key (bumped at the load commit).
+// TASK-161 §2 (web-common.period-move-voice): the period part of pageQuery
+// drops out — a period step never remounts the results pane
 const committedKey = ref('')
-const move = usePeriodMove(committedKey)
 
 /** Query of the active tab's page (load and "さらに表示" share it); the
  *  receipts query and the item query share these keys. */
@@ -227,8 +225,10 @@ async function load(id?: number): Promise<void> {
       nextCursor.value = res.next_cursor
     }
     // the results' committed identity (the tab rides along — a tab switch is
-    // a content swap too, but through the fade: the query has no order)
-    committedKey.value = `${l}|${tab.value}|${JSON.stringify(pageQuery())}`
+    // a content swap too, but through the fade: the query has no order);
+    // TASK-161 §2: the PERIOD part alone drops out of the key (the query
+    // itself keeps it)
+    committedKey.value = `${l}|${tab.value}|${JSON.stringify({ ...pageQuery(), from: undefined, to: undefined })}`
   } catch (e) {
     if (n !== seq) return
     error.value = errorMessage(e)
@@ -279,30 +279,13 @@ function rowDate(d: string | null | undefined): string {
   return y === Number(jstToday().slice(0, 4)) ? shortDate(d) : `${y}/${shortDate(d)}`
 }
 
-/** Category link of an item row (TASK-74 §4-7): the catalog resolves the
- * path into the hierarchy route ids; an unresolvable path keeps the list
- * destination with the legacy category query (the list's own gate tries the
- * same resolution). The query carries the period only while the scope is
- * period — a whole-history search has no period to hand down. */
+// REVIEW-15 裁断（2026-11-07）: the in-row category links are gone (the row
+// keeps its single action, D-4 — the category route rides the feed's own
+// cat-link); the catalog load stays so a failed fetch surfaces through the
+// page's error message instead of an unhandled rejection
 void catalog.load().catch((e) => {
-  // the category links need the catalog; a failed fetch leaves the results
-  // themselves working but must surface (the load catch form), not reject
-  // unhandled
   error.value = errorMessage(e)
 })
-function categoryQuery(): Record<string, string> {
-  return {
-    ...(scope.value === 'period' ? period.urlQuery : {}),
-    ...(period.labelColors.length ? { labels: formatLabelQuery(period.labelColors) } : {}),
-  }
-}
-function categoryTo(path: string): RouteLocationRaw {
-  const node = catalog.resolve('item', path)
-  if (!node) return { path: '/categories', query: { category: path, ...categoryQuery() } }
-  const parent = catalog.parentIdOf('item', node.id)
-  const target = parent === null ? `/axes/category/${node.id}` : `/axes/category/${parent}/${node.id}`
-  return { path: target, query: categoryQuery() }
-}
 </script>
 
 <template>
@@ -383,7 +366,6 @@ function categoryTo(path: string): RouteLocationRaw {
     <ContentSwap
       v-if="q"
       :swap-key="committedKey"
-      :dir="move.dir.value"
     >
       <div class="content-pane">
         <!-- TASK-146 §3 #18 + review MED2: the appended rows appear through
@@ -397,21 +379,15 @@ function categoryTo(path: string): RouteLocationRaw {
             v-for="r in receipts"
             :key="r.receipt_id"
           >
-            <RouterLink
+            <DataRow
               :to="{ path: `/receipts/${r.receipt_id}`, query: listQueryToContext(rowContext()) }"
-              class="recent-row search-row"
               data-test="search-row"
-            >
-              <span class="recent-date">{{ rowDate(r.purchased_on) }}</span>
-              <span class="recent-main">
-                <span class="recent-store">{{ r.store_name ?? '店名なし' }}</span>
-                <span class="row-labels"><LabelDots
-                  :labels="r.labels ?? []"
-                  compact
-                /></span>
-              </span>
-              <span class="amount">{{ formatYen(r.amount) }}</span>
-            </RouterLink>
+              :name="r.store_name ?? '店名なし'"
+              :amount="formatYen(r.amount)"
+              :sub-text="topItemsText(r.top_items)"
+              :sub-figure="rowDate(r.purchased_on)"
+              :labels="r.labels ?? []"
+            />
           </li>
         </AppearList>
         <AppearList
@@ -422,33 +398,27 @@ function categoryTo(path: string): RouteLocationRaw {
             v-for="it in items"
             :key="it.item_id"
           >
-            <!-- the row press (name / amount) leads to the receipt's feed; the
-                 category is a separate link beside it, never nested in the a -->
-            <div
-              class="search-item-row"
+            <!-- REVIEW-15 中1 (TASK-167 D-13): the item tab's rows ride the
+                 shared .data-row grammar too — the main line is the item name
+                 + the amount, the sub line keeps the date / store data. The
+                 category rides as plain muted text (指揮裁断 2026-11-07: the
+                 row keeps its single action, D-4 — an in-row link would nest
+                 anchors; the category route rides the feed's own cat-link) -->
+            <DataRow
+              :to="{ path: `/receipts/${it.receipt_id}`, query: listQueryToContext(rowContext()) }"
               data-test="search-item-row"
+              :name="it.name"
+              :amount="formatYen(it.amount_incl)"
             >
-              <RouterLink
-                :to="{ path: `/receipts/${it.receipt_id}`, query: listQueryToContext(rowContext()) }"
-                class="search-item-main"
-              >
-                <span class="search-item-name">{{ it.name }}</span>
-                <span class="amount">{{ formatYen(it.amount_incl) }}</span>
-              </RouterLink>
-              <div class="search-item-sub">
+              <template #sub>
                 <span>{{ rowDate(it.purchased_on) }}</span>
                 <span>{{ it.store_name ?? '店名なし' }}</span>
-                <RouterLink
+                <span
                   v-if="it.category"
-                  class="search-item-category"
                   data-test="search-item-category"
-                  :to="categoryTo(it.category)"
-                  @click.stop
-                >
-                  {{ it.category }}
-                </RouterLink>
-              </div>
-            </div>
+                >{{ it.category }}</span>
+              </template>
+            </DataRow>
           </li>
         </AppearList>
         <p

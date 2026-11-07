@@ -17,11 +17,19 @@ import { SERIES_REST, seriesColor, type SeriesAxis } from './seriesColor'
  * TASK-129 (design §4-5): the optional `rest` flag marks the residual — the
  * fold target identity is this FLAG now (a「ほか」label without it is an
  * ordinary series), so the widget's「その他」rows and the allocator-created
- * residuals merge under one rule. */
+ * residuals merge under one rule. TASK-162 §1-8 (review 4): the SERIES KEY
+ * rides the segment end to end — the transition/press identifier the
+ * consumers read (a same-named category, a colour clash: no label/colour
+ * reverse lookup). key=null + rest=true = the「ほか」residual, key=null
+ * without rest = 未分類, any other key = that series. */
 export interface StackedSegment {
   label: string
   value: number
   color: string
+  /** the segment's series key as the API returned it (null = 未分類 / the
+   * residual); folds into the rest lose theirs (the value/count aggregate
+   * preserves the identity) */
+  key?: string | number | null
   /** the residual fold-target flag (the API's null-key rows and the
    * allocator-created residuals carry it) */
   rest?: boolean
@@ -140,15 +148,71 @@ export function stackedOf(res: StackableTrendResult): StackedBar[] {
         restValue += v
         continue
       }
-      kept.push({ label: s.label, value: v, color: seriesColor(s.key, axis) })
+      kept.push({ label: s.label, value: v, color: seriesColor(s.key, axis), key: s.key })
     }
     return {
       key: b,
       title: b,
       total,
-      segments: [...kept, ...(restValue > 0 ? [{ label: 'ほか', value: restValue, color: SERIES_REST, rest: true }] : [])],
+      segments: [...kept, ...(restValue > 0 ? [{ label: 'ほか', value: restValue, color: SERIES_REST, key: null, rest: true }] : [])],
     }
   })
+}
+
+/** The analysis-row shape stackedOfRows reads (the getAnalysis rows carry the
+ * category key + label + amount; StatsRow is the web-side twin). */
+export interface StackableRow {
+  keys: (string | number | null)[]
+  labels: string[]
+  value: number
+}
+
+/** The top-5 series +「ほか」assembly off the ANALYSIS rows (TASK-162 §1-2/
+ * §1-6, review 5/6 — the Home breakdown's ONE bar): rows arrive amount-desc
+ * (the caller's sort); the kept FIVE series carry their keys, every row the
+ * five did not keep merges into the residual —
+ * - rest.value = `total` − the kept series' sum (closing against the TOTAL,
+ *   so rows the limit-50 fetch never returned still land in the residual —
+ *   never the returned tail's own sum)
+ * - rest.count = the number of merged CATEGORIES (the tail rows + every
+ *   folded upper series + `truncated` — the count of rows the limit-50
+ *   fetch never returned; a value-0 row joins nothing — the zero-omission
+ *   contract)
+ * A sub-5%-share row among the kept candidates folds into the residual too
+ * and the next row promotes into the five (design §1-6(4)). The dimension
+ * folds (allocateStack rules B/C) happen AFTER this helper — the drawing
+ * side adds them onto the displayed count (BreakdownBar's rest title). */
+export function stackedOfRows(
+  rows: StackableRow[],
+  total: number,
+  truncated = 0,
+): { segments: StackedSegment[]; rest: { value: number; count: number } } {
+  const segments: StackedSegment[] = []
+  let restCount = truncated
+  for (const r of rows) {
+    const v = r.value
+    // value-0 rows draw no segment and join no count (the zero-omission
+    // contract the trend assembly shares)
+    if (v <= 0) continue
+    if (segments.length < 5) {
+      // a sub-5% share of the TOTAL folds into the residual (per row) and
+      // the next row promotes into the five
+      if (total > 0 && v / total < SHARE_FOLD) {
+        restCount += 1
+        continue
+      }
+      segments.push({ label: r.labels[0] ?? '', value: v, color: seriesColor(r.keys[0] ?? null, 'category'), key: r.keys[0] ?? null })
+      continue
+    }
+    // past the kept five: the tail merges into the residual wholesale
+    restCount += 1
+  }
+  // the residual's VALUE closes against the TOTAL — the rows the limit-50
+  // fetch never returned included (never the returned tail's own sum); the
+  // folded values above are subsumed in it. max(0, …) keeps a rows-over-total
+  // fixture from going negative
+  const kept = segments.reduce((a, s) => a + s.value, 0)
+  return { segments, rest: { value: Math.max(total - kept, 0), count: restCount } }
 }
 
 /** the rest segment's identity: the fold target every rule merges into —
@@ -184,10 +248,19 @@ function foldIntoRest(work: StackedSegment[], from: StackedSegment, restLabel: s
  * (dropping the residual to stretch the first series would paint amounts the
  * data never had; a series that cannot clear the minimum stays fill-only at
  * its data ratio instead). `rest` supplies the display name a fold-created
- * residual carries (the caller owns the name; the stack default is「ほか」). */
+ * residual carries (the caller owns the name; the stack default is「ほか」).
+ * TASK-162 §2-2 (review 1): `labelMin` lifts rule B's minimum from the
+ * outline-inclusive 3px to "the size a segment needs to house its (at
+ * minimum「○…」) label" — every SERIES that cannot clear it folds into the
+ * rest, so a drawn series segment always carries its label (rule C's
+ * terminal — the first series alone as the single-color bar — runs at the
+ * same standard and its lone series clears labelMin by construction: its
+ * size IS the bar's full length). Unset keeps the 3px rules (the horizontal
+ * bars / widget — backward compatible). */
 export interface AllocateOptions {
   mode?: 'stack' | 'composition'
   rest?: { label: string }
+  labelMin?: number
 }
 
 /** The dimension allocation the stack sites render (TASK-123 §4-5, the
@@ -208,6 +281,10 @@ export interface AllocateOptions {
 export function allocateStack(segments: StackedSegment[], length: number, opts?: AllocateOptions): AllocatedSegment[] {
   const restLabel = opts?.rest?.label ?? 'ほか'
   const composition = opts?.mode === 'composition'
+  // the fold ladder's minimum: the outline-inclusive 3px by default, the
+  // label-housing size when the caller passes one (§2-2 — labelMin >= SEG_MIN
+  // is the premise; the vertical bars pass 26)
+  const min = Math.max(opts?.labelMin ?? SEG_MIN, SEG_MIN)
   const positive = segments.filter((s) => s.value > 0).map((s) => ({ ...s }))
   if (positive.length === 0) return []
 
@@ -235,7 +312,7 @@ export function allocateStack(segments: StackedSegment[], length: number, opts?:
     const sizes = ratioSplit(work, length)
     const entries = work.map((s, i) => ({ seg: s, size: sizes[i]! }))
     const series = entries.filter((e) => !isRest(e.seg))
-    if (series.every((e) => e.size >= SEG_MIN)) break
+    if (series.every((e) => e.size >= min)) break
     if (series.length <= 1) {
       if (composition) break
       // rule C terminal: even one series + the rest cannot clear the

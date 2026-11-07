@@ -22,9 +22,9 @@ const from = ref(period.from)
 const to = ref(period.to)
 
 function apply(): void {
-  if (!from.value || !to.value || from.value > to.value) return
-  period.from = from.value
-  period.to = to.value
+  // TASK-164 §2-2-1: the form commits through the user API — a direct
+  // from/to write is invisible to the write-back's push/replace flag
+  period.setRange(from.value, to.value)
 }
 // The button rides both paths: its own click (jsdom never synthesizes the
 // form submission from a button click) and the form's submit event (the
@@ -48,7 +48,7 @@ function apply(): void {
         role="tab"
         :aria-selected="period.mode === m.id"
         :data-test="`mode-${m.id}`"
-        @click="period.mode = m.id"
+        @click="period.setMode(m.id)"
       >
         {{ m.label }}
       </button>
