@@ -3,27 +3,33 @@
 // pane, so a committed amount renders as the SAME element's value update —
 // this composable eases the displayed number over ~300 rAF frames
 // (tabular-nums keeps the digits column-steady, so the roll reads as a
-// counter, never a layout shift). The FIRST change off the source's initial
-// value is an appearance, not a change (the pane's own appear fade carries
-// it) and lands at once; every later change tweens — a collapse to (or a
-// rise from) 0 included, mid-tween interruptions re-target from the DISPLAYED
-// value so a superseded amount can never come back. A change that bumps the
-// pane's committed key is a content swap (that fade carries it) and lands at
-// once; a reduced-motion preference settles everything instantly.
+// counter, never a layout shift). The APPEARANCE is the mount itself: every
+// caller mounts behind a v-if on the committed data, so `ref(source())`
+// lands the first value at once (a fresh pane never counts up from zero)
+// and the pane's own appear fade carries the entry — the composable holds
+// no appearance special case (review PR#4 #1: a firstChange exemption
+// silenced the pane's FIRST PERIOD move instead, since the watch's first
+// firing is that move, not a load appearance). Every change after mount
+// tweens — the first one included, a collapse to (or a rise from) 0
+// included, mid-tween interruptions re-target from the DISPLAYED value so a
+// superseded amount can never come back. A change that bumps the pane's
+// committed key is a content swap (that fade carries it) and lands at once;
+// a reduced-motion preference settles everything instantly.
 import { onScopeDispose, ref, watch, type Ref } from 'vue'
 import { prefersReducedMotion } from './reducedMotion'
 
 /** `source` — a getter of the committed amount; the returned ref holds the
- *  displayed (possibly mid-tween) integer. The tween cancels itself when the
- *  scope dies (an unmounted row never leaks a frame). `swapKey` — the pane's
- *  committed identity: a change that rides a key bump is a CONTENT swap (the
- *  pane's own fade carries it — the number lands at once); the tween serves
- *  the key-stable changes alone (a period move, §2-2). */
+ *  displayed (possibly mid-tween) integer. The mount-time value (source()
+ *  at setup) IS the appearance — instant, no tween. The tween cancels
+ *  itself when the scope dies (an unmounted row never leaks a frame).
+ *  `swapKey` — the pane's committed identity: a change that rides a key
+ *  bump is a CONTENT swap (the pane's own fade carries it — the number
+ *  lands at once); the tween serves the key-stable changes alone (a period
+ *  move, §2-2). */
 export function useTweenNumber(source: () => number, opts?: { duration?: number; swapKey?: () => string }): Ref<number> {
   const duration = opts?.duration ?? 300
   const shown = ref(source())
   let raf = 0
-  let firstChange = true
   watch(
     [source, opts?.swapKey ?? (() => '')],
     ([to], [from, prevKey]) => {
@@ -32,9 +38,7 @@ export function useTweenNumber(source: () => number, opts?: { duration?: number;
       // resurrecting the superseded amount after the settle (review 高1)
       cancelAnimationFrame(raf)
       const paneSwap = opts?.swapKey !== undefined && opts.swapKey() !== prevKey
-      const appearance = firstChange
-      firstChange = false
-      if (!Number.isFinite(to) || !Number.isFinite(from) || to === from || appearance || paneSwap || prefersReducedMotion()) {
+      if (!Number.isFinite(to) || !Number.isFinite(from) || to === from || paneSwap || prefersReducedMotion()) {
         shown.value = to
         return
       }

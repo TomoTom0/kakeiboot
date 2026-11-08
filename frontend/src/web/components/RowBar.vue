@@ -28,8 +28,13 @@ import type { AllocatedSegment } from '@/shared/lib/stackedBars'
 // tap band to 24px over the 16px visual (background-clip: content-box keeps
 // the painted band the bar's own). The v-for key is the SERIES key now
 // ('rest' for the residual) — a series add/remove/reorder moves as a keyed
-// node and the width transition carries it; segments enter/leave through a
-// 150ms fade and a label-text change crossfades (bb-appear's grammar).
+// node through the row-seg FLIP move transition (the .row-seg-move class —
+// the width transition alone does not animate a position change); segments
+// enter/leave through a 150ms fade and a label-text change crossfades
+// (bb-appear's grammar). PR#4 review 8: a rule-F fill-only segment
+// (outline:false) carries the is-fill class — the pressable button's
+// ::before outline must not draw either (the inline border:none hits the
+// button itself only).
 const props = withDefaults(
   defineProps<{
     /** the bar's drawn width in px (0 until the track measures) */
@@ -51,9 +56,12 @@ const props = withDefaults(
 )
 
 /** the in-bar label's font metrics (TASK-162 §3-1: 11px/600/0.02em inside the
- *  16px --row-bar-h bar — the --bar-label-* tokens' JS twin; the estimate
- *  errs wide so a marginal label hides rather than overflows) */
+ *  16px --row-bar-h bar — the --bar-label-* tokens' JS twin). PR#4 review 6:
+ *  the fit estimate counts the 0.02em letter-spacing as a per-char pitch
+ *  (1.02em — verticalSegLabel's errs-wide twin) so a boundary-fit label
+ *  hides instead of overflowing and clipping its tail */
 const LABEL_FONT = 11
+const LABEL_PITCH = LABEL_FONT * 1.02
 const LABEL_PAD = 8
 
 interface SegView {
@@ -76,11 +84,11 @@ const views = computed<SegView[]>(() =>
         // the FULL name first — a single-code-point name (a 1-char category)
         // fits widths the truncation minimum (1 char + the … tail) never
         // could, and hiding it there was review 低9
-        const est = estimateTextWidth(seg.label, LABEL_FONT)
+        const est = estimateTextWidth(seg.label, LABEL_PITCH)
         if (est <= avail) label = seg.label
         else {
-          const fitted = truncateLabelWidth(seg.label, avail, LABEL_FONT)
-          if (estimateTextWidth(fitted, LABEL_FONT) <= avail) label = fitted
+          const fitted = truncateLabelWidth(seg.label, avail, LABEL_PITCH)
+          if (estimateTextWidth(fitted, LABEL_PITCH) <= avail) label = fitted
         }
       }
     }
@@ -109,7 +117,7 @@ function onSelect(v: SegView): void {
         :is="v.pressable ? 'button' : 'span'"
         v-for="v in views"
         :key="v.key"
-        :class="['row-seg', { 'is-btn': v.pressable }]"
+        :class="['row-seg', { 'is-btn': v.pressable, 'is-fill': v.seg.outline !== true }]"
         :type="v.pressable ? 'button' : undefined"
         :style="{
           width: `${v.seg.size}px`,

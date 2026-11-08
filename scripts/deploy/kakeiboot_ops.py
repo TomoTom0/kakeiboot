@@ -259,6 +259,13 @@ def build_install_units_commands(cfg: DeployConfig, rendered_src: str) -> list[l
     exist on a fresh runtime host, so mkdir -p leads the plan (remote_exec, so
     ssh mode creates it on the host). The timer carries no paths and is copied
     as-is; daemon-reload also goes through remote_exec.
+
+    Path.home() is the OPERATOR's home on this machine, resolved here before
+    any transport handling — with transport="ssh" the same value is reused for
+    the remote side. That silently assumes the ssh alias's login user on the
+    runtime host is the same user as on this machine (the current operation
+    relies on this identity); a differing login user would rsync into a wrong
+    remote path instead of failing.
     """
     unit_dir = f"{Path.home()}/.config/systemd/user"
     return [
@@ -378,10 +385,15 @@ def cmd_install_units(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="units-", dir=tmp_root) as stage:
         staged = Path(stage) / "kakeiboot-backup@.service"
         staged.write_text(rendered, encoding="utf-8")
-        _, rc = run_commands(
-            build_install_units_commands(cfg, str(staged)), dry_run=False, cwd=REPO_ROOT
-        )
+        cmds = build_install_units_commands(cfg, str(staged))
+        executed, rc = run_commands(cmds, dry_run=False, cwd=REPO_ROOT)
     if rc != 0:
+        # Same recovery report as cmd_deploy: install-units is a multi-step
+        # rsync+reload sequence, so a failure must list which steps already
+        # ran (e.g. the service landed but the timer did not).
+        print("steps executed before failure:", file=sys.stderr)
+        for argv in cmds[:executed]:
+            print(f"  - {shlex.join(argv)}", file=sys.stderr)
         return rc
     print(f"units installed to {Path.home()}/.config/systemd/user/ (daemon-reload done)")
     return 0

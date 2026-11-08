@@ -768,6 +768,31 @@ class TestInstallUnitsCli(unittest.TestCase):
         # D-4: the deploy_root value used for rendering stays in the output
         self.assertIn("/custom/root", out.getvalue())
 
+    # [covers:deploy-ops.install-units-plan] (review: failure reporting parity
+    # with cmd_deploy -- install-units is a multi-step rsync+reload sequence,
+    # so a mid-plan failure must report which steps already ran)
+    def test_failure_lists_executed_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = self.make_config(tmp)
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                results = [
+                    subprocess.CompletedProcess(args=[], returncode=0),  # mkdir
+                    subprocess.CompletedProcess(args=[], returncode=0),  # rsync service
+                    subprocess.CompletedProcess(args=[], returncode=23),  # rsync timer fails
+                ]
+                with mock.patch.object(kakeiboot_ops.subprocess, "run", side_effect=results):
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["install-units"])
+        self.assertEqual(rc, 23)
+        err_text = err.getvalue()
+        self.assertIn("steps executed before failure:", err_text)
+        # the two steps that ran before the failure are listed
+        self.assertIn(f"mkdir -p {USER_UNIT_DIR}", err_text)
+        self.assertIn(f"{USER_UNIT_DIR}/kakeiboot-backup@.service", err_text)
+        # the failed timer rsync and the never-reached daemon-reload are not
+        self.assertNotIn("daemon-reload", err_text)
+
 
 # [covers:deploy-ops.units-install-task] mise task units:install wraps install-units
 class TestUnitsInstallTask(unittest.TestCase):

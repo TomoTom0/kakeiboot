@@ -71,10 +71,11 @@ describe('period store week mode (TASK-53 + TASK-146 §1)', () => {
     expect(q.mode).toBe('range')
   })
 
-  it('[covers:web-shell.period-uncapped-step] 月・年も未来へstep可・year の上限は backend 受理上限の 9999 のみ（到達で › 無効）', () => {
+  it('[covers:web-shell.period-uncapped-step] 月・年も未来へstep可・year の上下限は backend 受理上限の 1900..=9999 のみ（到達で ‹ › 無効）', () => {
     const p = usePeriodStore()
     // month: today is 2026-10 — the current month steps forward freely now
     expect(p.canNext).toBe(true)
+    expect(p.canPrev).toBe(true) // month / week have no floor at all
     p.step(1)
     expect(p.month).toBe('2026-11')
     p.step(1)
@@ -83,6 +84,7 @@ describe('period store week mode (TASK-53 + TASK-146 §1)', () => {
     p.mode = 'year'
     p.year = 2026
     expect(p.canNext).toBe(true)
+    expect(p.canPrev).toBe(true)
     p.step(1)
     expect(p.year).toBe(2027)
     p.year = 9998
@@ -94,10 +96,22 @@ describe('period store week mode (TASK-53 + TASK-146 §1)', () => {
     p.step(1)
     expect(p.year).toBe(9999)
     // the lower end of the same acceptance: 1900 is the floor (a press past
-    // it keeps the year)
+    // it keeps the year) — and ‹ carries the same disabled state as ›
+    // (PR#4 #2: the clamp used to no-op silently with ‹ left looking alive)
     p.year = 1900
+    expect(p.canPrev).toBe(false)
+    expect(p.canNext).toBe(true)
     p.step(-1)
     expect(p.year).toBe(1900)
+    p.year = 1901
+    expect(p.canPrev).toBe(true)
+    p.step(-1)
+    expect(p.year).toBe(1900)
+    // month / week keep both chevrons alive (no 1900-side floor)
+    p.mode = 'month'
+    expect(p.canPrev).toBe(true)
+    p.mode = 'week'
+    expect(p.canPrev).toBe(true)
   })
 })
 

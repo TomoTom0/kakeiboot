@@ -20,6 +20,7 @@ import {
   type ReceiptSummary,
 } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
+import ContentSwap from '@/web/components/ContentSwap.vue'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
 
 let api: DataApi
@@ -436,6 +437,27 @@ describe('search page: URL restore', () => {
     await wrapper.find('[data-test="search-input"]').trigger('keydown', { key: 'Enter' })
     await settle()
     expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  // PR#4 #5: the scope toggle's ONLY query change is from/to — exactly the
+  // keys committedKey drops — so the scope rides the key explicitly and a
+  // period⇄all toggle lands as a content swap (the pane's fade), matching
+  // the template comment "a term / tab / scope / label change is a swap".
+  it('[covers:web-common.content-swap] scope切替（period⇄all）はcommittedKeyがbumpしpaneの内容swapになる（期間成分の除外だけで成立しない）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳&scope=period&month=2026-10')
+    await settle()
+    /** the committed key's scope field (l | tab | SCOPE | queryJSON) */
+    const scopePart = () => String(wrapper.findComponent(ContentSwap).props('swapKey')).split('|')[2]
+    expect(scopePart()).toBe('period')
+    // period → all: the key bumps even though from/to alone changed
+    await wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(scopePart()).toBe('all')
+    // all → period bumps the key back the same way
+    await wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(scopePart()).toBe('period')
   })
 })
 

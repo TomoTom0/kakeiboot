@@ -15,7 +15,9 @@ import { prefersReducedMotion } from '../composables/reducedMotion'
 // slot carries the label's direction micro move (the wrapper below animates
 // toward the travel direction on a range change — the direction derives
 // from the move itself, straight off the store, never through the deleted
-// periodMove machinery).
+// periodMove machinery). The chevron pair's disabled states read the
+// store's canPrev / canNext symmetric pair (review PR#4 #2: the year-mode
+// floor used to clamp step() to a silent no-op with ‹ left looking alive).
 const period = usePeriodStore()
 
 const STEP_WORDS: Record<'month' | 'week' | 'year', { prev: string; next: string }> = {
@@ -68,6 +70,7 @@ watch(
       :aria-label="words.prev"
       :title="words.prev"
       data-test="period-step-prev"
+      :disabled="!period.canPrev"
       @click="period.step(-1)"
     >
       <AppIcon name="chevron-left" />

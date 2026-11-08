@@ -457,9 +457,10 @@ const trackStyle = computed(() => ({ gridTemplateColumns: `repeat(${bars.value.l
                  1px outline (border-box inner consumption; rule F drops it
                  inline) and the top segment's cap radius. TASK-162 §2: every
                  segment houses its UPRIGHT VERTICAL series label (the labelMin
-                 fold guarantees the room; 例外A/B and the unmeasured
-                 environments keep the colour-only fallback) — the title keeps
-                 the full information either way -->
+                 fold guarantees the room; 例外A/B/C — C is PR#4 review 1's
+                 lone sub-labelMin survivor at its data ratio — and the
+                 unmeasured environments keep the colour-only fallback) — the
+                 title keeps the full information either way -->
             <span
               v-if="b.segments.length > 0"
               class="bar-stack"

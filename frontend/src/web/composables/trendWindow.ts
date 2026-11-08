@@ -428,9 +428,14 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
         return
       }
       if (labelsChanged) {
-        // E4: the window (and the cache) stay; the refetch re-colours
+        // E4: the window (and the cache) stay; the refetch re-colours. The
+        // move memory resets too (review PR#4 #4): a FAILED move left
+        // lastMove standing without a commit, and this path's all-zero
+        // commit would then floor a direction nothing paged into — a
+        // non-move commit carries no move history
         slide.value = null
         slideRequest = null
+        lastMove = null
         void run()
         return
       }
@@ -518,6 +523,10 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
     resultCache.clear()
     prefetchIssued.clear()
     lastDone = null
+    // same move-memory reset as E4 (review PR#4 #4): a refresh commit is
+    // not a window move — a failed move's leftover lastMove must not floor
+    // a chevron off the re-fetched all-zero result
+    lastMove = null
     void run()
   }
   /** the trim (§3-3): drop the concatenation — the display falls back to the

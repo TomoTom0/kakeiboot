@@ -1116,9 +1116,12 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    (sticky hover), which would keep clobbering the current wash above.
    A desktop-only affordance in the same column-wash grammar as the row
    hovers and .daily-col; sourced AFTER .bar-col.current so the
-   equal-specificity overlay resolves to the hover token */
+   equal-specificity overlay resolves to the hover token. PR#4 review 7:
+   .daily-col's own wash rides the SAME guard (it had sat outside it — a
+   tap on the receipts daily column left the wash stuck) */
 @media (hover: hover) {
-  .bar-col:hover { background: var(--bb-hover); }
+  .bar-col:hover,
+  .daily-col:hover { background: var(--bb-hover); }
 }
 /* the trend card (TASK-100): a 2-column grid — the y-axis gutter and the
    plot — over the year row and the label row. Dense month windows (> 6 bars)
@@ -1792,19 +1795,33 @@ button.row-seg::before {
   border-radius: inherit;
   pointer-events: none;
 }
+/* PR#4 review 8: rule F's fill-only contract holds on the pressable side
+   too — a sub-minimum segment (outline:false, the allocator's is-fill
+   class) draws NO ::before outline: the inline border:none hits the button
+   itself only, and the ::before would repaint the 1px perimeter the
+   allocator dropped */
+button.row-seg.is-fill::before { border: none; }
 button.row-seg:focus-visible {
   outline: 2px solid var(--bb-accent);
   outline-offset: -2px;
 }
 /* TASK-162 §1-10 (review 9): the one-bar's state-change vocabulary — a
-   segment enter/leave fades (150ms, the bb-appear grade) and a label-text
-   change crossfades; the width transition above carries the moves (the
-   stable series keys make the moves keyed) */
+   segment enter/leave fades (150ms, the bb-appear grade), a label-text
+   change crossfades, and a keyed move (a series add/remove/reorder — the
+   stable series keys) rides the FLIP move class below. PR#4 review 3: the
+   width transition does NOT animate a position change — Vue's FLIP needs
+   the -move class to carry a transform transition, so the keyed fold/
+   remove jumped instead of sliding */
 .row-seg-enter-active,
 .row-seg-leave-active { transition: opacity 150ms; }
 .row-seg-enter-from,
 .row-seg-leave-to { opacity: 0; }
 .row-seg-leave-active { position: absolute; }
+/* the FLIP move: transform carries the position, and the width ride stays
+   declared too — the transition shorthand would otherwise clobber the
+   .row-seg width transition for the move's duration (a fold moves AND
+   resizes the survivors at once) */
+.row-seg-move { transition: width 220ms cubic-bezier(.2, .7, .2, 1), transform 220ms cubic-bezier(.2, .7, .2, 1); }
 .row-seg-label-enter-active,
 .row-seg-label-leave-active { transition: opacity 150ms; }
 .row-seg-label-enter-from,
@@ -1869,6 +1886,12 @@ button.row-seg:focus-visible {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* PR#4 review 2: the ratio-1 (right-end) tick's value grows INTO the track
+   — the tick sits at left:100% of the track and a left-anchored nowrap
+   value would run past the track's right edge (the .axis-labels
+   span:last-child / dense .bar-val end-flush twin: pin the END side so the
+   text grows inward; axisTicksOf always ends its ladder at ratio 1) */
+.breakdown-tick:last-child .breakdown-tick-val { left: auto; right: 0; }
 /* the % share column drops on the absolute-reading surfaces (the header
    breakdown): the five-track grid loses its third track */
 /* TASK-167: the no-share surfaces drop the sub figure through the component
@@ -1876,21 +1899,9 @@ button.row-seg:focus-visible {
 
 .detail-kpi { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; margin: 0 0 0.5rem; }
 .detail-kpi .amount { font-size: 1.5rem; }
-.sub-rows { list-style: none; margin: 0; padding: 0; }
-.sub-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.45rem 0.5rem;
-  margin: 0 -0.5rem;
-  border-radius: 8px;
-  color: inherit;
-  text-decoration: none;
-}
-.sub-row > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* REVIEW-15 中2: the a.sub-row link pair (the transition + the media-bare
-   row wash) is gone — no template renders an anchor .sub-row anymore */
+/* PR#4 review 4: the .sub-rows/.sub-row rules are gone — no template
+   renders them anymore (dead CSS since the shared DataRow two-line grammar
+   took the sub rows over) */
 
 /* TASK-131 (design §3): the padding: 0 reset is gone — at the same
    specificity it beat .bar-col's TASK-100 headroom (1rem top padding) on
@@ -1934,7 +1945,8 @@ button.row-seg:focus-visible {
    the in-segment labels never hang outside their segments */
 .daily-bars { display: grid; align-items: end; gap: 2px; height: 110px; }
 .daily-col { display: flex; align-items: flex-end; justify-content: center; height: 100%; border-radius: 3px; }
-.daily-col:hover { background: var(--bb-hover); }
+/* the .daily-col hover wash lives in the (hover: hover) guard up with
+   .bar-col:hover (PR#4 review 7 — a media-bare wash sticks after a tap) */
 /* TASK-116 (design §3-2): the daily/weekly/monthly bar became a stacked
    container — the same segment grammar as the trend's .bar-stack (bottom =
    first series under column-reverse), sized for this compact card: no y
@@ -2466,12 +2478,19 @@ button.row-seg:focus-visible {
    shared vocabulary the appended rows (Search / the receipts list / the
    feed's tail fetch) and the manage screens' inline state changes (the row
    editor, the add row, the archived rows, the fold children) all ride — an
-   opacity fade in the bb-fade-in family, nothing fancier. The fade timing
-   lives on the -active pair once; the from/to pair only sets the origin */
+   opacity fade in the bb-fade-in family plus the FLIP move member below,
+   nothing fancier. The fade timing lives on the -active pair once; the
+   from/to pair only sets the origin */
 .bb-appear-enter-active,
 .bb-appear-leave-active { transition: opacity 0.16s ease; }
 .bb-appear-enter-from,
 .bb-appear-leave-to { opacity: 0; }
+/* the move member (TASK-171, PR#4 review): a departing row keeps its layout
+   box through the leave fade, so the survivors' close-up (the manage
+   screens' archive / merge, the AppearList reorder) eases through the FLIP
+   transform at the fade's own grade instead of teleporting — one shared
+   rule, no per-page move grammar */
+.bb-appear-move { transition: transform 0.16s ease; }
 
 /* messages (errors / notices) fade in when inserted (the copy confirmation
    moved to the button's icon swap, TASK-48) */
@@ -2602,7 +2621,8 @@ button.row-seg:focus-visible {
   .popover-scrim,
   .dialog-backdrop { transition: none; }
   .bb-appear-enter-active,
-  .bb-appear-leave-active { transition: none; }
+  .bb-appear-leave-active,
+  .bb-appear-move { transition: none; }
   .zone { transition: none; }
   /* TASK-161 §2-2/§7: the period-move vocabulary's new members are off as
      well — the row-bar width transition and the label's micro move (the JS

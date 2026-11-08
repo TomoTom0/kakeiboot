@@ -31,9 +31,10 @@ pub struct TestHooks {
     /// `reauth_finish`: awaited at the same structural point as the login
     /// hook — after the ceremony consumption and the assertion verification,
     /// immediately before `BEGIN IMMEDIATE` (TASK-154 step-up sign-counter
-    /// freshness). The field is not awaited anywhere until the TASK-154
-    /// implementation wires `reauth_finish` to it; installing it is a no-op
-    /// until then, so tests park-or-run linearly either way.
+    /// freshness). `reauth_finish` awaits it right ahead of the write
+    /// transaction; the passkey read and the counter re-check against the
+    /// latest stored value run inside it, so a test parked here sits just
+    /// before that re-check.
     #[cfg(feature = "test-hooks")]
     pub reauth_before_write_lock: Option<Hook>,
 }

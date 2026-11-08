@@ -13,10 +13,12 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'smol-toml'
+import type { ViteDevServer } from 'vite'
 import {
   loadUsageTopics,
   parseUsageFrontmatter,
   transformUsageMarkdown,
+  usageDocsPlugin,
   type UsagePart,
 } from '@/build/usage-docs'
 
@@ -88,6 +90,30 @@ describe('usage docs frontmatter / topic index', () => {
   it('[covers:usage-docs.plugin-registered] vite.config.ts の plugins が取り込み plugin を登録する', () => {
     const cfg = readFileSync(resolve(process.cwd(), 'vite.config.ts'), 'utf8')
     expect(cfg).toContain('usageDocsPlugin()')
+  })
+
+  it('[covers:usage-docs.frontmatter-order-nonempty] order の空値（未記入・空白）は order 0 として受理されず例外', () => {
+    // PR4 review: `Number('') === 0` is an integer, so an empty `order:` used
+    // to slip through Number.isInteger as a legitimate order 0 — the empty
+    // value itself must be rejected before the integer check.
+    const withFm = (fm: string): string => `---\n${fm}\n---\n\n# t\n`
+    expect(() => parseUsageFrontmatter(withFm('title: x\nsummary: y\norder:'))).toThrow()
+    expect(() => parseUsageFrontmatter(withFm('title: x\nsummary: y\norder: '))).toThrow()
+    expect(() => parseUsageFrontmatter(withFm('title: x\nsummary: y\norder:  \t'))).toThrow()
+    // an explicit 0 stays a valid integer (only the empty value is rejected)
+    expect(parseUsageFrontmatter(withFm('title: x\nsummary: y\norder: 0')).order).toBe(0)
+  })
+
+  it('[covers:usage-docs.frontmatter-public-not-accepted] 未使用の public key は unknown key として失敗する（silent no-op にしない）', () => {
+    // PR4 review: `public` appears in neither the output type nor the emitted
+    // module, so accepting it was a silent no-op — contradicting the "a typo
+    // must fail" design of the unknown-key check. Until it gains an effect it
+    // fails like any other unknown key (docs/usage/README.md lists exactly
+    // title/summary/order).
+    const withFm = (fm: string): string => `---\n${fm}\n---\n\n# t\n`
+    expect(() =>
+      parseUsageFrontmatter(withFm('title: x\nsummary: y\norder: 1\npublic: true')),
+    ).toThrow(/unknown key "public"/)
   })
 })
 
@@ -173,6 +199,26 @@ describe('transformUsageMarkdown', () => {
       transformUsageMarkdown('本文の途中に ![alt](./x.png "cap") を貼る例'),
     ).toThrow()
   })
+
+  it('[covers:usage-docs.image-top-level-only] list item 内に置いた image line は top level 規約違反として変換を失敗させる', () => {
+    // PR4 review: the image line passes IMAGE_LINE_RE after trim(), so inside
+    // a list item it becomes a placeholder wrapped in <li><p>…</p></li>; the
+    // old partial-match IMAGE_PARAGRAPH_RE split it out and orphaned the
+    // <li>/<\/li> tags across html parts with no error. An image is only
+    // allowed as a top-level standalone line.
+    // an image line indented as a list item's own paragraph (passes
+    // IMAGE_LINE_RE after trim()): placeholder renders as <li><p>…</p></li>
+    expect(() =>
+      transformUsageMarkdown(['- 項目', '', '  ![alt](./x.png "cap")', ''].join('\n')),
+    ).toThrow(/top level/)
+    // tight list continuation: placeholder renders bare inside <li> (no <p>)
+    expect(() => transformUsageMarkdown('- 説明\n  ![alt](./x.png "cap")\n')).toThrow(
+      /top level/,
+    )
+    // a plain top-level standalone image line keeps extracting normally
+    const doc = transformUsageMarkdown('前段\n\n![alt](./x.png "cap")\n\n後段')
+    expect(doc.parts.map((p) => p.kind)).toEqual(['html', 'image', 'html'])
+  })
 })
 
 describe('usage docs reconciliation (design §2-5)', () => {
@@ -236,5 +282,124 @@ describe('usage docs reconciliation (design §2-5)', () => {
     const send = readFileSync(resolve(docsDir, 'usage_send-receipt.md'), 'utf8')
     expect(send).toContain('Claude')
     expect(send).toContain('記録に写真は付きません')
+  })
+})
+
+// Structural mocks of the plugin hook contexts (PR4 review regressions): the
+// two hooks under test touch only addWatchFile (load) resp. watcher +
+// moduleGraph (configureServer). The type guards narrow the mocks to the hook
+// parameter types without casts.
+interface AddWatchCollector {
+  addWatchFile(file: string): void
+}
+
+type LoadHookWithCollectorThis = (this: AddWatchCollector, id: string) => unknown
+
+function toLoadHook(h: unknown): h is LoadHookWithCollectorThis {
+  return typeof h === 'function'
+}
+
+interface DevServerProbe {
+  watcher: {
+    add(path: string): void
+    on(event: string, listener: (file: string) => void): void
+  }
+  moduleGraph: {
+    getModuleById(id: string): { id: string | null } | null | undefined
+    invalidateModule(mod: { id: string | null }): void
+  }
+}
+
+function toDevServer(s: DevServerProbe): s is ViteDevServer {
+  return typeof s.watcher.add === 'function' && typeof s.moduleGraph.invalidateModule === 'function'
+}
+
+// Vite plugin hooks are invoked with a minimal logger context as `this`.
+interface HookContextProbe {
+  error(e: unknown): never
+  warn(warning: unknown): void
+  info(msg: unknown): void
+  debug(msg: unknown): void
+}
+
+function toHookContext(
+  c: HookContextProbe,
+): c is import('vite').MinimalPluginContextWithoutEnvironment {
+  return typeof c.error === 'function' && typeof c.warn === 'function'
+}
+
+const RESOLVED_VIRTUAL_ID = '\0virtual:usage-docs'
+
+describe('usageDocsPlugin watch / invalidation', () => {
+  it('[covers:usage-docs.dev-watcher-add-event] dev watcher は add・change・unlink の全てで virtual module を invalidate する', () => {
+    // PR4 review: watching only change/unlink missed new usage_*.md files
+    // (including the added side of a rename) — a new topic never showed up on
+    // the dev pages without a restart.
+    const plugin = usageDocsPlugin()
+    const handlers: Record<string, ((file: string) => void)[]> = {}
+    const addedDirs: string[] = []
+    let invalidated = 0
+    const server: DevServerProbe = {
+      watcher: {
+        add: (path) => {
+          addedDirs.push(path)
+        },
+        on: (event, listener) => {
+          handlers[event] = [...(handlers[event] ?? []), listener]
+        },
+      },
+      moduleGraph: {
+        getModuleById: () => ({ id: RESOLVED_VIRTUAL_ID }),
+        invalidateModule: () => {
+          invalidated += 1
+        },
+      },
+    }
+    expect(plugin.configureServer).toBeTypeOf('function')
+    if (!toDevServer(server)) throw new Error('unreachable: structural probe')
+    if (typeof plugin.configureServer !== 'function') throw new Error('unreachable')
+    const ctx: HookContextProbe = {
+      error: (e) => {
+        throw e
+      },
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    }
+    if (!toHookContext(ctx)) throw new Error('unreachable: structural probe')
+    plugin.configureServer.call(ctx, server)
+    expect(addedDirs).toEqual([docsDir])
+    for (const event of ['add', 'change', 'unlink']) {
+      expect(handlers[event], event).toHaveLength(1)
+      handlers[event]?.[0]?.(`${docsDir}/usage_connect.md`)
+    }
+    expect(invalidated).toBe(3)
+    // a change outside docs/usage must not invalidate
+    handlers['change']?.[0]?.(`${root}/frontend/src/web/router.ts`)
+    expect(invalidated).toBe(3)
+  })
+
+  it('[covers:usage-docs.plugin-watches-markdown-source] load は正本の usage_*.md 本体を watch に登録する', () => {
+    // PR4 review: load() registered only the image src files, so with
+    // `vite build --watch` (no configureServer watcher) a Markdown edit was
+    // not part of the rebuild set.
+    const plugin = usageDocsPlugin()
+    const watched: string[] = []
+    const collector: AddWatchCollector = {
+      addWatchFile: (file) => {
+        watched.push(file)
+      },
+    }
+    expect(plugin.load).toBeTypeOf('function')
+    if (!toLoadHook(plugin.load)) throw new Error('unreachable: load must be a function hook')
+    const code = plugin.load.call(collector, RESOLVED_VIRTUAL_ID)
+    expect(code).toBeTypeOf('string')
+    expect(String(code)).toContain('export const usageTopics')
+    const mdFiles = readdirSync(docsDir).filter((f) => /^usage_[a-z0-9-]+\.md$/.test(f))
+    for (const f of mdFiles) {
+      expect(watched, f).toContain(resolve(docsDir, f))
+    }
+    // the image files stay watched as before
+    expect(watched.some((w) => !w.endsWith('.md'))).toBe(true)
   })
 })

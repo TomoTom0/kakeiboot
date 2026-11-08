@@ -173,13 +173,23 @@ describe('useTweenNumber (composable, TASK-161 §2-2)', () => {
     }
   }
 
-  it('[covers:web-common.period-move-voice] 出現（最初の変更）は即時確定・以後の変更はtween（0遷移もtween）', async () => {
+  it('[covers:web-common.period-move-voice] 出現はmount時初期値のみ即時・mount後の最初の変更もtween（0遷移もtween）', async () => {
     const src = ref(0)
     const shown = useTweenNumber(() => src.value)
+    // the mount-time value IS the appearance — instant, no frames (every
+    // caller mounts behind a v-if on the committed data, PR#4 #1)
     expect(shown.value).toBe(0)
-    // the first change off the initial value is an appearance: instant
+    // the FIRST change after mount tweens too: the pane's v-if mount
+    // already carried the appearance, so the watch's first firing is the
+    // pane's first PERIOD move — an instant landing here would leave that
+    // move with no motion at all (the swap key holds no range either)
     src.value = 948
     await nextTick()
+    expect(shown.value).toBe(0) // mid-tween, no instant landing
+    frames(1)
+    expect(shown.value).toBeGreaterThan(0)
+    expect(shown.value).toBeLessThan(948)
+    frames(10)
     expect(shown.value).toBe(948)
     // a later change tweens — a collapse to 0 included (a period move into
     // an empty month counts down on the live pane, review 中6): the first
@@ -199,12 +209,10 @@ describe('useTweenNumber (composable, TASK-161 §2-2)', () => {
   })
 
   it('[covers:web-common.period-move-voice] tween中の0への変更は旧frameを殺す（確定後も旧金額が復活しない）・swapKey bumpも即時', async () => {
-    const src = ref(0)
+    const src = ref(948)
     const key = ref('a')
     const shown = useTweenNumber(() => src.value, { swapKey: () => key.value })
-    src.value = 948
-    await nextTick()
-    expect(shown.value).toBe(948)
+    expect(shown.value).toBe(948) // the mount-time appearance is instant
     // roll toward 2000, then interrupt with a collapse to 0 mid-tween: the
     // displayed value retargets DOWN immediately (the old target's frames
     // die) and settles at 0 — never bouncing back up to 2000
@@ -233,11 +241,9 @@ describe('useTweenNumber (composable, TASK-161 §2-2)', () => {
   })
 
   it('[covers:web-common.period-move-voice] tween中の再targetは現在の表示値から補間する（旧source起点に戻らない）', async () => {
-    const src = ref(0)
+    const src = ref(948)
     const shown = useTweenNumber(() => src.value)
-    src.value = 948
-    await nextTick()
-    expect(shown.value).toBe(948)
+    expect(shown.value).toBe(948) // the mount-time appearance is instant
     src.value = 2000
     await nextTick()
     frames(1) // clock 100/300: eased = 1-(2/3)^3 = 19/27 → ~1610

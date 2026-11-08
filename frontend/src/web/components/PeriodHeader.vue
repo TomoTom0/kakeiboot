@@ -26,6 +26,10 @@ const props = defineProps<{
    *  pane's fade is the motion; the tween serves the period moves alone */
   swapKey?: string
 }>()
+// The header mounts behind the caller's v-if on the committed totals — the
+// initial total is an APPEARANCE the mount itself lands at once, so the
+// tween's first firing is the pane's first PERIOD move and tweens from the
+// very first one (review PR#4 #1; no firstChange exemption in the composable)
 const totalView = useTweenNumber(() => props.total, { swapKey: () => props.swapKey ?? '' })
 </script>
 

@@ -317,6 +317,25 @@ describe('usage topics on the dynamic route (TASK-141)', () => {
     })
   })
 
+  // TASK-171 (PR#4 review): a hand-typed unknown slug is not a bare shell —
+  // the way-back link keeps company with the empty note in the house empty
+  // vocabulary (データ名 + はありません。), and no document body renders
+  it('[covers:web-usage.unknown-topic-empty] 未知slug（手打ちURL）は「使い方へ戻る」+ 空状態「このトピックはありません。」（本文なし）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/usage/nonexistent')
+    const card = wrapper.find('section.card')
+    expect(card.exists()).toBe(true)
+    const empty = card.find('[data-test="empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toBe('このトピックはありません。')
+    // the card holds the way-back link alone — UsageDocument renders nothing
+    // for a slug outside the corpus
+    const links = card.findAll('a')
+    expect(links).toHaveLength(1)
+    expect(links[0]!.attributes('href')).toBe('/usage')
+    expect(links[0]!.text()).toBe('使い方へ戻る')
+  })
+
   it('[covers:usage-docs.links-resolve-to-routes] 本文のアプリ内リンクは router 定義に解決でき、トピック間相対リンクは実在トピックへ向かう', () => {
     const topics = readDocTopics()
     expect(topics.length).toBeGreaterThan(0)

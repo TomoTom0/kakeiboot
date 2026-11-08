@@ -251,12 +251,12 @@ function foldIntoRest(work: StackedSegment[], from: StackedSegment, restLabel: s
  * residual carries (the caller owns the name; the stack default is「ほか」).
  * TASK-162 §2-2 (review 1): `labelMin` lifts rule B's minimum from the
  * outline-inclusive 3px to "the size a segment needs to house its (at
- * minimum「○…」) label" — every SERIES that cannot clear it folds into the
- * rest, so a drawn series segment always carries its label (rule C's
- * terminal — the first series alone as the single-color bar — runs at the
- * same standard and its lone series clears labelMin by construction: its
- * size IS the bar's full length). Unset keeps the 3px rules (the horizontal
- * bars / widget — backward compatible). */
+ * minimum「○…」) label" — a series that cannot clear it folds into the rest,
+ * so a drawn series segment carries its label (the LAST surviving series
+ * excepts: it keeps its data ratio — rule B's stop below — and its label
+ * degrades through the caller's fit logic, never a stretch or a drop).
+ * Unset keeps the 3px rules (the horizontal bars / widget — backward
+ * compatible). */
 export interface AllocateOptions {
   mode?: 'stack' | 'composition'
   rest?: { label: string }
@@ -272,12 +272,23 @@ export interface AllocateOptions {
  *   separations are gone; the outline consumes inside each size)
  * - rule B: an allocated size below the outline-inclusive minimum 3 folds
  *   into the rest segment smallest-first (value order) and the rest re-splits
- * - rule C (stack mode only): while the minimum x N still exceeds the
- *   length, fold the smallest series; if even one series + the rest cannot
- *   fit, draw the FIRST series alone as the single-color bar
+ * - rule C (stack mode only): the BAR-LENGTH budget — while the minimum x N
+ *   (N = the kept segments, the rest included) still exceeds the length,
+ *   fold the smallest series; if even one series + the rest cannot fit,
+ *   draw the FIRST series alone as the single-color bar (PR#4 review 1: the
+ *   terminal never fires on a series' data-ratio size — a rest-majority bar
+ *   keeps every segment at its data ratio, the composition mode's "never
+ *   paint amounts the data never had")
  * - rule F: a bar whose own outer size is under 3 keeps the data ratio and
  *   drops the outline (fill only — the border would leave the fill under
  *   1px), applied BEFORE the folding ladder */
+/** the fold ladder's pick: the smallest-value series (the value order IS the
+ * size order — the ratio split is monotone — so rule B's smallest
+ * sub-minimum series and rule C's smallest series are the same pick) */
+function smallestSeriesOf(series: { seg: StackedSegment }[]): StackedSegment {
+  return series.reduce((a, b) => (b.seg.value < a.seg.value ? b : a)).seg
+}
+
 export function allocateStack(segments: StackedSegment[], length: number, opts?: AllocateOptions): AllocatedSegment[] {
   const restLabel = opts?.rest?.label ?? 'ほか'
   const composition = opts?.mode === 'composition'
@@ -297,37 +308,51 @@ export function allocateStack(segments: StackedSegment[], length: number, opts?:
     return positive.map((s) => ({ ...s, size: sum > 0 ? (s.value / sum) * length : 0, outline: false }))
   }
 
-  // rules B + C as one ladder: while a SERIES' drawn size sits under the
-  // minimum, fold the smallest series into the rest and re-split (the value
-  // order IS the size order — the ratio split is monotone — so the smallest
-  // sub-minimum series of rule B and the smallest series of rule C are the
-  // same pick). A sub-minimum rest alone never triggers a fold: the residual
-  // keeps its data ratio even when it renders under the minimum (the widget's
-  // 24%-scale「ほか」segment pins this), and the last surviving series never
-  // folds itself away — the stack terminal below owns it (the composition
-  // mode simply stops: no rule C, the lone series keeps its data ratio and
-  // drops its own outline below the minimum instead).
+  // rule C (stack mode only) runs on the BAR-LENGTH budget: the bar must
+  // house every kept segment at the minimum, so while minimum x N (N = the
+  // kept segments, the rest included) exceeds the length the smallest series
+  // folds — and when even the last series + the rest cannot fit, the FIRST
+  // series alone becomes the single-color bar (the top-ranked series is the
+  // data's face; its size is the bar's full length). The bar length — never
+  // a series' data-ratio size — decides the terminal (PR#4 review 1): the
+  // old ratio-basis terminal collapsed a rest-majority bar onto the first
+  // series' color, erasing the rest's money from the drawing and reading the
+  // lone series as 100% at the pct consumers.
+  //
+  // rule B then folds a series whose data-ratio size sits under the minimum,
+  // smallest first — but the LAST surviving series never folds itself away:
+  // it keeps its data ratio (fill-only under SEG_MIN at the map below),
+  // because stretching it to the full length or folding it into the rest
+  // would paint amounts the data never had — the same stop the composition
+  // mode makes (its lone series keeps its data ratio too). A sub-minimum
+  // rest alone never triggers a fold either: the residual keeps its data
+  // ratio even when it renders under the minimum (the widget's 24%-scale
+  // 「ほか」segment pins this).
   let work = positive
   for (;;) {
     const sizes = ratioSplit(work, length)
     const entries = work.map((s, i) => ({ seg: s, size: sizes[i]! }))
     const series = entries.filter((e) => !isRest(e.seg))
-    if (series.every((e) => e.size >= min)) break
-    if (series.length <= 1) {
-      if (composition) break
+    if (!composition && min * work.length > length) {
       // rule C terminal: even one series + the rest cannot clear the
-      // minimum — the FIRST series alone becomes the single-color bar (the
-      // top-ranked series is the data's face; its size is the bar's full
-      // length)
-      const first = series[0]?.seg ?? entries[0]!.seg
-      return [{ ...first, size: length, outline: true }]
+      // minimum — the FIRST series alone becomes the single-color bar
+      if (series.length <= 1) {
+        const first = series[0]?.seg ?? entries[0]!.seg
+        return [{ ...first, size: length, outline: true }]
+      }
+      work = foldIntoRest(work, smallestSeriesOf(series), restLabel)
+      continue
     }
-    work = foldIntoRest(work, series.reduce((a, b) => (b.seg.value < a.seg.value ? b : a)).seg, restLabel)
+    if (series.length > 1 && series.some((e) => e.size < min)) {
+      work = foldIntoRest(work, smallestSeriesOf(series), restLabel)
+      continue
+    }
+    break
   }
   const sizes = ratioSplit(work, length)
-  // the stack ladder guarantees every series cleared the minimum (the rest is
-  // exempt), so every shape is outlined; the composition stop above can leave
-  // a lone sub-minimum series — it keeps its data ratio fill-only (rule F's
-  // usage per segment)
-  return work.map((s, i) => ({ ...s, size: sizes[i]!, outline: !composition || isRest(s) || sizes[i]! >= SEG_MIN }))
+  // the ladder guarantees every kept series but possibly the LAST cleared
+  // the minimum (the rest is exempt), so every shape is outlined except a
+  // lone sub-3px series — it keeps its data ratio fill-only (rule F's usage
+  // per segment; both modes stop the same way)
+  return work.map((s, i) => ({ ...s, size: sizes[i]!, outline: isRest(s) || sizes[i]! >= SEG_MIN }))
 }

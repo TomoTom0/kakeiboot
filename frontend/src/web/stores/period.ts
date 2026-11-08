@@ -129,9 +129,13 @@ export const usePeriodStore = defineStore('web-period', () => {
   // TASK-146 §1: the current-period cap is gone — month / week step into
   // the future freely (a future period renders the existing empty
   // vocabulary). The only bound left is the backend's Year 1900..=9999
-  // acceptance (domain resolve_period), so the year clamps at both ends;
-  // the range mode never shows the step UI at all.
+  // acceptance (domain resolve_period), so the year clamps at both ends —
+  // canNext / canPrev are the step pair's symmetric disable sources (review
+  // PR#4 #2: the year floor used to no-op the ‹ press silently with no
+  // disabled state on the button); the range mode never shows the step UI
+  // at all.
   const canNext = computed(() => (mode.value === 'year' ? year.value < 9999 : true))
+  const canPrev = computed(() => (mode.value === 'year' ? year.value > 1900 : true))
 
   // --- the user / internal API split (TASK-164 §2-2-1) ---------------------------
   // The write-back's push/replace discrimination rides a one-shot flag: only a
@@ -290,6 +294,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     trendQuery,
     urlQuery,
     canNext,
+    canPrev,
     nextWrite,
     step,
     setMonth,

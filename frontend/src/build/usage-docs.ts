@@ -55,6 +55,11 @@ function dirnameOf(url: string): string {
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/
 const IMAGE_LINE_RE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\s*\)$/
+// Only top-level placeholder paragraphs reach this split: the token walk in
+// transformUsageMarkdown rejects a placeholder nested inside a container (a
+// list item, a quote) before rendering, so the old failure mode — a substring
+// match splitting inside `<li><p>@@…@@</p></li>` and orphaning the `<li>` /
+// `</li>` tags across html parts with no error — cannot occur.
 const IMAGE_PARAGRAPH_RE = /<p>@@USAGE_IMG:(\d+)@@<\/p>/
 const KEY_VALUE_RE = /^([a-z-]+): ?(.*)$/
 const FENCE_INFO_RE = /^usage:([a-z-]+)$/
@@ -116,9 +121,12 @@ function parseKeyValues(src: string): Record<string, string> {
 
 /** Frontmatter with the three required keys — a missing one fails the parse
  * (no silent defaults; the corpus is the source of truth). An unknown key
- * fails too (a typo must not silently drop metadata). `public` is the only
- * optional key the design carries (TASK-135 §2-3). */
-const ALLOWED_FRONTMATTER_KEYS = ['title', 'summary', 'order', 'public']
+ * fails too (a typo must not silently drop metadata). The design's optional
+ * `public` key (TASK-135 §2-3) appears in neither the output type nor the
+ * emitted module — writing it would be a silent no-op, so until it gains an
+ * effect it is NOT accepted and fails like any other unknown key
+ * (docs/usage/README.md "ファイル形式" lists exactly title/summary/order). */
+const ALLOWED_FRONTMATTER_KEYS = ['title', 'summary', 'order']
 
 export function parseUsageFrontmatter(src: string): UsageFrontmatter {
   const block = FRONTMATTER_RE.exec(src)
@@ -131,11 +139,13 @@ export function parseUsageFrontmatter(src: string): UsageFrontmatter {
   }
   const title = values['title'] ?? ''
   const summary = values['summary'] ?? ''
-  const order = Number(values['order'])
-  if (title === '' || summary === '' || !Number.isInteger(order)) {
+  // `Number('')` is 0, so an empty `order:` (or a whitespace-only value) would
+  // pass Number.isInteger as order 0 — reject the empty value itself first.
+  const orderRaw = values['order'] ?? ''
+  if (title === '' || summary === '' || orderRaw.trim() === '' || !Number.isInteger(Number(orderRaw))) {
     throw new Error('usage doc frontmatter requires a non-empty title, summary and an integer order')
   }
-  return { title, summary, order }
+  return { title, summary, order: Number(orderRaw) }
 }
 
 /** Allowed fenced-block attributes per widget (design §2-4). */
@@ -184,7 +194,11 @@ export function transformUsageMarkdown(src: string): UsageDocument {
       }
       const i =
         images.push({ src: m[2] ?? '', alt: m[1] ?? '', caption: m[3] ?? '' }) - 1
-      return `@@USAGE_IMG:${i}@@`
+      // Keep the leading indent on the placeholder. Replacing the whole line
+      // would silently hoist an image indented into a list item up to the top
+      // level; with the indent kept, the token walk below rejects it.
+      const indent = line.slice(0, line.length - line.trimStart().length)
+      return `${indent}@@USAGE_IMG:${i}@@`
     })
     .join('\n')
 
@@ -213,12 +227,28 @@ export function transformUsageMarkdown(src: string): UsageDocument {
       parts.push(widgetPart(token.info, token.content, 'usage doc'))
       runStart = i + 1
     }
+    // An image line indented into a list item (or any container) still passes
+    // IMAGE_LINE_RE after trim() and becomes a placeholder nested at a block
+    // depth > 1 — a top-level paragraph's inline token sits at depth 1.
+    // Splitting it out of `<li><p>@@…@@</p></li>` would orphan the surrounding
+    // tags across html parts with no error, so reject it here instead.
+    if (token.type === 'inline' && depth > 1 && token.content.includes('@@USAGE_IMG:')) {
+      throw new Error(
+        'usage doc: an image line must sit at the top level of the document (its own standalone paragraph), not inside a list item or other container',
+      )
+    }
     depth += token.nesting
   }
   pushHtml(md.renderer.render(tokens.slice(runStart), md.options, {}))
 
   const flat = parts.filter(isHtmlPart).map((p) => p.html).join('')
-  if (flat.includes('@@USAGE_IMG:') || /<img[\s>]/i.test(flat)) {
+  const leftover = /@@USAGE_IMG:\d+@@/.exec(flat)
+  if (leftover) {
+    throw new Error(
+      `usage doc: an image must be a standalone line forming its own paragraph (absorbed into a surrounding paragraph): ${leftover[0]}`,
+    )
+  }
+  if (/<img[\s>]/i.test(flat)) {
     throw new Error(
       'usage doc: an image must be the only content of its line (standalone image line), not inline in a paragraph',
     )
@@ -266,7 +296,10 @@ export function usageDocsPlugin(): Plugin {
     // dev server: an md edit under docs/usage must invalidate the virtual
     // module without a restart. addWatchFile alone does not carry the change
     // through Vite's module graph (verified on Vite 8), so the watcher also
-    // gets the directory and the plugin invalidates the module itself.
+    // gets the directory and the plugin invalidates the module itself. `add`
+    // matters as much as `change`/`unlink`: a new usage_*.md (including the
+    // added side of a rename) must invalidate too, or the new topic never
+    // shows up on the dev pages.
     configureServer(server) {
       const invalidate = (file: string): void => {
         if (file.startsWith(docsDir + sep)) {
@@ -275,6 +308,7 @@ export function usageDocsPlugin(): Plugin {
         }
       }
       server.watcher.add(docsDir)
+      server.watcher.on('add', invalidate)
       server.watcher.on('change', invalidate)
       server.watcher.on('unlink', invalidate)
     },
@@ -291,6 +325,11 @@ export function usageDocsPlugin(): Plugin {
       }
       const topics = loadUsageTopics()
       for (const topic of topics) {
+        // The Markdown corpus file itself is the primary source — register it
+        // alongside the image files. The dev server covers edits through the
+        // configureServer watcher, but `vite build --watch` has none: without
+        // the .md in addWatchFile a corpus edit would not rebuild there.
+        this.addWatchFile(resolve(docsDir, `usage_${topic.slug}.md`))
         for (const part of topic.doc.parts) {
           if (part.kind === 'image') this.addWatchFile(resolve(docsDir, part.src))
         }

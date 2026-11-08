@@ -72,7 +72,7 @@ describe('layout: grid children shrink', () => {
   // TASK-105 (web-layout.grid-children-shrinkable revised): .dash-grid is
   // abolished (ReceiptsPage was its last user) and the selector under test
   // becomes .dash-cols (the one-column base + the 48rem two-column band).
-  it('[covers:web-layout.grid-children-shrinkable] .dash-cols 全メディアクエリで minmax(0、.sub-row も minmax(0、.hscroll、overflow-x hidden なし', () => {
+  it('[covers:web-layout.grid-children-shrinkable] .dash-cols 全メディアクエリで minmax(0、.hscroll、overflow-x hidden なし（.sub-row 規則はPR#4レビュー4で dead CSS 削除済み）', () => {
     const grids = rulesFor('.dash-cols').filter((r) => decl(r.body, 'grid-template-columns') !== undefined)
     expect(grids.length).toBeGreaterThanOrEqual(2)
     for (const r of grids) {
@@ -82,9 +82,10 @@ describe('layout: grid children shrink', () => {
       expect(v.replace(/minmax\([^()]*\)/g, '')).not.toMatch(/\b1fr\b/)
     }
     expect(rulesFor('.dash-cols > *').some((r) => decl(r.body, 'min-width') === '0')).toBe(true)
-    expect(rulesFor('.sub-row').map((r) => decl(r.body, 'grid-template-columns'))).toContain(
-      'minmax(0, 1fr) auto auto',
-    )
+    // PR#4 review 4: the .sub-rows/.sub-row rules are gone entirely (no
+    // template renders them — the dead CSS the shrink check once pinned)
+    expect(rulesFor('.sub-row')).toHaveLength(0)
+    expect(rulesFor('.sub-rows')).toHaveLength(0)
     expect(rulesFor('.hscroll').some((r) => decl(r.body, 'overflow-x') === 'auto')).toBe(true)
     // the page itself is never clipped to hide overflow — .app-main is the
     // slide transition's stage since TASK-74 (overflow-x: clip so the parked
@@ -971,8 +972,45 @@ describe('trend bar column state emphasis (TASK-130, static checks)', () => {
     ).toBe(true)
     // .bar-col:hover and .bar-col.current share specificity (0,2,0), so
     // source order decides the overlay: the hover wash sits after the
-    // current rule and wins on desktop
-    expect(css.search(/\.bar-col:hover\s*\{/)).toBeGreaterThan(css.search(/\.bar-col\.current\s*\{/))
+    // current rule and wins on desktop (PR#4 review 7 grouped .daily-col
+    // :hover into the same rule — the [^{]* rides the selector group)
+    expect(css.search(/\.bar-col:hover[^{]*\{/)).toBeGreaterThan(css.search(/\.bar-col\.current\s*\{/))
+  })
+})
+
+// --- PR#4 review (TASK-171): the visual-bar review fixes — the end-flush
+// tick value (review 2), the row-seg FLIP move rule (review 3), the
+// daily-col hover guard (review 7) and the fill-only ::before (review 8).
+// Static checks against styles.css. ---
+
+describe('visual bar review fixes (PR#4, static checks)', () => {
+  it('[covers:web-home.breakdown-absolute-ticks][covers:web-common.row-bar-component][covers:web-browse.trend-bar-hover-current][covers:web-common.stack-dimension-rules] 右端tick値はend-flush（track内へ伸長）・.row-seg-move は transform+width の FLIP move・.daily-col:hover は @media (hover: hover) 内のみ・fill-only button の ::before 縁取りなし', () => {
+    // review 2: the ratio-1 tick's value grows INTO the track — the tick
+    // sits at left:100%, so the value pins its END side instead of running
+    // past the track's right edge (the axis-labels end-flush twin)
+    const endFlush = rulesFor('.breakdown-tick:last-child .breakdown-tick-val')
+    expect(endFlush.length, '.breakdown-tick:last-child end-flush rule').toBeGreaterThan(0)
+    expect(endFlush.some((r) => decl(r.body, 'left') === 'auto' && decl(r.body, 'right') === '0')).toBe(true)
+    // review 3: the keyed FLIP move — Vue needs the -move class's transform
+    // transition to slide a repositioned segment (the width transition does
+    // not animate positions); the width ride stays declared so the shorthand
+    // does not clobber the .row-seg width transition mid-move
+    const move = rulesFor('.row-seg-move')
+    expect(move.length, '.row-seg-move rule').toBeGreaterThan(0)
+    const moveTransition = move.map((r) => decl(r.body, 'transition')).find((v) => v !== undefined)!
+    expect(moveTransition).toContain('transform')
+    expect(moveTransition).toContain('width')
+    // review 7: the daily column's wash lives ONLY inside the hover
+    // capability guard (a media-bare wash sticks after a tap)
+    const hoverMedia = blockAfter(/@media\s*\(\s*hover:\s*hover\s*\)/)
+    expect(
+      rulesFor('.daily-col:hover', hoverMedia!).some((r) => decl(r.body, 'background') === 'var(--bb-hover)'),
+    ).toBe(true)
+    expect(rulesFor('.daily-col:hover', topLevel())).toHaveLength(0)
+    // review 8: rule F's fill-only contract holds on the pressable side —
+    // the is-fill button draws no ::before outline (the inline border:none
+    // hits the button itself only)
+    expect(rulesFor('button.row-seg.is-fill::before').some((r) => decl(r.body, 'border') === 'none')).toBe(true)
   })
 })
 
@@ -1007,7 +1045,7 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
     expect(reduced).toMatch(/\.dialog-backdrop[^{]*\{[^}]*transition:\s*none/)
   })
 
-  it('[covers:web-common.appear-fade] 出現/消滅fade語彙は bb-appear 1組（opacity fade・0.15-0.2s）で reduced-motion で無効', () => {
+  it('[covers:web-common.appear-fade][covers:web-common.appear-move] 出現/消滅fade語彙は bb-appear 1組（opacity fade・0.15-0.2s・離脱listの FLIP move は同gradeの transform）で reduced-motion で無効', () => {
     // #18/#20: ONE shared grammar class carries the row additions and the
     // manage screens' inline state changes — an opacity fade in the
     // bb-fade-in family, nothing fancier
@@ -1020,12 +1058,22 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
     // the fade timing lives on the -active pair once; the from/to pair only
     // sets the origin (opacity 0) — a fade and only a fade
     const active = appear.filter((r) => r.selectors.some((s) => /-active$/.test(s)))
-    const origin = appear.filter((r) => !r.selectors.some((s) => /-active$/.test(s)))
+    // TASK-171 (PR#4 review): the FLIP move member — a departing row keeps
+    // its layout box through the leave fade, so the survivors' close-up
+    // eases instead of teleporting
+    const move = appear.filter((r) => r.selectors.some((s) => /-move$/.test(s)))
+    const origin = appear.filter((r) => !r.selectors.some((s) => /-active$|-move$/.test(s)))
     expect(active.length, 'the bb-appear active pair exists').toBeGreaterThan(0)
+    expect(move.length, 'the bb-appear move member exists').toBeGreaterThan(0)
     for (const r of active) {
       const t = decl(r.body, 'transition') ?? decl(r.body, 'animation') ?? ''
       expect(t, `${r.selectors.join(',')}: a fade and only a fade`).toMatch(/opacity/)
       expect(t).toMatch(/0\.(15|2|16)s/)
+    }
+    for (const r of move) {
+      const t = decl(r.body, 'transition') ?? ''
+      expect(t, `${r.selectors.join(',')}: the FLIP move, transform only`).toMatch(/transform/)
+      expect(t, `${r.selectors.join(',')}: the fade's own grade`).toMatch(/0\.(15|2|16)s/)
     }
     for (const r of origin) {
       expect(r.selectors.join(','), 'every timing-less rule is the origin pair').toMatch(/-from|-to/)
@@ -1034,6 +1082,7 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
     // reduced-motion turns the vocabulary off (the second guard)
     const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)
+    expect(reduced).toMatch(/\.bb-appear-move[^{]*\{[^}]*transition:\s*none/)
   })
 })
 

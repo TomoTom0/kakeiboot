@@ -1335,21 +1335,24 @@ describe('HomePage period UI (TASK-161)', () => {
     })
     const mountBar = (label: string, size: number) =>
       mount(RowBar, { props: { width: size, segs: [seg(label, size)], inBarLabels: true } })
-    // the FULL name fits: 「食費」 (22px) within avail 22 (size 30)
-    const full = mountBar('食費', 30)
+    // the FULL name fits: 「食費」 (2 × 11.22px pitch = 22.44px) within
+    // avail 23 (size 31) — PR#4 review 6: the estimate counts the 0.02em
+    // tracking (1.02em pitch, verticalSegLabel's errs-wide twin), so the
+    // old 30px boundary (22px at the bare 11px) no longer claims the fit
+    const full = mountBar('食費', 31)
     expect(full.find('.row-seg-label').text()).toBe('食費')
     expect(full.find('.row-seg').attributes('style') ?? '').toContain('color: var(--series-1-ink)')
     full.unmount()
     // too narrow for the full name but wide enough for the truncation
-    // minimum: 「日用品」 at avail 24 → 「日…」 (22px)
-    const cut = mountBar('日用品', 32)
+    // minimum: 「日用品」 at avail 25 → 「日…」 (2 × 11.22 = 22.44px)
+    const cut = mountBar('日用品', 33)
     expect(cut.find('.row-seg-label').text()).toBe('日…')
     cut.unmount()
-    // under both: colour only
+    // under both: colour only (avail 20 < the truncation minimum 22.44)
     const none = mountBar('日用', 28)
     expect(none.find('.row-seg-label').exists()).toBe(false)
     none.unmount()
-    // a single-code-point name (review 低9): its FULL form (11px) fits
+    // a single-code-point name (review 低9): its FULL form (11.22px) fits
     // avail 12 — widths the 2-code-point truncation minimum never could
     const one = mountBar('食', 20)
     expect(one.find('.row-seg-label').text()).toBe('食')

@@ -495,6 +495,53 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     expect(allocateStack([seg('a', 100)], 3).every((s) => s.outline)).toBe(true)
   })
 
+  // PR#4 review 1 (TASK-171): rule C's terminal fires on the BAR-LENGTH
+  // budget (minimum x N vs the length) only — never on a series' data-ratio
+  // size. The old ratio-basis terminal collapsed a rest-majority bar onto
+  // the first series' single color: the rest's money vanished from the
+  // drawing and the pct consumers (BarVChart / WeekRows / BreakdownBar,
+  // whose denominators close over the ALLOCATED sum) read the lone series
+  // as「…（100%）」. The composition mode's principle — never stretch a
+  // series to amounts the data never had — now governs the stack mode's
+  // lone survivor too: it keeps its data ratio (fill-only under 3px).
+  it('[covers:web-common.stack-rule-c-length-basis] 規則C terminal はbar長基準（minimum×N>bar長のみ発火）: rest過半でも単色化せず全segmentがdata比・生存series 1本がmin未満でもdata比fill-onlyのまま・境界（minimum×N=bar長）は単色化しない・金額総和は保存', () => {
+    const seg = (label: string, value: number, rest = false) => ({
+      label,
+      value,
+      color: rest ? 'var(--series-rest)' : `var(--series-${label})`,
+      rest,
+    })
+    // (a) rest過半 + the smaller series sub-minimum: rule B folds b, then
+    // the LONE a (12% at its data ratio = 2.4px < 3) SURVIVES at its data
+    // ratio fill-only — the old code returned [a alone at 20px] here (the
+    // terminal), erasing the rest's 80%
+    const restMajority = allocateStack([seg('a', 12), seg('b', 8), seg('ほか', 80, true)], 20)
+    expect(restMajority.map((s) => s.label)).toEqual(['a', 'ほか'])
+    expect(restMajority.reduce((a, s) => a + s.value, 0)).toBe(100) // the money stays
+    expect(restMajority[0]!.size).toBeCloseTo(2.4, 6) // 12% of 20 — data ratio
+    expect(restMajority[0]!.outline).toBe(false) // sub-3px lone series: fill only
+    expect(restMajority[1]!.size).toBeCloseTo(17.6, 6)
+    expect(restMajority[1]!.outline).toBe(true)
+    // the allocated sum keeps the input total, so the pct consumers' ratio
+    // (a's value over the sum) reads 12% — not the terminal's 100%
+    expect(Math.round((restMajority[0]!.value / restMajority.reduce((a, s) => a + s.value, 0)) * 100)).toBe(12)
+    // (b) 生存series 1本 whose ratio size sits under the minimum on a bar
+    // that CAN house minimum x 2: the lone series keeps its data ratio (the
+    // composition stop) — the old code returned [a alone at 90px]
+    const lone = allocateStack([seg('a', 3), seg('ほか', 97, true)], 90)
+    expect(lone.map((s) => s.label)).toEqual(['a', 'ほか'])
+    expect(lone[0]!.size).toBeCloseTo(2.7, 6)
+    expect(lone[0]!.outline).toBe(false)
+    expect(lone[1]!.size).toBeCloseTo(87.3, 6)
+    // (c) the length boundary: minimum x N EXACTLY fits the bar (3 x 2 = 6)
+    // — no terminal, every segment keeps its data ratio; one unit shorter
+    // and the terminal takes over (the existing c-terminal case at length 5)
+    const boundary = allocateStack([seg('a', 40), seg('ほか', 60, true)], 6)
+    expect(boundary.map((s) => s.label)).toEqual(['a', 'ほか'])
+    expect(boundary.reduce((a, s) => a + s.size, 0)).toBeCloseTo(6, 6)
+    expect(allocateStack([seg('a', 40), seg('ほか', 60, true)], 5).map((s) => s.label)).toEqual(['a'])
+  })
+
   // TASK-129 (design §4-5, web-common.stack-dimension-rules): the
   // composition mode for the composition-ratio bars (ShareBar) — rules A/B/F
   // apply, rule C does NOT (dropping the residual to stretch the first
@@ -606,6 +653,56 @@ describe('useTrendWindow (composable, TASK-104)', () => {
     await settle()
     expect(win.window.value).toEqual(['2024-05-01', '2024-10-31'])
     expect(win.canPrev.value).toBe(false) // the paged-to window is all zero
+  })
+
+  // PR#4 #4 (web-home.trend-window-floor): a FAILED window move leaves
+  // lastMove standing without a commit — the moved-to window's result never
+  // lands, so the floor must not fire off that trace. The non-move commit
+  // paths (E4 labelQuery / refresh) reset the move memory: their all-zero
+  // commits keep both chevrons enabled.
+  it('[covers:web-home.trend-window-floor] 失敗したprev移動の残留lastMoveはE4/refreshのall-zero commitでフロアに使わない（移動でないcommitは移動履歴を持たない）', async () => {
+    const orig = api.getAnalysisTrend.bind(api)
+    let failFrom: string | null = '2025-11-01'
+    vi.spyOn(api, 'getAnalysisTrend').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      const [l, q] = args
+      if (failFrom !== null && q.from === failFrom) throw new Error('window move failed')
+      return orig(l, q)
+    })
+    const period = usePeriodStore()
+    const win = await mountWindow()
+    // the initial window (2026-05..2026-10, holding the records) commits
+    // with no move history — and the prev-adjacent prefetch already failed
+    // silently, so the press below cannot land from cache
+    expect(win.canPrev.value).toBe(true)
+    win.prev()
+    await settle()
+    // the window moved but NOTHING committed: the display keeps the
+    // initial windowKey and lastMove='prev' stands without a floor (canPrev
+    // keeps the last committed value — the trace alone disables nothing)
+    expect(win.window.value).toEqual(['2025-11-01', '2026-04-30'])
+    expect(win.windowKey.value).toBe('2026-05-01..2026-10-31')
+    expect(win.canPrev.value).toBe(true)
+    // E4: a label change re-fetches the CURRENT window (all zero in the
+    // mock) — the commit is not a move, so the leftover trace must not
+    // floor ‹ off the all-zero result. The next page (2025-05..) fails
+    // from here: the E4 commit's prefetch of it drops silently, so the
+    // press below cannot land from cache either
+    failFrom = '2025-05-01'
+    period.setLabelColors(['red'])
+    await settle()
+    expect(win.windowKey.value).toBe('2025-11-01..2026-04-30')
+    expect(win.canPrev.value).toBe(true)
+    // the same leftover after ANOTHER failed move, cleared by refresh():
+    // the re-fetched all-zero window keeps ‹ alive too
+    win.prev()
+    await settle()
+    expect(win.window.value).toEqual(['2025-05-01', '2025-10-31'])
+    expect(win.canPrev.value).toBe(true)
+    failFrom = null
+    win.refresh()
+    await settle()
+    expect(win.windowKey.value).toBe('2025-05-01..2025-10-31')
+    expect(win.canPrev.value).toBe(true)
   })
 
   // [covers:web-home.trend-window-cache-return]
@@ -1773,8 +1870,10 @@ describe('stackedOfRows / series key / allocateStack labelMin (TASK-162)', () =>
     expect(a.find((s) => s.label === 'ほか')!.value).toBe(200)
     for (const s of a) expect(s.size).toBeGreaterThanOrEqual(26)
     // (b) rule C at the raised bar: a bar too short for even 1 series + the
-    // rest at labelMin collapses to the first series alone (whose label fits
-    // — the single-colour terminal carries ITS label)
+    // rest at labelMin (26 x 2 = 52 > 40) collapses to the first series
+    // alone (whose label fits — the single-colour terminal carries ITS
+    // label). PR#4 review 1: the BAR LENGTH decides this — never the lone
+    // series' data-ratio size
     const b = allocateStack(
       [
         seg('食費', 500),
@@ -1787,6 +1886,21 @@ describe('stackedOfRows / series key / allocateStack labelMin (TASK-162)', () =>
     expect(b).toHaveLength(1)
     expect(b[0]!.label).toBe('食費')
     expect(b[0]!.size).toBeCloseTo(40, 5)
+    // (b2) the contrast: a LONG bar (26 x 2 = 52 <= 400) whose lone series
+    // sits under labelMin at its data ratio (50/1000 x 400 = 20px) KEEPS the
+    // series at its data ratio — the old ratio-basis terminal stretched 食費
+    // to the bar's full 400px here, erasing the rest's 95%. The segment's
+    // label degrades through the caller's fit logic (verticalSegLabel:
+    // truncate, then colour-only) instead
+    const b2 = allocateStack(
+      [seg('食費', 50), { label: 'ほか', value: 950, color: 'var(--series-rest)', rest: true }],
+      400,
+      { labelMin: 26 },
+    )
+    expect(b2.map((s) => s.label)).toEqual(['食費', 'ほか'])
+    expect(b2[0]!.size).toBeCloseTo(20, 5)
+    expect(b2[0]!.outline).toBe(true) // 20px >= SEG_MIN keeps the outline
+    expect(b2[1]!.size).toBeCloseTo(380, 5)
     // (c) labelMin unset: the current SEG_MIN=3 rule stays (backward
     // compatible — horizontal bars / widget keep the old minimums)
     const c = allocateStack([seg('食費', 500), seg('交際', 5)], 1000)

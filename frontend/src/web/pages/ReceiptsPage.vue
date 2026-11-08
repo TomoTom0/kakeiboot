@@ -570,8 +570,15 @@ const groups = computed(() => {
             <!-- TASK-161 §2-2 (review 中6): the summary line crosses through
                  the fade vocabulary on a PERIOD move (keyed by the range —
                  the pane itself never remounts); a filter change re-renders
-                 it in place, its numbers carrying no motion vocabulary -->
-            <Transition name="page">
+                 it in place, its numbers carrying no motion vocabulary.
+                 TASK-171 (PR#4 review): the swap rides out-in like every
+                 in-flow page-vocabulary caller — the default simultaneous
+                 mode stacked the old and new line in flow for the fade's
+                 0.2s, stretching the KPI card two lines tall -->
+            <Transition
+              name="page"
+              mode="out-in"
+            >
               <p
                 :key="`${period.range[0]}..${period.range[1]}`"
                 class="kpi-sub"
@@ -621,7 +628,8 @@ const groups = computed(() => {
                      and the top segment's cap radius. TASK-162 §2-6: the
                      segments carry the SAME upright vertical label class the
                      TrendBars bars read (the labelMin fold above guarantees
-                     the room; 例外A/B keep the colour-only fallback) -->
+                     the room; 例外A/B/C — C is PR#4 review 1's lone
+                     sub-labelMin survivor — keep the colour-only fallback) -->
                       <span
                         class="daily-bar"
                         :style="{ height: `${c.height}%` }"

@@ -23,8 +23,9 @@ import { allocateStack, type AllocatedSegment } from '@/shared/lib/stackedBars'
 //
 // TASK-162 §1-11: the absolute-tick overlay is GONE from the ranked list
 // (the Home breakdown became the ONE bar — BreakdownBar owns the graduation
-// now). The % share column stays optional (`share: false` on the
-// absolute-reading surfaces).
+// now). The % share sub figure rides each row's own share field (PR#4
+// review 5: the `share: false` prop path was dead — no call site passed it,
+// so the prop and its no-share class are gone).
 const props = withDefaults(
   defineProps<{
     rows: StatsRow[]
@@ -38,10 +39,8 @@ const props = withDefaults(
     /** the breakdown's axis — 'label' reads the managed label palette;
      *  unset (and every other axis) keeps the common mapping */
     axis?: AnalysisAxis
-    /** the % share sub figure (off on the absolute-reading surfaces) */
-    share?: boolean
   }>(),
-  { to: undefined, select: undefined, axis: undefined, share: true },
+  { to: undefined, select: undefined, axis: undefined },
 )
 
 // TASK-123 §4-5 rule E: the allocation works in px, so the track's real
@@ -102,7 +101,6 @@ const items = computed(() =>
   <AppearList
     ref="rowsEl"
     class="ranked"
-    :class="{ 'no-share': !share }"
     data-test="rows"
   >
     <li
@@ -135,7 +133,7 @@ const items = computed(() =>
           <span class="row-items truncate">{{ r.top }}</span>
         </template>
         <template
-          v-if="share && r.share !== null"
+          v-if="r.share !== null"
           #figure
         >
           <span class="ranked-share">{{ `${Math.round(r.share * 100)}%` }}</span>

@@ -224,11 +224,14 @@ async function load(id?: number): Promise<void> {
       sumAmount.value = res.sum_amount
       nextCursor.value = res.next_cursor
     }
-    // the results' committed identity (the tab rides along — a tab switch is
-    // a content swap too, but through the fade: the query has no order);
-    // TASK-161 §2: the PERIOD part alone drops out of the key (the query
-    // itself keeps it)
-    committedKey.value = `${l}|${tab.value}|${JSON.stringify({ ...pageQuery(), from: undefined, to: undefined })}`
+    // the results' committed identity (the tab and the SCOPE ride along —
+    // both switches are content swaps through the fade; the query has no
+    // order); TASK-161 §2: the PERIOD part alone drops out of the key (the
+    // query itself keeps it). scope is explicit in the key even though a
+    // toggle only ever changes from/to (review PR#4 #5): the period-derived
+    // keys are exactly what the key drops, so without scope here a
+    // period→all toggle would swap the results with no transition at all
+    committedKey.value = `${l}|${tab.value}|${scope.value}|${JSON.stringify({ ...pageQuery(), from: undefined, to: undefined })}`
   } catch (e) {
     if (n !== seq) return
     error.value = errorMessage(e)

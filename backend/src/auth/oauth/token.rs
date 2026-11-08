@@ -552,7 +552,7 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
                 Ok(p) => p,
                 Err(e) => return db_error(e),
             };
-            let upd = sqlx::query(
+            match sqlx::query(
                 "UPDATE oauth_refresh_tokens SET used_at = ?, child_hash = ? WHERE token_hash = ? AND used_at IS NULL",
             )
             .bind(now)
@@ -560,10 +560,10 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
             .bind(&token_hash)
             .execute(&mut *tx)
             .await
-            .map(|r| r.rows_affected())
-            .unwrap_or(0);
-            if upd != 1 {
-                return db_error(sqlx::Error::RowNotFound);
+            {
+                Ok(r) if r.rows_affected() == 1 => {}
+                Ok(_) => return db_error(sqlx::Error::RowNotFound),
+                Err(e) => return db_error(e),
             }
             if let Err(e) = tx.commit().await {
                 return db_error(e);
@@ -624,17 +624,17 @@ async fn refresh(state: &State_, pairs: &[(String, String)], client_id: &str, no
                 Err(e) => return db_error(e),
             };
             // replace child_hash; used_at keeps the original rotation time
-            let upd = sqlx::query(
+            match sqlx::query(
                 "UPDATE oauth_refresh_tokens SET child_hash = ? WHERE token_hash = ? AND used_at IS NOT NULL",
             )
             .bind(sha256(&pair.refresh).to_vec())
             .bind(&token_hash)
             .execute(&mut *tx)
             .await
-            .map(|r| r.rows_affected())
-            .unwrap_or(0);
-            if upd != 1 {
-                return db_error(sqlx::Error::RowNotFound);
+            {
+                Ok(r) if r.rows_affected() == 1 => {}
+                Ok(_) => return db_error(sqlx::Error::RowNotFound),
+                Err(e) => return db_error(e),
             }
             if let Err(e) = tx.commit().await {
                 return db_error(e);

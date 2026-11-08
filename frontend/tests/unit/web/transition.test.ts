@@ -732,3 +732,27 @@ describe('period pop scroll + reservation tokens (TASK-164 §2-2-2)', () => {
     expect(pendingRestore.value).toBe(null)
   })
 })
+
+// ---------------------------------------------------------------------------
+// TASK-171 (PR#4 review): the page fade vocabulary's in-flow contract. The
+// vocabulary's own CSS comment is "out-in so the old page leaves first and
+// the layout never shows both stacked" — every IN-FLOW caller (not only the
+// RouterView pair and the settings tabs) must set mode="out-in": the default
+// simultaneous mode stacks the leaving and entering element in flow for the
+// fade's duration, and a keyed line inside a card stretches its container
+// (the receipts KPI jumped two lines tall on every period step, pushing the
+// content below).
+
+describe('page vocabulary in-flow callers (TASK-171)', () => {
+  it('[covers:web-shell.page-vocab-inflow-out-in] page fade語彙を in-flow の keyed 入れ替えに使うcaller（Receipts の .kpi-sub）は mode=out-in（旧・新がin-flowに並ばない）', () => {
+    const receipts = src('pages/ReceiptsPage.vue')
+    const sub = receipts.indexOf('class="kpi-sub"')
+    expect(sub, 'the .kpi-sub summary line').toBeGreaterThan(-1)
+    // the Transition opening tag wrapping the keyed summary line
+    const open = receipts.lastIndexOf('<Transition', sub)
+    expect(open, 'the Transition wrapping .kpi-sub').toBeGreaterThan(-1)
+    const attrs = receipts.slice(open, receipts.indexOf('>', open))
+    expect(attrs).toContain('name="page"')
+    expect(attrs, 'the in-flow swap never stacks the old and new line').toContain('mode="out-in"')
+  })
+})
