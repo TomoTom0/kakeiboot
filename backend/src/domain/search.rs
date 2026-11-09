@@ -3,6 +3,8 @@
 //! category and payment filters, and an opaque keyset cursor over
 //! (purchased_on DESC, id DESC).
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
@@ -193,6 +195,42 @@ pub struct SearchResult {
     pub images: Vec<(i64, i64)>,
 }
 
+/// TASK-167 D-3: each receipt's derived representative items — the two most
+/// expensive lines (amount desc, the line_no tie-break keeps it decisive) —
+/// for the whole page in ONE query, the labels_of pattern (no N+1). Only
+/// `line_kind = 'item'` lines count (REVIEW-15 低3): a discount line is not a
+/// representative item even on a receipt with fewer than two items. Receipts
+/// without items are absent from the map (the row renders an empty array).
+async fn top_items_of(
+    conn: &mut SqliteConnection,
+    receipt_ids: &[i64],
+) -> sqlx::Result<HashMap<i64, Vec<super::dto::TopItem>>> {
+    let mut map: HashMap<i64, Vec<super::dto::TopItem>> = HashMap::new();
+    if receipt_ids.is_empty() {
+        return Ok(map);
+    }
+    let placeholders = vec!["?"; receipt_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT receipt_id, name, amount FROM (
+            SELECT i.receipt_id AS receipt_id, i.name AS name, i.amount_incl AS amount,
+                   ROW_NUMBER() OVER (PARTITION BY i.receipt_id
+                                      ORDER BY i.amount_incl DESC, i.line_no, i.id) AS rn
+            FROM receipt_items i
+            WHERE i.receipt_id IN ({placeholders}) AND i.line_kind = 'item'
+        ) WHERE rn <= 2 ORDER BY receipt_id, rn"
+    );
+    let mut q = sqlx::query_as::<_, (i64, String, i64)>(sqlx::AssertSqlSafe(sql));
+    for id in receipt_ids {
+        q = q.bind(id);
+    }
+    for (rid, name, amount) in q.fetch_all(&mut *conn).await? {
+        map.entry(rid)
+            .or_default()
+            .push(super::dto::TopItem { name, amount });
+    }
+    Ok(map)
+}
+
 pub async fn search_receipts(
     conn: &mut SqliteConnection,
     ledger_id: i64,
@@ -278,6 +316,8 @@ pub async fn search_receipts(
     // labels of the page's receipts in one query (no N+1)
     let page_ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
     let page_labels = labels::labels_of(&mut *conn, ledger_id, &page_ids).await?;
+    // TASK-167 D-3: the page's derived top items, the same one-query pattern
+    let page_top_items = top_items_of(&mut *conn, &page_ids).await?;
     let mut out = Vec::with_capacity(rows.len());
     let mut images = Vec::new();
     for (id, date, time, store, image_id, amount, count, deleted, deleted_at) in rows {
@@ -287,6 +327,7 @@ pub async fn search_receipts(
             "deleted_at": deleted_at.map(super::util::jst_iso),
         });
         v["labels"] = json!(page_labels.get(&id).cloned().unwrap_or_default());
+        v["top_items"] = json!(page_top_items.get(&id).cloned().unwrap_or_default());
         if deleted {
             v["deleted"] = json!(true);
         }

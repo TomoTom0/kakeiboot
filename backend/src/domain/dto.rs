@@ -1,5 +1,5 @@
 //! Shared serde DTOs. The canonical type list lives in
-//! docs/spec_mcp-tools.md section 7-1; this module defines the subset needed
+//! docs/spec/spec_mcp-tools.md section 7-1; this module defines the subset needed
 //! by the draft lifecycle (spec_data-model.md section 7). MCP tool I/O types
 //! (DraftView etc.) are added in TASK-9.
 
@@ -377,6 +377,15 @@ pub struct StatsResult {
 // web analysis API (TASK-89, spec_mcp-tools.md 12). Web-only shapes; the MCP
 // stats contract above is unchanged.
 
+/// TASK-167 D-3: a derived representative item — the amount-desc top-k of a
+/// receipt (k = 2, tie-break line_no) or of an axis value's period receipts.
+/// Rides the receipt list rows (ReceiptSummary) and the web analysis rows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TopItem {
+    pub name: String,
+    pub amount: i64,
+}
+
 /// One axis value of a breakdown. `key` is the axis key (item -> item_id,
 /// label -> color or null for the unlabeled bucket).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -391,6 +400,12 @@ pub struct AnalysisRow {
     /// total counts duplicate postings, so the shares sum to 100%.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share: Option<f64>,
+    /// TASK-167 D-3: the axis value's derived representative items (k = 2,
+    /// amount desc). None on the item axis — the rows ARE the items — so the
+    /// field is absent there (skip_serializing_if keeps the MCP contract
+    /// untouched for every other consumer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_items: Option<Vec<TopItem>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -42,6 +42,9 @@ pub struct AuthApiState {
     /// Image storage root (app.toml [maintenance]; export reads and import
     /// writes image files here, like /media does).
     pub image_root: std::path::PathBuf,
+    /// Test-only injection points (empty unless the `test-hooks` feature is
+    /// enabled; see [`crate::test_hooks`]).
+    pub test_hooks: crate::test_hooks::TestHooks,
 }
 
 /// Error shape: `{"error": "<code>"}` with a status code.
@@ -546,6 +549,7 @@ async fn login_finish(
         &req.credential,
         old.as_ref(),
         now,
+        &state.test_hooks,
     )
     .await?;
     let resp = Json(json!({ "next": outcome.next })).into_response();
@@ -589,6 +593,7 @@ async fn reauth_finish(
         &ceremony_token,
         &req.credential,
         now,
+        &state.test_hooks,
     )
     .await?;
     Ok(with_ceremony_cleared(Json(json!({})).into_response()))

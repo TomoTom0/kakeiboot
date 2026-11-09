@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
+import { barScale } from '@/shared/lib/stackedBars'
 import { useDataApi, type AnalysisResult, type StatsRow } from '../api/data'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
+import ContentSwap from '../components/ContentSwap.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import PeriodHeader from '../components/PeriodHeader.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
@@ -33,11 +35,17 @@ const router = useRouter()
 const period = usePeriodStore()
 const session = useSessionStore()
 const { markReady } = usePageReady()
-period.fromQuery(route.query)
+// the deep-linked period / labels keys arrive through the shell-level URL
+// sync (TASK-124 D2) before this page sets up
 
 const analysis = ref<AnalysisResult | null>(null)
 const error = ref('')
 const loading = ref(false)
+
+// TASK-146 §3: the pane's committed key (bumped at the load commit). TASK-161
+// §2 (web-common.period-move-voice): the key drops the PERIOD range — a
+// period step never remounts the pane (periodMove is gone)
+const committedKey = ref('')
 
 // the trend's movable window (TASK-104): the composable owns the trend
 // fetch and the stacked assembly
@@ -55,6 +63,7 @@ async function load(id?: number): Promise<void> {
     const a = await api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 })
     if (n !== seq) return
     analysis.value = a
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -97,6 +106,7 @@ const rows = computed<StatsRow[]>(() => {
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
   if (res.truncated_rows > 0) {
     // the folded tail's amount: the period total minus the shown rows (the
@@ -111,6 +121,11 @@ const rows = computed<StatsRow[]>(() => {
   }
   return out
 })
+
+// TASK-129 (web-common.bar-scale): the screen's ONE absolute scale — the max
+// over the ranking rows' values (each row bar's outer amount). The trend
+// bars join this aggregation at TASK-126.
+const screenScale = computed(() => barScale(Math.max(0, ...rows.value.map((r) => r.value))))
 
 const trendCurrent = computed(() =>
   currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
@@ -176,67 +191,75 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       class="view-stack"
       :class="{ loading }"
     >
-      <PeriodHeader
-        :label="`${period.label}の支出`"
-        :total="totals.amount"
-      />
+      <!-- TASK-146 §3: the content transition fires at the load commit.
+           TASK-161 §2: a period move renders in place (dir stays 'swap') -->
+      <ContentSwap :swap-key="committedKey">
+        <div class="content-pane">
+          <PeriodHeader
+            :label="period.label"
+            :total="totals.amount"
+            :swap-key="committedKey"
+          />
 
-      <div class="dash-cols">
-        <div class="col-main">
-          <section
-            class="zone"
-            :class="{ 'is-loading': win.loading.value }"
-            data-test="trend-card"
-          >
-            <div class="zone-head">
-              <h2 class="zone-title">
-                支出の推移
-              </h2>
+          <div class="dash-cols">
+            <div class="col-main">
+              <section
+                class="zone"
+                :class="{ 'is-loading': win.loading.value }"
+                data-test="trend-card"
+              >
+                <div class="zone-head">
+                  <h2 class="zone-title">
+                    支出の推移
+                  </h2>
+                </div>
+                <TrendWindow
+                  v-if="win.result.value"
+                  :stacked="win.stacked.value"
+                  :granularity="win.granularity.value"
+                  :span="win.window.value"
+                  :current="trendCurrent"
+                  :nav="win.active.value"
+                  :can-prev="win.canPrev.value"
+                  :can-next="win.canNext.value"
+                  :window-key="win.windowKey.value"
+                  :slide="win.slide.value"
+                  @prev="win.prev"
+                  @next="win.next"
+                  @select="onTrendSelect"
+                  @finish-slide="win.finishSlide"
+                />
+              </section>
             </div>
-            <TrendWindow
-              v-if="win.result.value"
-              :stacked="win.stacked.value"
-              :granularity="win.granularity.value"
-              :span="win.window.value"
-              :current="trendCurrent"
-              :nav="win.active.value"
-              :can-prev="win.canPrev.value"
-              :can-next="win.canNext.value"
-              :window-key="win.windowKey.value"
-              :slide="win.slide.value"
-              @prev="win.prev"
-              @next="win.next"
-              @select="onTrendSelect"
-              @finish-slide="win.finishSlide"
-            />
-          </section>
-        </div>
 
-        <div class="col-side">
-          <section
-            class="zone zone--list"
-            data-test="ranking"
-          >
-            <div class="zone-head">
-              <h2 class="zone-title">
-                カテゴリ別
-              </h2>
+            <div class="col-side">
+              <section
+                class="zone zone--list"
+                data-test="ranking"
+              >
+                <div class="zone-head">
+                  <h2 class="zone-title">
+                    カテゴリ別
+                  </h2>
+                </div>
+                <p
+                  v-if="rows.length === 0"
+                  class="muted empty"
+                >
+                  この期間の記録はありません。
+                </p>
+                <RankedList
+                  v-else
+                  :rows="rows"
+                  :to="rowTo"
+                  axis="category"
+                  :scale="screenScale"
+                />
+              </section>
             </div>
-            <p
-              v-if="rows.length === 0"
-              class="muted empty"
-            >
-              この期間の記録はありません。
-            </p>
-            <RankedList
-              v-else
-              :rows="rows"
-              :to="rowTo"
-              axis="category"
-            />
-          </section>
+          </div>
         </div>
-      </div>
+      </ContentSwap>
     </div>
     <DashSkeleton v-else-if="loading" />
   </div>

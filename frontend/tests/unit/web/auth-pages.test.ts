@@ -44,6 +44,16 @@ describe('LoginPage', () => {
     expect(wrapper.find('[data-test="guide"]').exists()).toBe(false)
   })
 
+  // TASK-149 D3 (web-common.fixed-guidance-names-both-services): the
+  // connection lead names both services — a data name, not a neutral word
+  it('[covers:web-common.fixed-guidance-names-both-services] req ありの接続案内は ChatGPT と Claude を併記', async () => {
+    mockFetch({})
+    const { wrapper } = await mountApp('/login?req=R')
+    const lead = wrapper.find('.auth-lead')
+    expect(lead.text()).toContain('ChatGPT')
+    expect(lead.text()).toContain('Claude')
+  })
+
   it('[covers:web-login.next-consent-navigates] next=consent かつ req ありは同意画面へ', async () => {
     const f = mockFetch({
       'POST /api/webauthn/login/start': { body: RCR },
@@ -67,7 +77,9 @@ describe('LoginPage', () => {
     const b = await mountApp('/login')
     await b.wrapper.find('[data-test="login"]').trigger('click')
     await settle()
-    expect(b.router.currentRoute.value.fullPath).toBe('/')
+    // the navigation target is the path: the keys-less entry to / carries
+    // the store's period on the query (the TASK-124 URL sync's write-back)
+    expect(b.router.currentRoute.value.path).toBe('/')
   })
 
   it('[covers:web-shell.atomic-mount] login 完了は me 確定後に遷移し shell が即時（me 取得は1回）', async () => {
@@ -290,5 +302,31 @@ describe('ConsentPage', () => {
     expect(wrapper.find('[data-test="expired"]').text()).toContain('期限切れ')
     expect(wrapper.find('[data-test="allow"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="deny"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-consent.ledger-note-interpolates-client-display] 接続後の家計簿切替の注記は client_display を補間する', async () => {
+    // TASK-149 D3: the ledger-switch note follows the connecting client's
+    // display name (backend value) instead of a fixed service name
+    mockFetch({
+      'GET /api/oauth/requests/R': {
+        body: { ...INFO, client_display: 'Claude', client_id: 'https://claude.ai/x' },
+      },
+    })
+    const { wrapper } = await mountApp('/oauth/consent?req=R')
+    expect(wrapper.find('[data-test="client-display"]').text()).toBe('Claude')
+    const note = wrapper.find('[data-test="ledger-note"]')
+    expect(note.text()).toContain('Claude')
+    expect(note.text()).not.toContain('ChatGPT')
+  })
+
+  it('[covers:web-consent.invalid-message-service-neutral] 無効・期限切れ要求の案内にサービス名を含まない', async () => {
+    // TASK-149 D3: for an invalid request the connecting service is not
+    // determined, so the guidance drops any specific service name
+    mockFetch({ 'GET /api/oauth/requests/R': { status: 404, body: { error: 'not_found' } } })
+    const { wrapper } = await mountApp('/oauth/consent?req=R')
+    const expired = wrapper.find('[data-test="expired"]')
+    expect(expired.exists()).toBe(true)
+    expect(expired.text()).not.toContain('ChatGPT')
+    expect(expired.text()).not.toContain('Claude')
   })
 })

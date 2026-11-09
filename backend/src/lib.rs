@@ -10,4 +10,5 @@ pub mod maintenance;
 pub mod mcp;
 pub mod ratelimit;
 pub mod store;
+pub mod test_hooks;
 pub mod web;

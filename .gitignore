@@ -9,5 +9,5 @@ frontend/dist/
 frontend/coverage/
 frontend/test-results/
 
-# device-local config overrides (see docs/deploy.md)
+# device-local config overrides (see docs/ops/ops_deploy.md)
 configs/*.local.toml

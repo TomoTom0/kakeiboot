@@ -1,9 +1,0 @@
-[Unit]
-Description=kakeiboot %i backup (SQLite online backup via admin CLI + images rsync)
-
-[Service]
-Type=oneshot
-WorkingDirectory=/srv/opt/tomo/run/app/tool/kakeiboot/%i
-ExecStart=/srv/opt/tomo/run/app/tool/kakeiboot/%i/bin/kakeiboot-backup.sh %i
-Nice=10
-IOSchedulingClass=idle

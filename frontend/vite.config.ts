@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import { parse } from 'smol-toml'
 import type { Plugin } from 'vite'
+import { usageDocsPlugin } from './src/build/usage-docs.ts'
 
 // Single source of truth for ports: configs/dev/app.toml (local development).
 const appConfig = parse(
@@ -43,7 +44,7 @@ const devSpaFallbackPlugin: Plugin = {
 
 // Multi-entry build: `web` (regular SPA) and `widget` (MCP widget HTML).
 export default defineConfig({
-  plugins: [vue(), devSpaFallbackPlugin],
+  plugins: [usageDocsPlugin(), vue(), devSpaFallbackPlugin],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

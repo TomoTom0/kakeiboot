@@ -16,11 +16,10 @@ export type PeriodMode = 'month' | 'week' | 'year' | 'range'
 export const usePeriodStore = defineStore('web-period', () => {
   const session = useSessionStore()
   const thisMonth = jstMonth()
-  const thisYear = Number(thisMonth.slice(0, 4))
   const mode = ref<PeriodMode>('month')
   const month = ref(thisMonth)
   const week = ref(weekStart(jstToday())) // TASK-53: the selected week's Monday
-  const year = ref(thisYear)
+  const year = ref(Number(thisMonth.slice(0, 4)))
   const from = ref(`${thisMonth}-01`)
   const to = ref(monthEnd(thisMonth))
 
@@ -127,57 +126,151 @@ export const usePeriodStore = defineStore('web-period', () => {
     return base
   })
 
-  const thisWeek = weekStart(jstToday())
-  const canNext = computed(() =>
-    mode.value === 'month'
-      ? month.value < thisMonth
-      : mode.value === 'week'
-        ? week.value < thisWeek
-        : mode.value === 'year'
-          ? year.value < thisYear
-          : false,
-  )
+  // TASK-146 §1: the current-period cap is gone — month / week step into
+  // the future freely (a future period renders the existing empty
+  // vocabulary). The only bound left is the backend's Year 1900..=9999
+  // acceptance (domain resolve_period), so the year clamps at both ends —
+  // canNext / canPrev are the step pair's symmetric disable sources (review
+  // PR#4 #2: the year floor used to no-op the ‹ press silently with no
+  // disabled state on the button); the range mode never shows the step UI
+  // at all.
+  const canNext = computed(() => (mode.value === 'year' ? year.value < 9999 : true))
+  const canPrev = computed(() => (mode.value === 'year' ? year.value > 1900 : true))
 
-  function step(delta: number): void {
-    if (mode.value === 'month') {
-      const next = shiftMonth(month.value, delta)
-      if (next <= thisMonth) month.value = next
-    } else if (mode.value === 'week') {
-      const next = shiftDate(week.value, delta * 7)
-      if (next <= thisWeek) week.value = next
-    } else if (mode.value === 'year') {
-      const next = year.value + delta
-      if (next <= thisYear) year.value = next
-    }
-  }
+  // --- the user / internal API split (TASK-164 §2-2-1) ---------------------------
+  // The write-back's push/replace discrimination rides a one-shot flag: only a
+  // USER period change (a step, a mode tab, a range form, a jump) may stack a
+  // history entry, every system write (a URL import, a keys-less completion,
+  // the reset) stays a replace. The user APIs below raise the flag ONLY on a
+  // real value change (residue rule 1: the period watch never fires on a
+  // same-value re-selection, so a flag raised there would stand around for a
+  // later system write to consume); the internal apply* APIs CLEAR a standing
+  // flag at their start (residue rule 2: an import or a reset never inherits
+  // an earlier user marking). The third residue rule (discard on an
+  // off-target-screen navigation) lives in useBrowsingUrlSync.
+  const nextWrite = ref<'user' | 'system'>('system')
 
-  /** Jump to a month (e.g. a bar of the trend chart). */
-  function setMonth(m: string): void {
+  function applyMonth(m: string): void {
+    nextWrite.value = 'system'
     mode.value = 'month'
     month.value = m
   }
 
-  /** Jump to a week (a weekly trend bar's press; TASK-53). */
-  function setWeek(w: string): void {
+  function applyWeek(w: string): void {
+    nextWrite.value = 'system'
     mode.value = 'week'
     week.value = weekStart(w)
   }
 
-  /** Apply ?month= / ?year= / ?from=&to= from a link. */
+  function applyMode(m: PeriodMode): void {
+    nextWrite.value = 'system'
+    mode.value = m
+  }
+
+  function applyRange(f: string, t: string): void {
+    nextWrite.value = 'system'
+    mode.value = 'range'
+    from.value = f
+    to.value = t
+  }
+
+  function step(delta: number): void {
+    if (mode.value === 'month') {
+      const next = shiftMonth(month.value, delta)
+      if (next !== month.value) {
+        applyMonth(next)
+        nextWrite.value = 'user'
+      }
+    } else if (mode.value === 'week') {
+      const next = shiftDate(week.value, delta * 7)
+      if (next !== week.value) {
+        applyWeek(next)
+        nextWrite.value = 'user'
+      }
+    } else if (mode.value === 'year') {
+      const next = Math.min(Math.max(year.value + delta, 1900), 9999)
+      if (next !== year.value) {
+        applyMode('year')
+        year.value = next
+        nextWrite.value = 'user'
+      }
+    }
+  }
+
+  /** Jump to a month (e.g. a bar of the trend chart). The no-op is the
+   *  month already selected IN month mode — a same-month jump from another
+   *  mode (a monthly bar pressed while the year / range view is up) still
+   *  re-modes and counts as a user change (review REVIEW-12 #2: the jump
+   *  must not silently swallow the mode switch). */
+  function setMonth(m: string): void {
+    if (mode.value === 'month' && month.value === m) return
+    applyMonth(m)
+    nextWrite.value = 'user'
+  }
+
+  /** Jump to a week (a weekly trend bar's press; TASK-53). The no-op is the
+   *  week already selected IN week mode — a same-Monday jump from another
+   *  mode still switches the mode over (a weekly bar press re-modes). */
+  function setWeek(w: string): void {
+    const monday = weekStart(w)
+    if (mode.value === 'week' && week.value === monday) return
+    applyWeek(w)
+    nextWrite.value = 'user'
+  }
+
+  /** Switch the period mode (the picker's tab; TASK-164 §2-2-1 — the tab used
+   *  to write `period.mode` directly, which the write-back cannot tell from a
+   *  system write). */
+  function setMode(m: PeriodMode): void {
+    if (mode.value === m) return
+    applyMode(m)
+    nextWrite.value = 'user'
+  }
+
+  /** Commit the Custom range form's dates (TASK-164 §2-2-1 — same replacement
+   *  of the picker's direct from/to writes). Invalid input — or re-committing
+   *  the selected range — is a no-op. */
+  function setRange(f: string, t: string): void {
+    if (!f || !t || f > t) return
+    if (mode.value === 'range' && from.value === f && to.value === t) return
+    applyRange(f, t)
+    nextWrite.value = 'user'
+  }
+
+  /** TASK-164 §1-2: back to the default period (month mode, the current
+   *  month) — the home-route re-press of a home affordance lands here. Every
+   *  dimension is recomputed from the JST date of the call: `thisMonth` is a
+   *  store-creation constant, so a session that crossed a month boundary
+   *  still lands on the new current month. The label dimension is not part
+   *  of the reset (B1: the selection rides along), and no navigation fires —
+   *  the URL follows through the regular write-back (a replace, §1-3: this
+   *  is an internal API and never marks its write as a user one). */
+  function resetToDefault(): void {
+    nextWrite.value = 'system'
+    const m = jstMonth()
+    mode.value = 'month'
+    month.value = m
+    week.value = weekStart(jstToday())
+    year.value = Number(m.slice(0, 4))
+    from.value = `${m}-01`
+    to.value = monthEnd(m)
+  }
+
+  /** Apply ?month= / ?year= / ?from=&to= from a link. Internal side only
+   *  (TASK-164 §2-2-1): the URL import must never raise the user flag —
+   *  fromQuery rides the apply* APIs, which also clear any standing one. */
   function fromQuery(q: Record<string, unknown>): void {
     const s = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
     const m = s(q.month)
     const w = s(q.week)
     const y = s(q.year)
-    if (m && /^\d{4}-\d{2}$/.test(m)) setMonth(m)
-    else if (w && /^\d{4}-\d{2}-\d{2}$/.test(w) && !Number.isNaN(Date.parse(w))) setWeek(w)
+    if (m && /^\d{4}-\d{2}$/.test(m)) applyMonth(m)
+    else if (w && /^\d{4}-\d{2}-\d{2}$/.test(w) && !Number.isNaN(Date.parse(w))) applyWeek(w)
     else if (y && /^\d{4}$/.test(y)) {
-      mode.value = 'year'
+      applyMode('year')
       year.value = Number(y)
     } else if (s(q.from) && s(q.to)) {
-      mode.value = 'range'
-      from.value = s(q.from)!
-      to.value = s(q.to)!
+      applyRange(s(q.from)!, s(q.to)!)
     }
   }
 
@@ -190,6 +283,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     from,
     to,
     labelColors,
+    labelDirty,
     labelQuery,
     setLabelColors,
     range,
@@ -200,9 +294,14 @@ export const usePeriodStore = defineStore('web-period', () => {
     trendQuery,
     urlQuery,
     canNext,
+    canPrev,
+    nextWrite,
     step,
     setMonth,
     setWeek,
+    setMode,
+    setRange,
+    resetToDefault,
     fromQuery,
   }
 })

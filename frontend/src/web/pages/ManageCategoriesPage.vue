@@ -484,7 +484,7 @@ watch(ledgerId, () => {
         </button>
         <button
           type="button"
-          class="link-btn"
+          class="link-btn hover-ink"
           data-test="show-archived"
           :aria-pressed="showArchived ? 'true' : 'false'"
           @click="showArchived = !showArchived"
@@ -521,39 +521,46 @@ watch(ledgerId, () => {
     >
       {{ loadError }}
     </p>
-    <div
-      v-if="addFor === 'top'"
-      class="add-row"
-    >
-      <input
-        v-model="addValue"
-        type="text"
-        aria-label="新しい大分類名"
-        @keydown.enter.prevent="submitAdd"
-        @keydown.esc.prevent="cancelAdd"
+    <!-- TASK-146 §3 #20: the inline state changes (the add row, the row
+         editors, the archived rows, the fold children) appear / vanish
+         through the ONE shared bb-appear grammar -->
+    <Transition name="bb-appear">
+      <div
+        v-if="addFor === 'top'"
+        class="add-row"
       >
-      <IconButton
-        icon="check"
-        label="作成"
-        variant="primary"
-        :disabled="busy || addValue.trim() === ''"
-        @click="submitAdd"
-      />
-      <IconButton
-        icon="close"
-        label="やめる"
-        :disabled="busy"
-        @click="cancelAdd"
-      />
-      <p
-        v-if="addStatus"
-        class="row-status"
-        :role="addStatus.role"
-      >
-        {{ addStatus.text }}
-      </p>
-    </div>
-    <ul
+        <input
+          v-model="addValue"
+          type="text"
+          aria-label="新しい大分類名"
+          @keydown.enter.prevent="submitAdd"
+          @keydown.esc.prevent="cancelAdd"
+        >
+        <IconButton
+          icon="check"
+          label="作成"
+          variant="primary"
+          :disabled="busy || addValue.trim() === ''"
+          @click="submitAdd"
+        />
+        <IconButton
+          icon="close"
+          label="やめる"
+          :disabled="busy"
+          @click="cancelAdd"
+        />
+        <p
+          v-if="addStatus"
+          class="row-status"
+          :role="addStatus.role"
+        >
+          {{ addStatus.text }}
+        </p>
+      </div>
+    </Transition>
+    <TransitionGroup
+      name="bb-appear"
+      tag="ul"
       class="rows"
       data-test="categories"
     >
@@ -610,48 +617,50 @@ watch(ledgerId, () => {
             @select="(a) => onRootMenu(root, a)"
           />
         </div>
-        <div
-          v-if="isEditing(root.id)"
-          class="row-editor"
-        >
-          <input
-            v-model="editor!.name"
-            type="text"
-            aria-label="新しい名前"
-            @keydown.enter.prevent="saveEditor"
-            @keydown.esc.prevent="cancelEditor"
+        <Transition name="bb-appear">
+          <div
+            v-if="isEditing(root.id)"
+            class="row-editor"
           >
-          <select
-            v-model="editor!.parent"
-            aria-label="移動先"
-            @keydown.enter.prevent="saveEditor"
-            @keydown.esc.prevent="cancelEditor"
-          >
-            <option value="">
-              大分類にする
-            </option>
-            <option
-              v-for="t in moveTargets(root.id)"
-              :key="t"
-              :value="t"
+            <input
+              v-model="editor!.name"
+              type="text"
+              aria-label="新しい名前"
+              @keydown.enter.prevent="saveEditor"
+              @keydown.esc.prevent="cancelEditor"
             >
-              {{ t }} の下へ
-            </option>
-          </select>
-          <IconButton
-            icon="check"
-            label="保存"
-            variant="primary"
-            :disabled="busy"
-            @click="saveEditor"
-          />
-          <IconButton
-            icon="close"
-            label="やめる"
-            :disabled="busy"
-            @click="cancelEditor"
-          />
-        </div>
+            <select
+              v-model="editor!.parent"
+              aria-label="移動先"
+              @keydown.enter.prevent="saveEditor"
+              @keydown.esc.prevent="cancelEditor"
+            >
+              <option value="">
+                大分類にする
+              </option>
+              <option
+                v-for="t in moveTargets(root.id)"
+                :key="t"
+                :value="t"
+              >
+                {{ t }} の下へ
+              </option>
+            </select>
+            <IconButton
+              icon="check"
+              label="保存"
+              variant="primary"
+              :disabled="busy"
+              @click="saveEditor"
+            />
+            <IconButton
+              icon="close"
+              label="やめる"
+              :disabled="busy"
+              @click="cancelEditor"
+            />
+          </div>
+        </Transition>
         <p
           v-if="statusOf(root.id)"
           class="row-status"
@@ -659,117 +668,121 @@ watch(ledgerId, () => {
         >
           {{ statusOf(root.id)!.text }}
         </p>
-        <ul
-          v-if="!foldedIds.includes(root.id)"
-          :id="`cat-children-${root.id}`"
-          class="cat-children"
-        >
-          <li
-            v-for="child in root.children"
-            :key="child.id"
-            class="row"
-            :data-test="`cat-${child.id}`"
+        <Transition name="bb-appear">
+          <ul
+            v-if="!foldedIds.includes(root.id)"
+            :id="`cat-children-${root.id}`"
+            class="cat-children"
           >
-            <div class="row-main">
-              <span data-test="cat-name">{{ child.name }}</span>
-              <span
-                v-if="child.archived"
-                class="badge"
-              >アーカイブ済み</span>
-            </div>
-            <div
-              v-if="isEditing(child.id)"
-              class="row-editor"
+            <li
+              v-for="child in root.children"
+              :key="child.id"
+              class="row"
+              :data-test="`cat-${child.id}`"
+            >
+              <div class="row-main">
+                <span data-test="cat-name">{{ child.name }}</span>
+                <span
+                  v-if="child.archived"
+                  class="badge"
+                >アーカイブ済み</span>
+              </div>
+              <Transition name="bb-appear">
+                <div
+                  v-if="isEditing(child.id)"
+                  class="row-editor"
+                >
+                  <input
+                    v-model="editor!.name"
+                    type="text"
+                    aria-label="新しい名前"
+                    @keydown.enter.prevent="saveEditor"
+                    @keydown.esc.prevent="cancelEditor"
+                  >
+                  <select
+                    v-model="editor!.parent"
+                    aria-label="移動先"
+                    @keydown.enter.prevent="saveEditor"
+                    @keydown.esc.prevent="cancelEditor"
+                  >
+                    <option value="">
+                      大分類にする
+                    </option>
+                    <option
+                      v-for="t in moveTargets(child.id)"
+                      :key="t"
+                      :value="t"
+                    >
+                      {{ t }} の下へ
+                    </option>
+                  </select>
+                  <IconButton
+                    icon="check"
+                    label="保存"
+                    variant="primary"
+                    :disabled="busy"
+                    @click="saveEditor"
+                  />
+                  <IconButton
+                    icon="close"
+                    label="やめる"
+                    :disabled="busy"
+                    @click="cancelEditor"
+                  />
+                </div>
+              </Transition>
+              <RowMenu
+                v-if="!isEditing(child.id)"
+                :items="childMenuItems(child)"
+                :ariaLabel="`${child.name}の操作`"
+                :test="`row-menu-${child.id}`"
+                :disabled="!canEdit"
+                @select="(a) => onChildMenu(root, child, a)"
+              />
+              <p
+                v-if="statusOf(child.id)"
+                class="row-status"
+                :role="statusOf(child.id)!.role"
+              >
+                {{ statusOf(child.id)!.text }}
+              </p>
+            </li>
+            <li
+              v-if="addFor === root.id"
+              class="row add-row"
             >
               <input
-                v-model="editor!.name"
+                v-model="addValue"
                 type="text"
-                aria-label="新しい名前"
-                @keydown.enter.prevent="saveEditor"
-                @keydown.esc.prevent="cancelEditor"
+                aria-label="新しい小分類名"
+                @keydown.enter.prevent="submitAdd"
+                @keydown.esc.prevent="cancelAdd"
               >
-              <select
-                v-model="editor!.parent"
-                aria-label="移動先"
-                @keydown.enter.prevent="saveEditor"
-                @keydown.esc.prevent="cancelEditor"
-              >
-                <option value="">
-                  大分類にする
-                </option>
-                <option
-                  v-for="t in moveTargets(child.id)"
-                  :key="t"
-                  :value="t"
-                >
-                  {{ t }} の下へ
-                </option>
-              </select>
               <IconButton
                 icon="check"
-                label="保存"
+                label="作成"
                 variant="primary"
-                :disabled="busy"
-                @click="saveEditor"
+                :disabled="busy || addValue.trim() === ''"
+                @click="submitAdd"
               />
               <IconButton
                 icon="close"
                 label="やめる"
                 :disabled="busy"
-                @click="cancelEditor"
+                @click="cancelAdd"
               />
-            </div>
-            <RowMenu
-              v-else
-              :items="childMenuItems(child)"
-              :ariaLabel="`${child.name}の操作`"
-              :test="`row-menu-${child.id}`"
-              :disabled="!canEdit"
-              @select="(a) => onChildMenu(root, child, a)"
-            />
-            <p
-              v-if="statusOf(child.id)"
-              class="row-status"
-              :role="statusOf(child.id)!.role"
-            >
-              {{ statusOf(child.id)!.text }}
-            </p>
-          </li>
-          <li
-            v-if="addFor === root.id"
-            class="row add-row"
-          >
-            <input
-              v-model="addValue"
-              type="text"
-              aria-label="新しい小分類名"
-              @keydown.enter.prevent="submitAdd"
-              @keydown.esc.prevent="cancelAdd"
-            >
-            <IconButton
-              icon="check"
-              label="作成"
-              variant="primary"
-              :disabled="busy || addValue.trim() === ''"
-              @click="submitAdd"
-            />
-            <IconButton
-              icon="close"
-              label="やめる"
-              :disabled="busy"
-              @click="cancelAdd"
-            />
-            <p
-              v-if="addStatus"
-              class="row-status"
-              :role="addStatus.role"
-            >
-              {{ addStatus.text }}
-            </p>
-          </li>
-        </ul>
+              <p
+                v-if="addStatus"
+                class="row-status"
+                :role="addStatus.role"
+              >
+                {{ addStatus.text }}
+              </p>
+            </li>
+          </ul>
+        </Transition>
       </li>
-    </ul>
+    </TransitionGroup>
     <p class="muted small">
       カテゴリは削除できません。使わないものはアーカイブすると一覧や候補に出なくなります。
     </p>

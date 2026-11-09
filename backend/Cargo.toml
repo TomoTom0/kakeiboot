@@ -12,6 +12,11 @@ path = "src/lib.rs"
 name = "budget-book"
 path = "src/main.rs"
 
+[features]
+# Test-only injection points (backend/src/test_hooks.rs, TASK-147). Never
+# enabled for release builds; mise backend:test / backend:lint turn it on.
+test-hooks = []
+
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"

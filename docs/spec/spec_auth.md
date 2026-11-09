@@ -21,7 +21,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 | MCP canonical URI（resource） | `https://<host>/mcp`（末尾スラッシュなし） |
 | WebAuthn RP ID / origin | `<host>` / `https://<host>` |
 | frontend 配信 | backend が Vite build 成果物を同一 origin で配信。開発時は Vite dev server の proxy で同一 origin に見せる |
-| MCP クライアント | 初版は ChatGPT のみ（CIMD の client_id host を `chatgpt.com` に限定） |
+| MCP クライアント | ChatGPT・Claude（CIMD の client_id host を `chatgpt.com`・`claude.ai` に限定。Claude は TASK-149 で追加） |
 
 - 同一 origin 前提により cookie は `__Host-` prefix・`SameSite=Lax` とし、CORS は一切設定しない。
 - サーバーが保持する秘密鍵・共有 secret は初版に存在しない（opaque token + hash 保存、WebAuthn は公開鍵のみ保存、署名付き token を発行しない）。
@@ -78,8 +78,8 @@ FROM users u JOIN webauthn_credentials c ON c.user_id = u.id
 WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ```
 
-- その後 `finish_discoverable_authentication` を行い、`update_credential` が Some なら `passkey_json` を更新し、`last_used_at` を更新する。
-- sign counter の逆行（保存値 > 0 かつ受信値 <= 保存値）は webauthn-rs の拒否に従いログイン失敗とし、audit に `counter_regression`（credential id 付き）を記録する。credential の自動無効化はしない。counter 逆行以外の検証失敗（署名不正・origin 不一致等）も同じ 401 とし、audit には `login_failed`（error 文言を after_json に含む）を記録する。
+- credential_id による user 解決以降（user 解決 SQL、当該 user の `passkey_json` 読み込み、`finish_discoverable_authentication`、`update_credential` が Some なら `passkey_json` 更新、`last_used_at` 更新、既存 session cookie の失効、session 発行、audit）は 1 つの `BEGIN IMMEDIATE` で行う。counter 検証は write lock の下で読んだ最新の保存値を基準とし、同一 credential の並行ログインでも保存 counter は単調増加し（巻き戻らない）、同一または逆行した counter の assertion は後から write lock を得た側が `counter_regression` で拒否される。検証失敗・mismatch の audit も同じ tx に書き、COMMIT した後に 401 を返す（COMMIT 自体が失敗した場合は 500）。ceremony の取得・削除と `identify_discoverable_authentication` は tx の前に行う（identify 失敗の `login_mismatch` audit は tx の外で記録する）。tx 内では別の DB 接続を取得しない。user の無効化（運用者 CLI `user disable`）は無効化と同じ tx で既存 session を失効させるため、無効化の直前に完了したログインの session も失効する。
+- sign counter の逆行（保存値 > 0 かつ受信値 <= 保存値）は webauthn-rs の拒否に従いログイン失敗とし、audit に `counter_regression`（credential id 付き）を記録する。credential の自動無効化はしない。counter 逆行以外の検証失敗（署名不正・origin 不一致等）も同じ 401 とし、audit には `login_failed`（error 文言を after_json に含む）を記録する。複数タブ等で counter を持つ authenticator の assertion が生成順と逆に到着した場合も同じ規則で後から write lock を得た側を拒否する（利用者は再試行する）。counter が 0 固定の authenticator（同期パスキー）は counter 検査の対象外で、並行ログインはいずれも成功する。
 - backup eligible / backup state の変化は拒否せず `passkey_json` を更新し、一覧で「同期済み / 端末内」を表示するのみ。
 - ログイン成功のたびに新しい session 行を発行する。リクエストに既存の session cookie があれば、その行は user に関わらず失効させる。
 - OAuth の途中でログインした場合、ログイン開始時に frontend が URL の `req`（authorization request ID）を送り、backend は hash して存在確認のうえ `webauthn_ceremonies.authz_request_hash` に保存する。完了時は `{next: "consent"}` だけを返し、frontend は保持している平文 `req` で `/oauth/consent?req=<R>` へ遷移する（任意 URL への遷移経路を持たない）。
@@ -93,8 +93,11 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 2-6 step-up 再認証
 
 - 対象操作: パスキーの削除のみ（TASK-46 で追加・発行系からは外れた。条件は直近 10分以内のパスキー認証 `web_sessions.auth_at`）。
-- 満たさない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
+- 満たない場合は 401 `{"error":"reauth_required"}` を返し、frontend が modal のパスキー認証を行ってから再送する。
 - step-up は非 discoverable 認証（`start_passkey_authentication(当該 user の credential 全件)`）とし、他 user のパスキーで step-up できないようにする。成功時は同じ session 行の `auth_at` を更新する。
+- finish では、ceremony の取得・削除・user 一致検査と `finish_passkey_authentication`（開始時 snapshot による署名検証）を transaction の外で行い、それ以降（credential の所有確認、当該 user の `passkey_json` 読み込み、sign counter の再判定、`update_credential` が Some なら `passkey_json` 更新、`last_used_at` 更新、`auth_at` 更新）は 1 つの `BEGIN IMMEDIATE` で行う。tx 内では別の DB 接続を取得しない。`auth_at` 更新の影響行数が 0（tx 取得後に session が削除された）なら credential 更新もろとも rollback して 401 を返す。ceremony の消費は原子（1回限り。並行する同一 ceremony への再提出は2回目以降が受理されない）。
+- counter 検証は write lock の下で読んだ最新の保存値を基準とする（`(受信値 > 0 または 保存値 > 0)` かつ `受信値 <= 保存値` なら拒否）。ceremony TTL 内に別の login・step-up で保存 counter が進んだ場合、開始時 snapshot の基準を満たす assertion でも後から write lock を得た時点の保存値に対して逆行していれば `counter_regression` として 401 を返す（§10-5 の WARN 粒度）。これにより同一 credential の並行 login・step-up で保存 counter が巻き戻らず、遅延到着した step-up assertion は再生できない。counter が 0 固定の authenticator は検査対象外で、並行でも誤拒否しない。
+- step-up 失敗時の log は WARN のみで audit_events への挿入は行わない（§10-5 の「audit_events 挿入に併記」の例外。失敗は利用者側の再試行で回復する一時的な状態のため）。
 
 ### 2-7 パスキー管理
 
@@ -217,11 +220,12 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 4-3 クライアント登録（CIMD）
 
 - クライアント登録は CIMD（Client ID Metadata Document）のみ。client_id は HTTPS URL。
-- client_id URL の静的検証（取得前）: `https` スキーム、host が `oauth.cimd_allowed_hosts`（初期値 `["chatgpt.com"]`）と完全一致（サブドメイン不可）、port なし、userinfo なし、fragment なし、query なし、path が `/` 以外、path に dot segment（`.` / `..`、`%2e` 表記を含む）や `//` を含まない、長さ 512 以下。`url` crate でパースして再シリアライズした結果が入力と完全一致しないものも拒否する。
+- client_id URL の静的検証（取得前）: `https` スキーム、host が `oauth.cimd_allowed_hosts`（値 `["chatgpt.com", "claude.ai"]`）と完全一致（サブドメイン不可）、port なし、userinfo なし、fragment なし、query なし、path が `/` 以外、path に dot segment（`.` / `..`、`%2e` 表記を含む）や `//` を含まない、長さ 512 以下。`url` crate でパースして再シリアライズした結果が入力と完全一致しないものも拒否する。却下時は 400 エラー画面とともに、parse できた host と静的検証の拒否理由だけを warn log に記録する（client_id 全体は未検証値なので 10-2 の規則により log しない。allowlist 外 host が現れたときの唯一の情報源）。
+- Claude（claude.ai）の client_id URL の正確な path は接続完了後に `oauth_clients.client_id` で記録して確定する（host の完全一致のみで受理するため、path は設定に不要）。
 - 取得（`net::safe_fetch`。JWKS 取得と共通）: rustls、redirect 非追従（3xx は失敗）、connect 3秒・全体 5秒 timeout、body 上限 64KiB（streaming で打ち切り）、`Accept: application/json`、`If-None-Match` による条件付き取得。名前解決結果が private / loopback / link-local / CGNAT / ULA なら接続しない。
 - 文書検証: `client_id` が URL と完全一致、`client_name` と `redirect_uris`（非空配列）が存在、全 `redirect_uris` が https、`token_endpoint_auth_method` が `none` / `private_key_jwt`（未指定は none）、`private_key_jwt` なら `jwks_uri`（host は allowlist）か `jwks` を持つ、`client_secret*` 系は拒否。
 - キャッシュ（`oauth_clients`）: `expires_at = fetched_at + clamp(Cache-Control max-age, 5分, 24時間)`（max-age なし・no-store は 5分）。期限切れで取得失敗した場合、期限から 24時間までは旧文書を使う（stale-if-error）。超過後は `invalid_client`（authorize ではエラー画面）。取得契機は `/oauth/authorize`・`/oauth/token`・`/oauth/revoke` で期限切れのとき。
-- redirect URI: 要求の `redirect_uri` が CIMD 文書の `redirect_uris` と完全一致し、かつ `oauth.redirect_uri_allowlist`（初期値 `["https://chatgpt.com/connector_platform_oauth_redirect"]`）と完全一致すること。
+- redirect URI: 要求の `redirect_uri` が CIMD 文書の `redirect_uris` と完全一致し、かつ `oauth.redirect_uri_allowlist`（値 `["https://chatgpt.com/connector_platform_oauth_redirect", "https://claude.ai/api/mcp/auth_callback"]`）と完全一致すること。claude.ai 側は hosted Claude（web・desktop・モバイル）の固定 callback。
 
 ### 4-4 client 認証（token / revoke）
 
@@ -245,7 +249,7 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 ### 4-6 同意
 
 - 同意画面は毎回表示する（既存 grant があっても省略しない）。
-- 表示: client 名は allowlist 済み host から決めた固定名（「ChatGPT」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名とその表示色の chip（6-1 の初期値。接続後に ChatGPT から切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
+- 表示: client 名は allowlist 済み host から決めた固定名（`chatgpt.com` →「ChatGPT」、`claude.ai` →「Claude」）と client_id URL を併記（CIMD の `client_name` は主表示にしない）、要求 scope の日本語説明、最初の接続先 ledger 名とその表示色の chip（6-1 の初期値。接続後に接続したアプリから切り替えられる旨を併記）、ログイン中のユーザー表示名、「許可」「拒否」。
 - 同意 POST（allow）では authorization request を削除し、認可コード行（user_id・client_id・redirect_uri・code_challenge・scope・resource、`grant_id` は NULL）だけを作る。grant は作らない。
 - 同意画面・ログイン画面には `Content-Security-Policy: frame-ancestors 'none'` と `X-Frame-Options: DENY` を付ける。
 
@@ -286,18 +290,26 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 
 refresh（`grant_type=refresh_token`）: client 認証と jti 登録を tx 前に完了させ、`BEGIN IMMEDIATE` で `spec_data-model.md` §14 の手順 1〜4 を行う。
 
-1. 要求に `resource` がある場合のみ `g.resource` と完全一致を検査し、省略時は `g.resource` とみなす。token 行なし・token / grant の失効・期限切れ・`disabled_at` 非 NULL・resource 不一致は ROLLBACK して `invalid_grant`。`g.client_id` と認証済み client の不一致は grant を失効させ COMMIT してから `invalid_grant`。
+1. 判定順は次のとおり: token 行なし・token の期限切れ（失効済みでない行）・grant の失効・grant の絶対期限切れ・`disabled_at` 非 NULL → resource 不一致 → client 不一致 → token の失効（reuse） → scope。
+   - 要求に `resource` がある場合のみ `g.resource` と完全一致を検査し、省略時は `g.resource` とみなす。
+   - token 行なし・token の期限切れ（失効済みでない行）・grant の失効・grant の絶対期限切れ・`disabled_at` 非 NULL・resource 不一致は ROLLBACK して `invalid_grant`。
+   - `g.client_id` と認証済み client の不一致は grant を `client_mismatch` で失効させ COMMIT してから `invalid_grant`。
+   - token 行が失効済み（`revoked_at` 非 NULL。手順3で差し替えられた旧の子）は盗用とみなし、grant を `revoked_reason='refresh_reuse'` で失効させ、COMMIT してから `invalid_grant`。失効済みの判定は期限切れより先に行い、grant が有効なら期限切れの旧の子もこの扱いとする。
+   - 失効済みの旧の子を期限後も検知できるよう、TTL 掃除は grant が有効（未失効かつ絶対期限内）な間は失効済みの refresh 行を削除しない（`spec_data-model.md` §12）。
+   - token 行・grant・user の読み取りに失敗した場合は拒否する（fail closed）。失効 UPDATE が失敗した場合は ROLLBACK して `server_error`（500）とし、失効していない拒否を COMMIT しない。
 2. `used_at IS NULL`: 子 refresh と access を発行し、`used_at` と `child_hash` を設定。
-3. `used_at` から60秒以内かつ現行の子が未使用・未失効: 旧の子と対の access を失効させ、新しい子を発行して `child_hash` を差し替える。
+3. `used_at` から60秒以内かつ現行の子が未使用・未失効: 旧の子の refresh 行と、その子と対の access をともに失効させ、新しい子を発行して `child_hash` を差し替える（`used_at` は更新しない）。生きている子は常に1本。差し替えた旧の子が後から提示されたら手順1で family を失効させる（応答を受け取れずに再送した正規 client は旧の子を持たないため、検知に掛からない）。現行の子が使用済みなら手順4と同じく grant を `refresh_reuse` で失効させる。
 4. それ以外: grant を `revoked_reason='refresh_reuse'` で失効させ、COMMIT してから `invalid_grant`。
 
 rotation では grant が変わらないので、選択中 ledger（`active_ledger_id`）は維持される。
 
+`refresh_reuse` による失効は WARN ログに判別用の `kind`（`grace_exceeded`: 手順4の猶予超過 / `child_used`: 手順3で現行の子が使用済み / `superseded_child`: 手順1の差し替え済み旧の子）と `grant_id`・`client_id` を出す。token・token hash・client assertion は出さない（10-2）。
+
 ### 4-10 不正検知時の失効規則
 
-不正を検知して失効させてからエラーを返す処理（code 再提示 → `code_reuse`、refresh の猶予超過再利用 → `refresh_reuse`、refresh の client 不一致 → grant 失効）は、`BEGIN IMMEDIATE` 内で失効 UPDATE を行い、**COMMIT した後に** OAuth エラー応答を返す。
+不正を検知して失効させてからエラーを返す処理（code 再提示 → `code_reuse`、refresh の猶予超過再利用・使用済みの子を持つ親の再提示・差し替え済みの旧の子の提示 → `refresh_reuse`、refresh の client 不一致 → grant 失効）は、`BEGIN IMMEDIATE` 内で失効 UPDATE を行い、**COMMIT した後に** OAuth エラー応答を返す。
 
-- エラーを `?` で早期 return すると tx の drop で ROLLBACK され失効が消えるため、token 処理は `Outcome::{Issued(..), RejectedAfterRevocation(reason), Rejected(reason)}` のような列挙で返し、`RejectedAfterRevocation` は commit してから `invalid_grant` に変換する。
+- エラーを `?` で早期 return すると tx の drop で ROLLBACK され失効が消えるため、token 処理は `Outcome::{Issued(..), RejectedAfterCommit(reason), Rejected(reason)}` のような列挙で返し、`RejectedAfterCommit` は commit してから `invalid_grant` に変換する。
 - テストでは「エラー応答後に grant が失効していること」を必ず確認する。
 
 ### 4-11 取り消し
@@ -326,7 +338,7 @@ rotation では grant が変わらないので、選択中 ledger（`active_ledg
 | 選択中 ledger が未選択・所属外 | HTTP エラーにしない（`AuthContext.ledger = None` で通し、tool が isError で選び直しを促す） |
 | scope 不足（tool 呼び出し時） | HTTP 200、`CallToolResult { is_error: true, _meta: {"mcp/www_authenticate": ["Bearer error=\"insufficient_scope\", scope=\"ledger.write\", resource_metadata=\"...\""]}}` |
 
-- HTTP 403 + `insufficient_scope` は使わない（ChatGPT の再認証 UI につながるのは tool 結果の `_meta["mcp/www_authenticate"]`）。
+- HTTP 403 + `insufficient_scope` は使わない。ChatGPT の再認証 UI につながるのは tool 結果の `_meta["mcp/www_authenticate"]`。Claude は 403 + `WWW-Authenticate: Bearer error="insufficient_scope"` で step-up 再認可をする（200 応答の challenge は無視する）が、Claude は 401 challenge の `scope`（なければ AS metadata / PRM の `scopes_supported`）を丸ごと要求するため、**Claude が両 scope を要求する限り**本 AS では scope 不足が到達不能（TASK-149 D5。実際の要求・付与 scope は §12 #23 で確認する）。実装は非空の要求 scope を補充せずそのまま採用する（4-8）ため、仮に Claude の要求が一部 scope のみだった場合は grant の scope がそれに限られ、書き込み tool が scope 不足になりうる。その場合も tool 結果の日本語文がモデル経由で伝わるため 403 経路の利益がない。403 を返すには tool 実行（HTTP 200 の JSON-RPC 処理中）の枠組み変更を要する。scope を利用者が絞れる client が出たら再検討する。
 - `tools/list` は read / write のどちらかの scope があれば返す。
 - 各 tool の `_meta.securitySchemes` は `[{"type":"oauth2","scopes":["ledger.read"]}]`（書き込み tool は `["ledger.write"]`）。HTTP レベルの認証と一致させるミラーとして付ける。
 
@@ -513,13 +525,14 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin passkey list <user_id>` | パスキー一覧（id、label、作成・最終使用日時、backup state） |
 | `admin passkey revoke <user_id> <passkey_id \| --all>` | パスキー失効（行削除）。最後の1本も削除可 |
 | `admin grant list <user_id>` / `grant revoke <grant_id \| --all-of <user_id>>` | grant 一覧（client、scope、選択中 ledger、作成・最終利用日時）と失効（`revoked_reason='admin'`） |
+| `admin grant concurrent-families [--user <user_id \| アカウント番号>]` | 並存 refresh family の照会（read-only）。同一 grant に参照される未使用・未失効の tip（先端）が 2 本以上ある grant を、grant 行（user・client・失効/期限状態・tip 数）+ tip 行（hash 8 hex・参照元親 hash・発行/期限）で表示。省略 `--user` で全 user 横断。期限切れ tip も数え、失効済み grant も状態付きで出す。tip が残っていても参照元親行が掃除済みだと検出不能（0 件は現在の並存不存在を保証しない） |
 | `admin session list <user_id>` / `session revoke <session_id \| --all-of <user_id>>` | web session 一覧（作成・最終利用日時、User-Agent。hash の先頭 8 hex で識別）と失効 |
 | `admin token issue --kind setup --note <誰に渡したか> [--ttl <dur>]` | setup URL 発行（既定 TTL 24時間、`--note` 必須） |
 | `admin token issue --kind recovery --user <user_id> [--ttl <dur>]` | パスキー再登録 URL 発行（既定 TTL 1時間、上限24時間）。同 user の未使用 recovery token を行削除してから発行 |
 | `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。invite / register の発行は web のみ（CLI では不可） |
 | `admin recovery list [--status open]` / `recovery show <R-番号>` | 回復依頼の一覧・詳細（受付日時、note、候補 user のアカウント番号・表示名・admin_note・系譜・候補の根拠と subject の first / last seen）。一覧の先頭に全体上限の超過件数を表示 |
 | `admin recovery resolve <R-番号> --user <user_id>` / `recovery reject <R-番号> [--reason]` | 帯域外の本人確認後に再登録 URL を発行して解決（`token issue --kind recovery` と同じ処理・確認）／却下 |
-| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/deploy.md`）と script（`scripts/backup/`）から利用 |
+| `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/ops/ops_deploy.md`）と script（`scripts/backup/`）から利用 |
 
 確認規則（取り違え・誤操作防止）:
 
@@ -593,7 +606,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 |---|---|---|
 | INFO | 全 HTTP リクエスト（middleware） | `method`・`path`（query は秘密を載せうるため一切記録しない）・`status`・`latency_ms`。`/media/img/<token>` は 10-2 のとおり `<redacted>` に置換。`latency_ms` は応答開始までの時間 |
 | ERROR | 5xx を返したリクエスト（middleware） | 上と同じ項目を ERROR で 1 行。handler 内部のエラー詳細は従来どおり箇所ごとの error ログが担う |
-| WARN | 認証失敗（login / step-up） | audit action と同じ粒度（`login_mismatch` / `login_failed` / `counter_regression` / `reauth_failed` / `reauth_mismatch`）+ `credential_id_hash_prefix` 等の audit 同等のマスク済み詳細。audit_events 挿入に併記 |
+| WARN | 認証失敗（login / step-up） | audit action と同じ粒度（`login_mismatch` / `login_failed` / `counter_regression` / `reauth_failed` / `reauth_mismatch`）+ `credential_id_hash_prefix` 等の audit 同等のマスク済み詳細。audit_events 挿入に併記。ただし step-up の失敗は例外で WARN のみとし、audit_events へは挿入しない（2-6。再試行で回復する一時的な状態のため） |
 | WARN | token 受理の失敗（register/info 等） | endpoint・粗い理由（`parse_failed` / `unknown_token` / `expired_or_used` / `invalid_token`）・`token_hash_prefix`（token 平文は出さない） |
 | WARN | rate limit 発火（429） | limit 種別（`webauthn` / `token_accept` / `authorize` / `token_endpoint` / `mcp` / `mcp_unauthenticated` / `media` 等 10-1 の分類）・key（IP または `user:<id>` / `client:<client_id>`）・`retry_after_secs` |
 | WARN | 画像取得の失敗 | 理由（`fetch_failed` / `too_large` / `decode_failed` / `fetch_timeout`）・所要時間 |
@@ -644,9 +657,9 @@ sequenceDiagram
   U->>B: POST /api/webauthn/login/finish {credential}
   B->>D: ceremony 取得・削除
   B->>B: identify_discoverable_authentication → (uuid, cred_id)
-  B->>D: users JOIN webauthn_credentials（handle・credential_id・disabled_at。不一致は 401）
-  B->>B: finish_discoverable_authentication
-  B->>D: passkey_json / last_used_at 更新、既存 session cookie の行を失効、web_sessions INSERT、audit
+  B->>D: BEGIN IMMEDIATE: users JOIN webauthn_credentials（不一致は audit を COMMIT して 401）/ passkey_json 読込
+  B->>B: finish_discoverable_authentication（失敗は audit を COMMIT して 401）
+  B->>D: passkey_json / last_used_at 更新、既存 session cookie の行を失効、web_sessions INSERT、audit、COMMIT
   B-->>U: 200 {next} + Set-Cookie __Host-bb_session
 ```
 
@@ -709,12 +722,13 @@ sequenceDiagram
   C->>B: POST /oauth/token grant_type=refresh_token, refresh_token, (resource), (scope), client 認証
   B->>B: client 認証・jti（tx 前）
   B->>B: BEGIN IMMEDIATE
-  B->>B: 手順1: 行なし・失効・期限切れ・disabled・resource 不一致 → ROLLBACK、invalid_grant
+  B->>B: 手順1: 行なし・期限切れ（失効済みでない行）・grant 失効・grant 絶対期限・disabled → resource 不一致 → ROLLBACK、invalid_grant
   B->>B: client 不一致 → grant 失効を COMMIT してから invalid_grant
+  B->>B: 失効済みの旧の子 → grant 失効（refresh_reuse）、COMMIT してから invalid_grant
   alt used_at IS NULL（手順2）
     B->>B: 子 refresh・access 発行、used_at・child_hash 設定
   else 60秒以内かつ現行の子が未使用・未失効（手順3）
-    B->>B: 旧の子と対の access を失効、新しい子を発行、child_hash 差し替え
+    B->>B: 旧の子とその対の access を失効、新しい子を発行、child_hash 差し替え
   else それ以外（手順4）
     B->>B: grant 失効（refresh_reuse）、COMMIT してから invalid_grant
   end
@@ -750,7 +764,7 @@ sequenceDiagram
 
 ## 12. 実装時の注意: TASK-7 で実機確認が必要な前提
 
-以下は本書が前提としている ChatGPT・ブラウザ・rmcp の挙動で、実機（TASK-7）で確認するまで確定しない。結果によって仕様を変更する。tool・widget に関する前提は `spec_mcp-tools.md` §14。
+以下は本書が前提としている ChatGPT・Claude・ブラウザ・rmcp の挙動で、実機（TASK-7、Claude 分は TASK-149 の stg 接続確認）で確認するまで確定しない。結果によって仕様を変更する。tool・widget に関する前提は `spec_mcp-tools.md` §14。
 
 | # | 優先度 | 前提 | 成り立たない場合の変更先 |
 |---|---|---|---|
@@ -772,6 +786,11 @@ sequenceDiagram
 | 16 | P1 | `openai/subject` が tools/call の `_meta` に毎回付き、アプリごとに異なり、端末・再接続をまたいで安定し、推測不能な形式である | 7-4 の有効性、hash 方式（HMAC へ切替） |
 | 17 | P1 | 接続切れ（Authorization ヘッダなし）の状態で ChatGPT が noauth の `request_recovery` を呼べる（`tools/list` が 401 でも tool が使え、401 で再認証 UI に入ってしまわない） | 5-2 の実装ゲート。匿名 `tools/list` の追加、web フォームへの移行等を再検討 |
 | 18 | P2 | `whoami` のアカウント番号がモデルの応答で正確に伝わる | 7-1 の表示形式 |
+| 19 | P0 | Claude の client_id URL（claude.ai host の CIMD）が 4-3 の静的検証をとおり、`token_endpoint_auth_method: none`・redirect URI が固定 callback で届く。正確な client_id URL は接続後に `oauth_clients` キャッシュで記録して確定する | allowlist の値、4-4 |
+| 20 | P0 | Claude が送る `resource` の正確な値（末尾スラッシュ等）が canonical URI と完全一致する。同意画面が開いている間に `oauth_authorization_requests` 行または authorize URL の `resource` パラメータで記録する | resource 比較（緩和ではなく設定・PRM 値の整合） |
+| 21 | P1 | Claude の同意画面が 4-6 のとおり（表示名「Claude」・client_id URL・scope 説明・初期 ledger）表示され、許可 → token 交換 → 会話での tool 呼び出し・画像を貼った画像なし draft が動く | 4-6 表示、`spec_mcp-tools.md` §7 の description 案内 |
+| 22 | P1 | Claude の web とスマホアプリの両方で connector が使える（アプリ内ブラウザでパスキー login が通る。widget 領域が空白・読み込み中でも会話内承認に支障がない） | usage の接続手順、widget adapter（TASK-150） |
+| 23 | P1 | Claude の実際の要求 scope と付与 scope（接続後に DB `oauth_grants.scope`・grants 一覧の scope 表示）を記録し、5-1 の前提（Claude が両 scope を要求する）を確認する | 5-1（scope 不足の伝え方・403 経路の再検討） |
 
 単体テストで確認する事項（実機不要）: `resident_key` 上書き後も `finish_passkey_registration` が通ること、sign counter 逆行の拒否、PKCE・assertion 検証、rotation 4 分岐、code 再利用、superseded、不正検知時の失効が COMMIT されること、CIMD 検証（不正 URL 群）、safe_fetch（redirect / size / private IP）、Origin 検証、Bearer 失敗応答のヘッダ形式、`AuthContext` が tool handler まで届くこと（tower 経由の結合テスト）。
 

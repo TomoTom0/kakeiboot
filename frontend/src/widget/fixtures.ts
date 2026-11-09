@@ -1,4 +1,4 @@
-// Sample structuredContent / _meta shaped after docs/spec_mcp-tools.md §7 and §10.
+// Sample structuredContent / _meta shaped after docs/spec/spec_mcp-tools.md §7 and §10.
 // Used by the development mock host and by unit tests (not by the production widget).
 import type {
   DraftBatchEnvelope,

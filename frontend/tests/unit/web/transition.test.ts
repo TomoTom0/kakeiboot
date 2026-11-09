@@ -10,11 +10,32 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
-import type { NavigationFailure, RouteLocationNormalized } from 'vue-router'
-import { direction, pendingRestore, setNavIntent, updateDirection } from '@/web/composables/navDirection'
+import { createMemoryHistory, type NavigationFailure, type RouteLocationNormalized, type Router } from 'vue-router'
+import { createPinia } from 'pinia'
+import { direction, navKind, pendingRestore, setNavIntent, updateDirection } from '@/web/composables/navDirection'
 import { markReady, notifyPageEntered, resetPageReady } from '@/web/composables/usePageReady'
+import { createAppRouter } from '@/web/router'
 import { useSessionStore } from '@/web/stores/session'
 import { cleanup, ME, mockFetch, mountApp, scrollMocks, setReducedMotion, settle } from './helpers'
+
+/** router.resolve() answers the RESOLVED variant whose name is nullable;
+ * scrollBehavior expects the normalized shape (a non-null name among the
+ * differences). Narrow the name with a guard — no `as` cast. */
+function normalizedRoute(router: Router, path: string): RouteLocationNormalized {
+  const r = router.resolve(path)
+  if (r.name === null) throw new Error(`normalizedRoute: no route matches ${path}`)
+  return { ...r, name: r.name }
+}
+
+/** Drive the app router's scrollBehavior the way a pop does: memory history
+ * never delivers a savedPosition, so a pop's park is exercised by calling the
+ * router's own scrollBehavior with a fabricated one (the TASK-74 recipe;
+ * TASK-164 §2-2-2 keeps scrollBehavior the only issuer of reservations). */
+async function popSaved(router: Router, toPath: string, fromPath: string, top: number): Promise<unknown> {
+  const sb = router.options.scrollBehavior
+  if (!sb) throw new Error('the app router has no scrollBehavior')
+  return sb(normalizedRoute(router, toPath), normalizedRoute(router, fromPath), { left: 0, top })
+}
 
 const src = (...p: string[]) => readFileSync(resolve(process.cwd(), 'src/web', ...p), 'utf8')
 
@@ -71,11 +92,16 @@ describe('atomic transitions (TASK-39)', () => {
     expect(app.indexOf('<Transition')).toBeLessThan(app.indexOf('v-if="showShell'))
     // the shell RouterView: the slide name follows the navigation direction
     // and a 'none' direction keeps the CSS machinery off entirely (no mode:
-    // both pages move at once), keyed by the first path segment
+    // both pages move at once), keyed by the first path segment.
+    // TASK-146 §3 #2: transitionName looks at navKind TOO — a direction-less
+    // PUSH (same-depth tabs, depth-less routes) fades instead of skipping,
+    // only a replace stays classless
     expect(app).toContain(':name="transitionName"')
     expect(app).toContain(":css=\"transitionName !== ''\"")
     expect(app).toMatch(/<component\s+:is="Component"\s+:key="pageKey"/)
     expect(app).toContain('@after-enter')
+    const nameCalc = app.slice(app.indexOf('transitionName'), app.indexOf('pageKey'))
+    expect(nameCalc).toContain('navKind')
     const settings = src('pages/SettingsPage.vue')
     expect(settings.match(/name="page"/g)).toHaveLength(1)
     expect(settings).toContain('mode="out-in"')
@@ -342,6 +368,27 @@ describe('navDirection rules (TASK-74)', () => {
     at(13)
     nav({ name: 'manage-categories' }, { name: 'settings-general' })
     expect(direction.value).toBe('none')
+    // TASK-146 §3 #2: 'none' no longer means "no motion" — a direction-less
+    // navigation still records its KIND, and App.vue maps a none + push/pop
+    // to the page fade (only a replace stays classless). The kind is the
+    // source the fade mapping reads.
+    at(14)
+    nav({ name: 'stores', depth: 1 }, { name: 'receipts', depth: 1 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    at(15)
+    nav({ name: 'receipts', depth: 1 }, { name: 'settings-general' })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    at(16)
+    nav({ name: 'manage-categories' }, { name: 'receipts', depth: 1 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('push')
+    // a replace keeps neither direction nor kind-based motion
+    at(16)
+    nav({ name: 'receipts', depth: 1 }, { name: 'receipt', depth: 2 })
+    expect(direction.value).toBe('none')
+    expect(navKind.value).toBe('replace')
   })
 })
 
@@ -420,6 +467,82 @@ describe('shell slide transition (TASK-74)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Direction-less push fade (TASK-146 §3 遷移全数表 #2): a push whose direction
+// cannot settle — same-depth tab switches and depth-less routes (the settings
+// tree, apps, usage, manage-*) — used to render with NO motion (:css=false).
+// transitionName now reads navKind as well: a none + push/pop navigation
+// fades through the page vocabulary, and only a replace stays classless.
+
+describe('direction-less push fade (TASK-146)', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '')
+    cleanup()
+  })
+
+  /** the app-main children of the current swap, keyed by their motion class */
+  const pages = (): Element[] => Array.from(document.querySelectorAll('main.app-main > *'))
+
+  it('[covers:web-shell.page-transition][covers:web-browse.transition-direction] 同depth(1)同士のpush（/receipts→/categories）は fade（page-enter-active/page-leave-active）で遷移', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/categories')
+    await flushPromises()
+    // direction-less but a push: the fade vocabulary carries the swap. (The
+    // navKind source itself is pinned by the rules test above — the browsing
+    // screens' URL-sync writeBack issues a replace right behind every push,
+    // so reading the ref here would observe that follow-up instead.)
+    expect(direction.value).toBe('none')
+    const entering = pages().find((el) => el.classList.contains('page-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering?.classList.contains('page-enter-from')).toBe(true)
+    const leaving = pages().find((el) => el.classList.contains('page-leave-active'))
+    expect(leaving).toBeDefined()
+    expect(entering?.classList.contains('view-page')).toBe(true)
+    await settle()
+    expect(pages().filter((el) => el.classList.contains('view-page'))).toHaveLength(1)
+  })
+
+  it('[covers:web-shell.page-transition] depth未設定route（/settings/general）へのpushも fade で遷移する（none+push は無演出でない）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/settings/general')
+    await flushPromises()
+    expect(direction.value).toBe('none')
+    const entering = pages().find((el) => el.classList.contains('page-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering?.classList.contains('settings-layout')).toBe(true)
+    await settle()
+    // and back out to a depth route slides as usual (pop -> back)
+    window.history.replaceState({ position: 0 }, '')
+    await router.back()
+    await flushPromises()
+    const back = pages().find((el) => el.classList.contains('slide-back-enter-active'))
+    expect(back).toBeDefined()
+  })
+
+  it('[covers:web-browse.reduced-motion] reduced-motion では方向なしpushのfadeも無効（classなし・即時入れ替え）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    window.history.replaceState({ position: 0 }, '')
+    const { router } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    setReducedMotion(true)
+    window.history.replaceState({ position: 1 }, '')
+    await router.push('/categories')
+    await settle()
+    expect(direction.value).toBe('none')
+    const current = pages()
+    expect(current).toHaveLength(1)
+    expect(current[0]?.classList.contains('view-page')).toBe(true)
+    expect(
+      Array.from(current[0]!.classList).some((c) => c.startsWith('page-') || c.startsWith('slide-')),
+    ).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Scroll restore (TASK-74 §4-3): a push to another page goes to the top
 // through the router's scrollBehavior; a replace and a same-pageKey
 // navigation must not touch the scroll at all (review H1 — vue-router calls
@@ -482,11 +605,13 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     // a pop parks the saved position; the restore waits for the page's
     // readiness on top of the finished enter (stage 5: the pages call
     // markReady themselves, so re-arm both gates for the incoming page —
-    // the parked position predates its load in the real flow)
+    // the parked position predates its load in the real flow). The park is
+    // driven the way scrollBehavior does it (memory history never delivers
+    // a savedPosition)
     window.history.replaceState({ position: 2 }, '')
     await router.back()
     await settle()
-    pendingRestore.value = 640
+    await popSaved(router, '/receipts', '/receipts/101', 640)
     scrollTo.mockClear()
     resetPageReady()
     notifyPageEntered()
@@ -496,12 +621,14 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     expect(pendingRestore.value).toBe(null)
   })
 
-  it('[covers:web-browse.scroll-restore] markReady が1.5秒来なければ保存位置を諦める（復元しない）', () => {
+  it('[covers:web-browse.scroll-restore] markReady が1.5秒来なければ保存位置を諦める（復元しない）', async () => {
     vi.useFakeTimers()
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
     try {
       resetPageReady()
-      pendingRestore.value = 800
+      // a bare app router is enough to issue the park (no mount needed)
+      const bare = createAppRouter(createMemoryHistory(), createPinia())
+      await popSaved(bare, '/stores', '/receipts', 800)
       notifyPageEntered() // the enter side is done; readiness never comes
       vi.advanceTimersByTime(1500)
       expect(pendingRestore.value).toBe(null)
@@ -510,5 +637,122 @@ describe('scroll restore (TASK-74 §4-3)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TASK-164 §2-2-2 (design: tmp/tasks/tm-164/design_back_home.md v4): the
+// period pop's scroll and the reservation token. A period-change pop rides a
+// query-only URL change — the PATH never moves — so scrollBehavior's
+// same-path branch (placed BEFORE the savedPosition branch) returns false
+// without parking a reservation: the viewport keeps its place both ways of
+// the round trip. A pop whose path differs (a screen change — even between
+// screens sharing the first path segment, /receipts ↔ /receipts/101 or two
+// axes, whose pageKey collides) parks the saved position as before. The
+// reservations carry a navigation-unit generation token: every scrollBehavior
+// pass advances it and the page-ready gate releases only a reservation whose
+// token is still current — a stale one (a cross-screen pop's restore still
+// waiting when a period pop comes in) dies unseen. Test-first: red until it
+// lands.
+
+describe('period pop scroll + reservation tokens (TASK-164 §2-2-2)', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '')
+    cleanup()
+  })
+
+  it('[covers:web-browse.period-pop-scroll] 同一pathの期間popはsavedPositionを復元しない（scroll維持・予約なし）・pathが異なるpop（pageKey同値の画面間を含む）はsavedPositionを予約する', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { router } = await mountApp('/categories?month=2026-10')
+    const scrollTo = scrollMocks().scrollTo
+
+    // the period pop: the same path, a query-only change — even WITH a
+    // saved position the same-path branch (now ahead of the savedPosition
+    // branch) returns false and parks nothing
+    scrollTo.mockClear()
+    const verdict = await popSaved(router, '/categories?month=2026-09', '/categories', 640)
+    expect(verdict).toBe(false)
+    expect(pendingRestore.value).toBe(null)
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    // a pop whose path differs parks the saved position — and the parked
+    // reservation REALLY restores through both page-ready gates, not just
+    // that a reservation exists (REVIEW-12 #5): the enter gate alone does
+    // not scroll, the readiness gate releases the exact parked top
+    await popSaved(router, '/stores', '/categories', 320)
+    expect(pendingRestore.value?.top).toBe(320)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    expect(scrollTo).not.toHaveBeenCalled()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 320 })
+    expect(pendingRestore.value).toBe(null)
+
+    // ... including screens that SHARE the first path segment — the pageKey
+    // collides (/receipts ↔ /receipts/101, two axes); the PATH decides — and
+    // each parks its own top through the same gate flow
+    await popSaved(router, '/receipts/101', '/receipts', 500)
+    expect(pendingRestore.value?.top).toBe(500)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500 })
+    await popSaved(router, '/axes/store/2', '/axes/category/1', 400)
+    expect(pendingRestore.value?.top).toBe(400)
+  })
+
+  it('[covers:web-browse.restore-generation-token] 予約はnavigation単位token: 後続navigation（期間popのreturn false含む）で無効化された旧予約は gate 解放でも実行されず破棄される', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { router } = await mountApp('/categories?month=2026-10')
+    const scrollTo = scrollMocks().scrollTo
+
+    // a cross-screen pop parks its restore and waits for the page gates ...
+    await popSaved(router, '/stores', '/categories', 640)
+    expect(pendingRestore.value).not.toBe(null)
+    // ... but a further navigation — here the period pop's same-path return
+    // false — advances the generation: the parked reservation went stale
+    await popSaved(router, '/categories?month=2026-09', '/categories', 640)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    markReady()
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(pendingRestore.value).toBe(null)
+
+    // a CURRENT reservation still releases through both gates
+    await popSaved(router, '/stores', '/categories', 240)
+    scrollTo.mockClear()
+    resetPageReady()
+    notifyPageEntered()
+    expect(scrollTo).not.toHaveBeenCalled()
+    markReady()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 240 })
+    expect(pendingRestore.value).toBe(null)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TASK-171 (PR#4 review): the page fade vocabulary's in-flow contract. The
+// vocabulary's own CSS comment is "out-in so the old page leaves first and
+// the layout never shows both stacked" — every IN-FLOW caller (not only the
+// RouterView pair and the settings tabs) must set mode="out-in": the default
+// simultaneous mode stacks the leaving and entering element in flow for the
+// fade's duration, and a keyed line inside a card stretches its container
+// (the receipts KPI jumped two lines tall on every period step, pushing the
+// content below).
+
+describe('page vocabulary in-flow callers (TASK-171)', () => {
+  it('[covers:web-shell.page-vocab-inflow-out-in] page fade語彙を in-flow の keyed 入れ替えに使うcaller（Receipts の .kpi-sub）は mode=out-in（旧・新がin-flowに並ばない）', () => {
+    const receipts = src('pages/ReceiptsPage.vue')
+    const sub = receipts.indexOf('class="kpi-sub"')
+    expect(sub, 'the .kpi-sub summary line').toBeGreaterThan(-1)
+    // the Transition opening tag wrapping the keyed summary line
+    const open = receipts.lastIndexOf('<Transition', sub)
+    expect(open, 'the Transition wrapping .kpi-sub').toBeGreaterThan(-1)
+    const attrs = receipts.slice(open, receipts.indexOf('>', open))
+    expect(attrs).toContain('name="page"')
+    expect(attrs, 'the in-flow swap never stacks the old and new line').toContain('mode="out-in"')
   })
 })

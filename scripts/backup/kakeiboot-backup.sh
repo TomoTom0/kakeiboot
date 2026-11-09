@@ -1,5 +1,5 @@
 #!/bin/bash
-# kakeiboot backup構成script（TASK-83。正本の設計・手順: docs/deploy.md）
+# kakeiboot backup構成script（TASK-83。正本の設計・手順: docs/ops/ops_deploy.md）
 #
 # 処理: 変数解決 → DB snapshot（admin backup = read-only VACUUM INTO）→
 # images rsync（--deleteなし）→ COMPLETED marker / last_success → 世代
@@ -32,8 +32,15 @@ case $env in
     *) usage ;;
 esac
 
-SRC=/srv/opt/tomo/run/app/tool/kakeiboot/$env
-DEST=/srv/opt/tomo/run/app/tool/kakeiboot/backups/$env
+# SRC・DESTは実pathを書かず配置契約から導出する: このscriptはdeploy配布契約
+# 「<deploy_root>/<env>/bin/kakeiboot-backup.sh」の位置に置かれ、unitの
+# WorkingDirectory（=<deploy_root>/<env>）から実行される。bin/ の2階層上が
+# <deploy_root>（configs/deploy.toml の deploy_root と同一契約。docs合成規則表）。
+# repo正本を直接実行した場合も実行元の配置dir基準で動く（誤環境への書込が
+# 起きない）。
+ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+SRC="$ROOT/$env"
+DEST="$ROOT/backups/$env"
 STAMP=$(date -u +%F)
 KEEP=${KEEP:-30}
 # KEEPの数値検証: marker書込より前で失敗させる（手動実行時のタイポで

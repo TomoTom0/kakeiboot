@@ -128,6 +128,30 @@ pub async fn search(c: &Call<'_>, args: &Map<String, Value>) -> ToolResult {
         yen(res.sum_amount),
         ledger.text_suffix()
     );
+    if mode != "items" {
+        // TASK-167 D-3: the derived representative items ride the content
+        // text too — one compact line per listed receipt (store + top items),
+        // so the model reads what was bought without consulting the rows
+        for r in &res.rows {
+            let names: Vec<&str> = r
+                .get("top_items")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.get("name").and_then(Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if names.is_empty() {
+                continue;
+            }
+            let store = r
+                .get("store_name")
+                .and_then(Value::as_str)
+                .unwrap_or("店名なし");
+            text.push_str(&format!("\n{store}: {}", names.join("・")));
+        }
+    }
     if res.next_cursor.is_some() {
         text.push_str(&format!(
             "\n{} 件を表示。続きは next_cursor を cursor に渡してください。",

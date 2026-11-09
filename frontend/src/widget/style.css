@@ -18,14 +18,16 @@
      (frontend/src/web/styles.css) so the shared seriesColor mapping paints
      one key one color on both surfaces. The old widget-only palette (six
      colors, different values) is retired */
-  --series-1: #0072B2;
-  --series-2: #C98208;
-  --series-3: #332288;
-  --series-4: #CC79A7;
-  --series-5: #882255;
-  --series-6: #3E9BD0;
-  --series-7: #C24100;
+  --series-1: #803A0D;
+  --series-2: #C4B45D;
+  --series-3: #506204;
+  --series-4: #44BEAD;
+  --series-5: #0A6390;
+  --series-6: #A591FD;
+  --series-7: #A02D5C;
   --series-rest: #8f9a94;
+  /* TASK-123 §4-4: the stacked segments' outline (the bar_v stroke's color) */
+  --seg-outline: rgb(0 0 0 / 0.4);
   /* receipt label palette (TASK-17 / TASK-26), same hues as the web app.
      -bg / -fg pair for the name chips (4.5:1+); the solid color is the bare
      chip of an untitled label */
@@ -60,14 +62,16 @@
   --bb-danger: #f2786d;
   --bb-danger-bg: #3d1f1d;
   /* TASK-116 series palette: the web app's dark values, same tokens */
-  --series-1: #56A8E8;
-  --series-2: #EDCA75;
-  --series-3: #7A6BE5;
-  --series-4: #D998C2;
-  --series-5: #C7689B;
-  --series-6: #82C8F0;
-  --series-7: #F07048;
+  --series-1: #934149;
+  --series-2: #C6824C;
+  --series-3: #7C6C01;
+  --series-4: #279A7A;
+  --series-5: #2F9CE1;
+  --series-6: #5D64AA;
+  --series-7: #B57CB9;
   --series-rest: #5f6b65;
+  /* TASK-123 §4-4: the outline token composes lighter over dark fills */
+  --seg-outline: rgb(255 255 255 / 0.4);
   --label-red: #e58076;
   --label-yellow: #d3ae4c;
   --label-green: #64b97e;

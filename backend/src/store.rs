@@ -1137,11 +1137,19 @@ where
             "DELETE FROM oauth_access_tokens WHERE expires_at < ?",
             now - DAY_MS
         );
+        // a revoked refresh row (a child superseded by a grace reissue) is
+        // kept while its grant is live (unrevoked, before the absolute
+        // expiry): presenting it stays a reuse signal even long after its
+        // own expiry (spec_auth.md 4-9 step 1, TASK-140). A row whose grant
+        // is dead or missing follows the expiry + 1 day rule.
         sweep!(
             tx,
             deleted_refresh_tokens,
-            "DELETE FROM oauth_refresh_tokens WHERE expires_at < ?",
-            now - DAY_MS
+            "DELETE FROM oauth_refresh_tokens WHERE expires_at < ?
+                AND (revoked_at IS NULL OR grant_id NOT IN
+                     (SELECT id FROM oauth_grants WHERE revoked_at IS NULL AND absolute_expires_at > ?))",
+            now - DAY_MS,
+            now
         );
         sweep!(
             tx,

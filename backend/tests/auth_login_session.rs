@@ -300,6 +300,249 @@ async fn counter_regression_rejected_and_audited() {
     assert_eq!(failed, 1, "non-counter failures audit as login_failed");
 }
 
+// ---------------------------------------------------------------------------
+// TASK-147: concurrent logins with one credential (sign-counter TOCTOU).
+// Two ceremonies are started and signed in order (A = c+1, B = c+2 by the
+// soft token's counter), then finished with each ceremony cookie sent
+// explicitly. File DB with the repo pool size so the requests do not share a
+// connection. Six /api/webauthn/* requests per case stay well under the IP
+// rate limit (spec 10-1: 20/min).
+
+/// `name=value` of the ceremony cookie from a login/start Set-Cookie header.
+fn ceremony_pair(set_cookie: &str) -> String {
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+/// login/finish carrying exactly one ceremony cookie (no session cookie).
+async fn finish_with_ceremony(
+    router: axum::Router,
+    ceremony: String,
+    cred: serde_json::Value,
+) -> axum::response::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/webauthn/login/finish")
+        .header("content-type", "application/json")
+        .header("origin", ORIGIN)
+        .header("user-agent", "test-agent Chrome/130.0")
+        .header("cookie", ceremony)
+        .body(axum::body::Body::from(
+            serde_json::json!({ "credential": cred }).to_string(),
+        ))
+        .unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
+/// The stored `$.cred.counter` of the single credential.
+async fn stored_counter(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT json_extract(passkey_json, '$.cred.counter') FROM webauthn_credentials",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn counter_regression_audits(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events WHERE action = 'counter_regression' AND entity_type = 'webauthn_credential'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Register one user, start two login ceremonies and sign them in order:
+/// returns (ceremony A, assertion A = c+1, ceremony B, assertion B = c+2).
+async fn two_signed_ceremonies(
+    router: &axum::Router,
+    pool: &SqlitePool,
+) -> (String, serde_json::Value, String, serde_json::Value) {
+    let mut client = Client::new();
+    let user = register_setup_user(&mut client, router, pool, "concurrent").await;
+    let (handle, ids) = user_webauthn_ids(pool, user).await;
+    let (rcr_a, cookie_a) = login_start_raw(&mut client, router).await;
+    let (rcr_b, cookie_b) = login_start_raw(&mut client, router).await;
+    let cred_a = client.authenticate_discoverable(rcr_a, &handle, &ids);
+    let cred_b = client.authenticate_discoverable(rcr_b, &handle, &ids);
+    (
+        ceremony_pair(&cookie_a),
+        cred_value(&cred_a),
+        ceremony_pair(&cookie_b),
+        cred_value(&cred_b),
+    )
+}
+
+/// Test hook that parks the first armed login_finish immediately before its
+/// BEGIN IMMEDIATE until released (later requests pass through).
+#[cfg(feature = "test-hooks")]
+struct Park {
+    armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    reached: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl Park {
+    fn new() -> Self {
+        Self {
+            armed: Default::default(),
+            reached: Default::default(),
+            release: Default::default(),
+        }
+    }
+
+    fn hooks(&self) -> budget_book::test_hooks::TestHooks {
+        use std::sync::atomic::Ordering;
+        let (armed, reached, release) = (
+            self.armed.clone(),
+            self.reached.clone(),
+            self.release.clone(),
+        );
+        let hook: budget_book::test_hooks::Hook = std::sync::Arc::new(move || {
+            let (armed, reached, release) = (armed.clone(), reached.clone(), release.clone());
+            Box::pin(async move {
+                if armed.swap(false, Ordering::SeqCst) {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+            })
+        });
+        budget_book::test_hooks::TestHooks {
+            login_before_write_lock: Some(hook),
+            ..Default::default()
+        }
+    }
+
+    /// Arm, spawn `fut` and wait until it is parked at the hook.
+    async fn park<F>(&self, fut: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let handle = tokio::spawn(fut);
+        self.reached.notified().await;
+        handle
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
+}
+
+// [covers:auth-login.concurrent-counter-monotonic]
+// A (c+1) is parked by the test hook immediately before BEGIN IMMEDIATE
+// (pre-fix: after its stale passkey read and verification; post-fix: before
+// both, which move under the write lock); B (c+2) runs to completion; then
+// A resumes. The stored counter must not roll back to c+1 and A must be
+// rejected as a counter regression (it reads the newest stored value under the write lock).
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+async fn concurrent_login_parked_older_assertion_cannot_roll_back_counter() {
+    let park = Park::new();
+    let (router, pool, _dir) = auth_setup_file_with_hooks(park.hooks()).await;
+    let (ceremony_a, cred_a, ceremony_b, cred_b) = two_signed_ceremonies(&router, &pool).await;
+    let audits_before = counter_regression_audits(&pool).await;
+
+    let task_a = park
+        .park(finish_with_ceremony(router.clone(), ceremony_a, cred_a))
+        .await;
+
+    let resp_b = finish_with_ceremony(router.clone(), ceremony_b, cred_b).await;
+    assert_eq!(resp_b.status(), 200, "B (c+2) completes while A is parked");
+    let counter_b = stored_counter(&pool).await;
+    assert!(counter_b > 0, "B advanced the stored counter");
+
+    park.release();
+    let resp_a = task_a.await.unwrap();
+    assert_eq!(
+        stored_counter(&pool).await,
+        counter_b,
+        "the stored counter never rolls back to the parked older assertion"
+    );
+    assert_eq!(
+        resp_a.status(),
+        StatusCode::UNAUTHORIZED,
+        "A (c+1) loses to the newer stored counter"
+    );
+    assert_eq!(
+        counter_regression_audits(&pool).await - audits_before,
+        1,
+        "the 401 is audited as counter_regression (per-case delta)"
+    );
+}
+
+// [covers:auth-login.concurrent-disable-during-login-rejected]
+// The owner check runs under the same write lock as the session issue: a
+// user disabled while a login is parked just ahead of BEGIN IMMEDIATE gets
+// no session (uniform 401 mismatch, audited) instead of a fresh session
+// resolved from the pre-disable state.
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+async fn concurrent_disable_during_parked_login_issues_no_session() {
+    let park = Park::new();
+    let (router, pool, _dir) = auth_setup_file_with_hooks(park.hooks()).await;
+    let (ceremony_a, cred_a, _ceremony_b, _cred_b) = two_signed_ceremonies(&router, &pool).await;
+    let user = only_user(&pool).await;
+    let sessions_before = user_session_hashes(&pool, user).await.len();
+    let mismatches_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE action = 'login_mismatch'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let task_a = park
+        .park(finish_with_ceremony(router.clone(), ceremony_a, cred_a))
+        .await;
+    sqlx::query("UPDATE users SET disabled_at = 1 WHERE id = ?")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    park.release();
+    let resp_a = task_a.await.unwrap();
+    assert_eq!(
+        user_session_hashes(&pool, user).await.len(),
+        sessions_before,
+        "no session is issued for a user disabled before the write lock"
+    );
+    assert_eq!(resp_a.status(), StatusCode::UNAUTHORIZED);
+    let mismatches: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE action = 'login_mismatch'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        mismatches - mismatches_before,
+        1,
+        "the rejection is audited as login_mismatch"
+    );
+}
+
+// [covers:auth-login.concurrent-counter-monotonic]
+// Generation order equals arrival order (A then B): both succeed and the
+// stored counter equals the larger successful counter.
+#[tokio::test]
+async fn sequential_logins_in_generation_order_both_succeed() {
+    let (router, pool, _dir) = auth_setup_file().await;
+    let (ceremony_a, cred_a, ceremony_b, cred_b) = two_signed_ceremonies(&router, &pool).await;
+    let audits_before = counter_regression_audits(&pool).await;
+
+    let resp_a = finish_with_ceremony(router.clone(), ceremony_a, cred_a).await;
+    assert_eq!(resp_a.status(), 200);
+    let counter_a = stored_counter(&pool).await;
+    let resp_b = finish_with_ceremony(router.clone(), ceremony_b, cred_b).await;
+    assert_eq!(resp_b.status(), 200);
+    let counter_b = stored_counter(&pool).await;
+    assert!(
+        counter_b > counter_a,
+        "the stored counter only moves forward"
+    );
+    assert_eq!(counter_regression_audits(&pool).await - audits_before, 0);
+}
+
 // [covers:auth-login.updates-passkey-json-and-last-used]
 #[tokio::test]
 async fn login_updates_passkey_json_and_last_used() {

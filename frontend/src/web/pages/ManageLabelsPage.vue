@@ -136,35 +136,44 @@ async function save(c: LabelColor): Promise<void> {
               :size="16"
             />
           </button>
-          <template v-else-if="editingColor === l.color">
-            <LabelChip
-              :label="l"
-              :index="indexOf(l.color)"
-            />
-            <input
-              v-model="draftTitle"
-              type="text"
-              :aria-label="`${ariaName(l.color)}の名前`"
-              :data-test="`label-title-${l.color}`"
-              @keydown.enter.prevent="save(l.color)"
-              @keydown.esc.prevent="endEdit"
+          <!-- TASK-146 §3 #20: the inline editor swap appears / vanishes
+               through the shared bb-appear grammar (the row's own chips and
+               buttons keep their layout — .row-editor is the shared flex
+               wrapper) -->
+          <Transition name="bb-appear">
+            <div
+              v-if="editingColor === l.color"
+              class="row-editor"
             >
-            <IconButton
-              icon="check"
-              label="保存"
-              variant="primary"
-              :test="`label-save-${l.color}`"
-              @click="save(l.color)"
-            />
-            <IconButton
-              icon="close"
-              label="やめる"
-              :test="`label-cancel-${l.color}`"
-              @click="endEdit"
-            />
-          </template>
+              <LabelChip
+                :label="l"
+                :index="indexOf(l.color)"
+              />
+              <input
+                v-model="draftTitle"
+                type="text"
+                :aria-label="`${ariaName(l.color)}の名前`"
+                :data-test="`label-title-${l.color}`"
+                @keydown.enter.prevent="save(l.color)"
+                @keydown.esc.prevent="endEdit"
+              >
+              <IconButton
+                icon="check"
+                label="保存"
+                variant="primary"
+                :test="`label-save-${l.color}`"
+                @click="save(l.color)"
+              />
+              <IconButton
+                icon="close"
+                label="やめる"
+                :test="`label-cancel-${l.color}`"
+                @click="endEdit"
+              />
+            </div>
+          </Transition>
           <LabelChip
-            v-else
+            v-if="!canEdit && editingColor !== l.color"
             :label="l"
             :index="indexOf(l.color)"
           />

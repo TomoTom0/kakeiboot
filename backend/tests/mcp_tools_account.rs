@@ -741,3 +741,73 @@ async fn rename_ledger_changes_name_and_validates_input() {
         "the pick-again guidance"
     );
 }
+
+// [covers:mcp-search.top-items-in-response]
+#[tokio::test]
+async fn search_receipts_response_carries_top_items() {
+    let (router, pool, token, _grant, _user, active) = setup_with_ledger().await;
+    // TASK-167 D-3: search_receipts shares its rows with the web list, so
+    // the derived top_items (amount desc, k = 2) appear in the MCP response
+    // too — the shared ReceiptSummary contract, no separate assembly
+    sqlx::query(
+        "INSERT INTO stores (id, ledger_id, name, name_norm, created_at, updated_at)
+         VALUES (1, ?, 'Aマート', 'aまーと', 0, 0)",
+    )
+    .bind(active)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO receipts (id, ledger_id, created_by, source, store_id, purchased_on,
+             tax_mode, revision, created_at, updated_at)
+         VALUES (101, ?, 1, 'manual', 1, '2026-10-10', 'inclusive', 1, 0, 0)",
+    )
+    .bind(active)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (iid, line, name, norm, amount) in [
+        (10101i64, 1i64, "牛乳", "牛乳", 220i64),
+        (10102, 2, "洗剤", "せんざい", 498),
+    ] {
+        sqlx::query(
+            "INSERT INTO receipt_items (id, receipt_id, ledger_id, line_no, name, name_norm,
+                 amount, amount_incl, quantity, created_at, updated_at)
+             VALUES (?, 101, ?, ?, ?, ?, ?, ?, 1.0, 0, 0)",
+        )
+        .bind(iid)
+        .bind(active)
+        .bind(line)
+        .bind(name)
+        .bind(norm)
+        .bind(amount)
+        .bind(amount)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let v = post_mcp(
+        &router,
+        &token,
+        rpc(
+            1,
+            "tools/call",
+            json!({"name": "search_receipts", "arguments": {"period": {"month": "2026-10"}}}),
+        ),
+    )
+    .await;
+    let r = result_of(&v);
+    assert_eq!(r["isError"], json!(false));
+    // the receipt rows are embedded as JSON in the content text: the top
+    // items ride them (amount desc, k = 2)
+    let text = r["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("洗剤"),
+        "the top item rides the response: {text}"
+    );
+    assert!(
+        text.contains("牛乳"),
+        "the second item rides the response: {text}"
+    );
+}

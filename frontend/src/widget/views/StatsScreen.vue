@@ -14,7 +14,7 @@ import BarVChart from '@/shared/components/charts/BarVChart.vue'
 import LineChart from '@/shared/components/charts/LineChart.vue'
 import ShareBar from '@/shared/components/charts/ShareBar.vue'
 import type { ChartDatum } from '@/shared/components/charts/types'
-import { stackedOf } from '@/shared/lib/stackedBars'
+import { barScale, stackedOf } from '@/shared/lib/stackedBars'
 import { formatIsoDateJa } from '@/shared/format'
 import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
@@ -95,6 +95,37 @@ function rowsToData(section: StatsSection): ChartDatum[] {
     }
   })
 }
+
+// TASK-129 (web-common.bar-scale, the report-level aggregation): every bar in
+// the report shares ONE absolute scale — the max over each bar's OUTER amount
+// (bar_h = each row's value, stacked_bar = the rows' sum — the bar's full
+// length is the total itself, so a row-max aggregation would overrun — and
+// bar_v = each bucket's total, off the same trend matrix the segments use),
+// with the envelope's own headline total (totals.value) joining the max —
+// the report's money frame floors the scale, so a filtered-down section
+// (rows sum under the headline) still paints on the report's own scale.
+// bar_v's own drawing source keeps its section-local niceMax until TASK-126
+// wires the switch (the transition-period note, design §7-3).
+const reportScale = computed(() => {
+  let outer = Math.max(0, props.envelope.totals.value)
+  for (const s of props.envelope.sections) {
+    if (s.chart === 'stacked_bar') {
+      outer = Math.max(outer, s.rows.reduce((a, r) => a + Math.max(0, r.value), 0))
+      continue
+    }
+    if (s.chart === 'bar_v') {
+      const m = store.trendMatrix
+      if (m && m.buckets.length === s.rows.length) {
+        for (const v of m.bucket_totals) outer = Math.max(outer, v ?? 0)
+        continue
+      }
+    }
+    if (s.chart === 'bar_h' || s.chart === 'bar_v') {
+      for (const r of s.rows) outer = Math.max(outer, Math.max(0, r.value))
+    }
+  }
+  return barScale(outer)
+})
 
 /** Envelope filters plus the carried label filter, for a period re-run. */
 function runFilters(): StatsFilters | null {
@@ -212,6 +243,7 @@ async function onPeriod(e: Event) {
       <BarHChart
         v-if="s.chart === 'bar_h'"
         :data="rowsToData(s)"
+        :scale="reportScale"
       />
       <BarVChart
         v-else-if="s.chart === 'bar_v'"
@@ -225,6 +257,7 @@ async function onPeriod(e: Event) {
       <ShareBar
         v-else-if="s.chart === 'stacked_bar'"
         :data="rowsToData(s)"
+        :scale="reportScale"
       />
       <table
         v-else

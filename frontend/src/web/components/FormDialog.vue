@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { prefersReducedMotion } from '../composables/reducedMotion'
 
 // Small modal form dialog (TASK-46, spec_mcp-tools.md 12): the settings
 // auth-tab issue / add flows moved off standing inline forms into this
@@ -8,7 +9,9 @@ import { nextTick, ref, watch } from 'vue'
 // or Escape closes, the focus lands on the first field ([data-autofocus],
 // else the first focusable element) on open and returns to the trigger on
 // close. The visual frame (.dialog-backdrop / .dialog) is the StepUpDialog
-// recipe, the focus handling the usePopover recipe.
+// recipe, the focus handling the usePopover recipe. TASK-146 §3 #16: the
+// open/close is an appear fade — the backdrop fades and the dialog rides
+// the page vocabulary inside it; the focus / close contracts are unchanged.
 defineProps<{
   /** accessible name of the dialog (aria-label) */
   label: string
@@ -17,6 +20,9 @@ defineProps<{
 }>()
 
 const open = defineModel<boolean>('open', { default: false })
+
+// reduced motion skips the fade classes entirely (web-common.overlay-transition)
+const motion = computed(() => !prefersReducedMotion())
 
 const triggerWrap = ref<HTMLElement | null>(null)
 const dialogRef = ref<HTMLElement | null>(null)
@@ -68,22 +74,34 @@ watch(open, (value, wasOpen) => {
     >
       <slot name="trigger" />
     </div>
-    <div
-      v-if="open"
-      class="dialog-backdrop"
-      @click.self="close"
+    <Transition
+      name="page"
+      appear
+      :css="motion"
     >
       <div
-        ref="dialogRef"
-        class="dialog"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="label"
-        :data-test="test"
-        @keydown.esc.prevent="close"
+        v-if="open"
+        class="dialog-backdrop"
+        @click.self="close"
       >
-        <slot />
+        <Transition
+          name="page"
+          appear
+          :css="motion"
+        >
+          <div
+            ref="dialogRef"
+            class="dialog"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="label"
+            :data-test="test"
+            @keydown.esc.prevent="close"
+          >
+            <slot />
+          </div>
+        </Transition>
       </div>
-    </div>
+    </Transition>
   </div>
 </template>

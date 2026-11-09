@@ -6,7 +6,8 @@
 // the Transition name is already the incoming navigation's when the pages
 // swap (D28 review 指摘8).
 import { ref, type Ref } from 'vue'
-import type { NavigationFailure, RouteLocationNormalized } from 'vue-router'
+import type { NavigationFailure, RouteLocationNormalized, RouteLocationRaw, Router } from 'vue-router'
+import { prefersReducedMotion } from './reducedMotion'
 
 export type NavDirection = 'forward' | 'back' | 'none'
 export type NavKind = 'push' | 'pop' | 'replace'
@@ -33,21 +34,86 @@ export function setNavIntent(intent: 'back' | null): void {
   navIntent = intent
 }
 
-/** Scroll top parked by scrollBehavior until the incoming page is ready. */
-export const pendingRestore: Ref<number | null> = ref(null)
+/** The up-navigation press (TASK-74 §3-2 案B for PageHead, shared by the
+ * topbar ‹ since TASK-124 D3): a plain push to the parent route with the
+ * one-shot back intent — not router.back(), so a direct link climbs too and
+ * the slide always plays backwards though the history position moves
+ * forward. The push is keys-less, so the shared period/labels ride along
+ * through the URL sync's "keys-less entry keeps the store" rule. Returns
+ * the push's own promise (resolved with a NavigationFailure when the
+ * navigation was cancelled/redirected, per vue-router) so a caller that
+ * keys a follow-up on the climb — the browsing fallback's boundary move —
+ * can act on the actual landing, not on the first afterEach of anything. */
+export function pushToParent(router: Router, to: RouteLocationRaw): Promise<NavigationFailure | void> {
+  setNavIntent('back')
+  return router.push(to)
+}
+
+/** A scroll restore parked by scrollBehavior until the incoming page is
+ *  ready. The `gen` is the navigation-unit generation token (TASK-164
+ *  §2-2-2): every scrollBehavior pass advances the counter, so a
+ *  reservation left waiting by one navigation is invalidated by the next
+ *  one (a period pop's same-path branch included) instead of firing late
+ *  through the gates and breaking the scroll-keeping of the newer state. */
+export interface PendingRestore {
+  top: number
+  gen: number
+}
+
+/** Scroll top parked by scrollBehavior until the incoming page is ready.
+ *  Issued by scrollBehavior alone (never set from the pages). */
+export const pendingRestore: Ref<PendingRestore | null> = ref(null)
+
+let restoreGen = 0
+
+/** Advance (and return) the reservation generation — scrollBehavior calls
+ *  this at the head of every navigation. */
+export function advanceRestoreGeneration(): number {
+  restoreGen += 1
+  return restoreGen
+}
+
+/** True when `pending` was issued by the CURRENT navigation. */
+export function isCurrentRestore(pending: PendingRestore): boolean {
+  return pending.gen === restoreGen
+}
+
+// --- the app-history boundary (TASK-164 §2-4) ----------------------------------
+// The shell records window.history.state.position at its start: everything
+// after it is the app's own history and a ‹ back may walk it; at (or below,
+// or without) the boundary the ‹ falls back to a static parent instead — a
+// reload or a direct link never digs into entries that predate the shell.
+/** The history.state.position the shell started at (null when unreadable). */
+export const boundaryPosition: Ref<number | null> = ref(null)
+
+/** Record the shell-start boundary (App.vue's setup — the initial route is
+ *  already resolved by then). */
+export function recordHistoryBoundary(): void {
+  boundaryPosition.value = historyPosition()
+}
+
+/** Move the boundary to the current position — the fallback climb's push
+ *  uses this so a later ‹ never ping-pongs back into the climbed-from
+ *  screen (§2-4 comparison (iii)). */
+export function setHistoryBoundaryToCurrent(): void {
+  boundaryPosition.value = historyPosition()
+}
+
+/** True when the app's own history has at least one entry behind the
+ *  current position (a router.back stays inside the shell's session). A
+ *  missing position reads as "no app history" — the fallback path. */
+export function isWithinAppHistory(): boolean {
+  const boundary = boundaryPosition.value
+  if (boundary === null) return false
+  const position = historyPosition()
+  return position !== null && position > boundary
+}
 
 let lastPosition: number | null = null
 
 function historyPosition(): number | null {
   const state = window.history.state as { position?: unknown } | null
   return typeof state?.position === 'number' ? state.position : null
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
 }
 
 /**

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { setDataApi, type DataApi } from '@/web/api/data'
+import {
+  setDataApi,
+  type DataApi,
+  type ReceiptListQuery,
+  type ReceiptListResult,
+  type ReceiptSummary,
+} from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import { ApiError } from '@/web/api/http'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
@@ -548,6 +554,54 @@ describe('CategoriesPage', () => {
     // unarchived, it is visible in the default view again
     expect(wrapper.find(sel(funId)).exists()).toBe(true)
   })
+
+  // TASK-146 §3 #20 (web-common.appear-fade): the manage screen's inline
+  // state changes — the row editor swap, the add row, the archived rows, the
+  // fold children — appear through the ONE shared fade vocabulary. Written
+  // test-first; the classes are read in the insert patch (before the rAF
+  // clears them).
+  it('[covers:web-common.appear-fade][covers:web-manage.row-editor][covers:web-manage.category-create-structural][covers:web-manage.category-group-fold][covers:web-categories.archived-hidden-by-default] 行内状態変化の出現は共通の出現fade（bb-appear）: 行editor・追加行・archived行・fold子行', async () => {
+    const ids = await catIds(true)
+    const foodId = ids.get('食費')!
+    const funId = ids.get('趣味')!
+    const { wrapper } = await mountApp('/settings/categories', { attach: true, stubs: { transition: false } })
+    const appears = (el: Element | undefined, what: string) => {
+      expect(el, `${what} renders`).toBeDefined()
+      expect(
+        Array.from(el!.classList).some((c) => c.startsWith('bb-appear')),
+        `${what} appears through the shared fade`,
+      ).toBe(true)
+    }
+
+    // the row editor (the "..." menu's 名前を変更) appears through the fade
+    await wrapper.find(`${sel(foodId)} [data-test="row-menu-${foodId}"]`).trigger('click')
+    await settle()
+    await wrapper.find('[role="menu"] [data-test="menu-rename"]').trigger('click')
+    appears(wrapper.find(`${sel(foodId)} .row-editor`).element, 'the row editor')
+    // Escape closes it (the existing contract)
+    await wrapper.find(`${sel(foodId)} input[aria-label="新しい名前"]`).trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect(wrapper.find(`${sel(foodId)} .row-editor`).exists()).toBe(false)
+
+    // the structural add row appears through the fade
+    await wrapper.find('[data-test="add-top"]').trigger('click')
+    appears(wrapper.find('.add-row').element, 'the add row')
+    await wrapper.find('.add-row input').trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect(wrapper.find('.add-row').exists()).toBe(false)
+
+    // the archived group comes back through the fade (show-archived ON)
+    await wrapper.find('[data-test="show-archived"]').trigger('click')
+    appears(wrapper.find(sel(funId)).element, 'the archived row')
+
+    // the fold children reappear through the fade
+    const chev = () => wrapper.find(`${sel(foodId)} [data-test="fold"]`)
+    await chev().trigger('click')
+    await settle()
+    expect(wrapper.find(`${sel(foodId)} ul.cat-children`).exists()).toBe(false)
+    await chev().trigger('click')
+    appears(wrapper.find(`${sel(foodId)} ul.cat-children`).element, 'the fold children')
+  })
 })
 
 describe('StoresPage', () => {
@@ -707,6 +761,57 @@ describe('Receipts', () => {
     expect(cat.attributes('href')).toBe('/axes/category/1/2?month=2026-10')
   })
 
+  // TASK-146 §3 #18 (web-common.appear-fade): the list's さらに表示 appends
+  // its rows through the shared appear-fade grammar — only the appended row
+  // moves. Written test-first (a paged list stub: page 1 holds 2 rows, the
+  // cursor page appends 1).
+  it('[covers:web-receipts.dashboard][covers:web-common.appear-fade] 一覧の「さらに表示」で append された行は出現fade（既存行は不動）', async () => {
+    const summary = (id: number, on: string): ReceiptSummary => ({
+      receipt_id: id,
+      purchased_on: on,
+      purchased_time: '18:30',
+      store_name: `店${id}`,
+      amount: 100,
+      item_count: 1,
+      has_image: false,
+      deleted_at: null,
+    })
+    const list = vi.spyOn(api, 'listReceipts').mockImplementation(
+      async (_l: number, q: ReceiptListQuery): Promise<ReceiptListResult> => ({
+        total_count: 3,
+        sum_amount: 300,
+        receipts: q.cursor ? [summary(103, '2026-10-05')] : [summary(101, '2026-10-10'), summary(102, '2026-10-08')],
+        next_cursor: q.cursor ? null : 'c1',
+      }),
+    )
+    const { wrapper } = await mountApp('/receipts')
+    expect(wrapper.findAll('[data-test^="receipt-"]')).toHaveLength(2)
+
+    await wrapper.find('[data-test="more"]').trigger('click')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ cursor: 'c1' }))
+    const rows = wrapper.findAll('[data-test^="receipt-"]')
+    expect(rows).toHaveLength(3)
+    // the grammar rides the appended row (its own class or a child's)
+    const hasAppear = (el: Element): boolean =>
+      el.className.includes('bb-appear') || el.querySelector('[class*="bb-appear"]') !== null
+    expect(hasAppear(rows[0]!.element), 'the existing rows never move').toBe(false)
+    expect(hasAppear(rows[1]!.element), 'the existing rows never move').toBe(false)
+    expect(hasAppear(rows[2]!.element), 'the appended row appears through the fade').toBe(true)
+    await settle()
+    expect(wrapper.find('[data-test="more"]').exists()).toBe(false)
+  })
+
+  // TASK-149 D3 (web-common.fixed-guidance-names-both-services): the list's
+  // empty state names both services (the corpus copy policy)
+  it('[covers:web-common.fixed-guidance-names-both-services] 一覧の空状態の案内は ChatGPT と Claude を併記', async () => {
+    vi.spyOn(api, 'listReceipts').mockResolvedValue({ total_count: 0, sum_amount: 0, receipts: [], next_cursor: null })
+    const { wrapper } = await mountApp('/receipts')
+    const empty = wrapper.find('[data-test="empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('ChatGPT')
+    expect(empty.text()).toContain('Claude')
+  })
+
   it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {
     const update = vi.spyOn(api, 'updateReceipt')
     const { wrapper } = await mountApp('/receipts/101')
@@ -721,8 +826,16 @@ describe('Receipts', () => {
       set: { note: '特売' },
       upsert_items: [{ item_id: 1001, amount: 250 }],
     })
-    expect(panel(wrapper, 101).find('[data-test="revision"]').text()).toBe('2')
-    expect(panel(wrapper, 101).find('[data-test="note"]').text()).toBe('特売')
+    // TASK-167 D-8: the panel carries no revision/note readouts — the
+    // progressed revision is proven by the next save riding revision 2
+    const after = panel(wrapper, 101)
+    expect(after.find('[data-test="revision"]').exists()).toBe(false)
+    expect(after.find('[data-test="note"]').exists()).toBe(false)
+    await after.find('[data-test="edit"]').trigger('click')
+    await after.find('[data-test="f-note"]').setValue('再修正')
+    await after.find('[data-test="edit-form"]').trigger('submit')
+    await settle()
+    expect(update).toHaveBeenLastCalledWith(1, 101, { revision: 2, set: { note: '再修正' } })
   })
 
   it('[covers:web-receipts.stale-revision-reload] revision 不一致は上書きせず最新を読み直す', async () => {
@@ -735,8 +848,11 @@ describe('Receipts', () => {
     await settle()
     const after = panel(wrapper, 101)
     expect(after.find('[data-test="error"]').text()).toContain('他の画面や会話で更新')
-    expect(after.find('[data-test="revision"]').text()).toBe('2')
-    expect(after.find('[data-test="note"]').text()).toBe('会話で変更')
+    // the reload brought the latest note back — restarting the edit seeds
+    // the form with it
+    await after.find('[data-test="edit"]').trigger('click')
+    const el = after.find('[data-test="f-note"]').element
+    expect(el instanceof HTMLTextAreaElement && el.value).toBe('会話で変更')
   })
 
   it('[covers:web-receipts.delete-preview-confirm] preview を示してから revision 付きで削除、Feed のパネル・位置・URL は不変', async () => {

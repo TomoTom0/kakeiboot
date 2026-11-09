@@ -228,6 +228,525 @@ async fn reauth_rejects_other_user_and_mismatched_ceremony() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// TASK-154: step-up re-authentication counter freshness and the out-of-tx
+// credential update (design tmp/tasks/tm-154/design_reauth-counter.md 5-3).
+// The SoftPasskey counter advances in signing order, so every case signs the
+// reauth assertion FIRST and any competing-login assertion after it. The
+// competing login runs in a fresh browser context (no cookies at all):
+// carrying the reauth session would revoke it in login_finish (spec 2-4) and
+// the 401 would never reach the counter check. Finishes always send the
+// session and ceremony cookies explicitly (the TASK-147 cookie-separation
+// premise). ~6 /api/webauthn/* requests per case (IP limit 20/min, spec 10-1).
+
+/// The value of a cookie from a Set-Cookie header.
+fn set_cookie_value(resp: &axum::response::Response<axum::body::Body>, name: &str) -> String {
+    use axum::http::header;
+    resp.headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with(name) && c.trim_start_matches(name).starts_with('='))
+        .unwrap_or_else(|| panic!("{name} cookie set"))
+        .split_once('=')
+        .unwrap()
+        .1
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+fn cred_value(cred: &webauthn_rs::prelude::PublicKeyCredential) -> serde_json::Value {
+    serde_json::to_value(cred).unwrap()
+}
+
+/// The stored `$.cred.counter` of the single credential.
+async fn stored_counter(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT json_extract(passkey_json, '$.cred.counter') FROM webauthn_credentials",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// POST carrying exactly the given cookies (and no others); `&[]` sends no
+/// cookie header at all (a fresh browser context).
+async fn post_with_cookies(
+    router: axum::Router,
+    path: &str,
+    cookies: &[(&str, String)],
+    body: serde_json::Value,
+) -> axum::response::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("origin", ORIGIN)
+        .header("user-agent", "test-agent Chrome/130.0");
+    if !cookies.is_empty() {
+        builder = builder.header(
+            "cookie",
+            cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
+    }
+    router
+        .oneshot(
+            builder
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+/// reauth/start over the client's session; returns the challenge and the
+/// ceremony cookie pair (finishes send it explicitly).
+async fn reauth_start_raw(
+    client: &mut Client,
+    router: &axum::Router,
+) -> (webauthn_rs::prelude::RequestChallengeResponse, String) {
+    let resp = client
+        .post(router, "/api/webauthn/reauth/start", serde_json::json!({}))
+        .await;
+    assert_eq!(resp.status(), 200, "{}", body_text(resp).await);
+    let ceremony = set_cookie_value(&resp, "__Host-bb_ceremony");
+    client.store_cookies(&resp);
+    (
+        serde_json::from_value(body_json(resp).await).unwrap(),
+        ceremony,
+    )
+}
+
+/// reauth/finish carrying exactly the reauth session and ceremony cookies.
+/// Takes them owned: the request future must be `'static` to be spawned into
+/// the test-hook park.
+async fn reauth_finish_raw(
+    router: axum::Router,
+    session: String,
+    ceremony: String,
+    cred: serde_json::Value,
+) -> axum::response::Response<axum::body::Body> {
+    post_with_cookies(
+        router,
+        "/api/webauthn/reauth/finish",
+        &[
+            ("__Host-bb_session", session),
+            ("__Host-bb_ceremony", ceremony),
+        ],
+        serde_json::json!({ "credential": cred }),
+    )
+    .await
+}
+
+/// A competing login from a fresh browser context (no cookies — carrying the
+/// reauth session would revoke it, spec 2-4) signed by the same soft token
+/// AFTER the reauth assertion (its counter is the larger one). Returns the
+/// stored counter once the login has completed.
+async fn competing_login_advances_counter(
+    router: &axum::Router,
+    pool: &SqlitePool,
+    client: &mut Client,
+    user: i64,
+) -> i64 {
+    let resp = post_with_cookies(
+        router.clone(),
+        "/api/webauthn/login/start",
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "{}", body_text(resp).await);
+    let ceremony = set_cookie_value(&resp, "__Host-bb_ceremony");
+    let rcr = serde_json::from_value(body_json(resp).await).unwrap();
+    let (handle, ids) = user_webauthn_ids(pool, user).await;
+    let cred = client.authenticate_discoverable(rcr, &handle, &ids);
+    let resp = post_with_cookies(
+        router.clone(),
+        "/api/webauthn/login/finish",
+        &[("__Host-bb_ceremony", ceremony)],
+        serde_json::json!({ "credential": cred_value(&cred) }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "competing login completes: {}",
+        body_text(resp).await
+    );
+    stored_counter(pool).await
+}
+
+/// Test hook that parks the first armed reauth_finish immediately before its
+/// BEGIN IMMEDIATE until released (later requests pass through). Until
+/// reauth_finish is instrumented (TASK-154 implementation pending) the hook
+/// is never awaited, so [`ReauthPark::park`] also returns when the request
+/// simply runs to completion — the test proceeds linearly, which keeps the
+/// pre-fix behavior deterministic.
+#[cfg(feature = "test-hooks")]
+struct ReauthPark {
+    armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    reached: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[cfg(feature = "test-hooks")]
+enum Stepped<Out> {
+    /// The request is parked at the hook; release() then await the handle.
+    Parked(tokio::task::JoinHandle<Out>),
+    /// The request finished without ever reaching the hook (pre-fix).
+    Done(Out),
+}
+
+#[cfg(feature = "test-hooks")]
+impl ReauthPark {
+    fn new() -> Self {
+        Self {
+            armed: Default::default(),
+            reached: Default::default(),
+            release: Default::default(),
+        }
+    }
+
+    fn hooks(&self) -> budget_book::test_hooks::TestHooks {
+        use std::sync::atomic::Ordering;
+        let (armed, reached, release) = (
+            self.armed.clone(),
+            self.reached.clone(),
+            self.release.clone(),
+        );
+        let hook: budget_book::test_hooks::Hook = std::sync::Arc::new(move || {
+            let (armed, reached, release) = (armed.clone(), reached.clone(), release.clone());
+            Box::pin(async move {
+                if armed.swap(false, Ordering::SeqCst) {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+            })
+        });
+        budget_book::test_hooks::TestHooks {
+            reauth_before_write_lock: Some(hook),
+            ..Default::default()
+        }
+    }
+
+    /// Arm, spawn `fut` and wait until it parks at the hook or completes.
+    async fn park<F>(&self, fut: F) -> Stepped<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        use std::sync::atomic::Ordering;
+        self.armed.store(true, Ordering::SeqCst);
+        let mut handle = tokio::spawn(fut);
+        tokio::select! {
+            _ = self.reached.notified() => Stepped::Parked(handle),
+            out = &mut handle => Stepped::Done(out.expect("reauth finish task panicked")),
+        }
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
+}
+
+// [covers:auth-reauth.concurrent-counter-monotonic]
+// The reauth assertion R (c+1, signed first) is parked just before the write
+// lock while a cookie-less competing login (c+2, signed after R) completes.
+// The stored counter must not roll back to R's value and R must be rejected
+// against the fresh stored value (401, WARN only — step-up failures write no
+// audit row). Pre-fix the hook is never called, so R completes at spawn time
+// and is accepted under the stale snapshot (red).
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+async fn concurrent_reauth_parked_assertion_cannot_roll_back_counter() {
+    let park = ReauthPark::new();
+    let (router, pool, _dir) = auth_setup_file_with_hooks(park.hooks()).await;
+    let mut client = Client::new();
+    let user = register_setup_user(&mut client, &router, &pool, "reauth-racer").await;
+    let session = client.cookies.get("__Host-bb_session").cloned().unwrap();
+
+    let (rcr, ceremony) = reauth_start_raw(&mut client, &router).await;
+    let reauth_cred = cred_value(&client.authenticate(rcr)); // counter c+1
+    let audits_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE action = 'counter_regression'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let stepped = park
+        .park(reauth_finish_raw(
+            router.clone(),
+            session.clone(),
+            ceremony.clone(),
+            reauth_cred,
+        ))
+        .await;
+
+    let before_login = stored_counter(&pool).await;
+    let counter_after_login =
+        competing_login_advances_counter(&router, &pool, &mut client, user).await;
+    assert!(
+        counter_after_login > before_login,
+        "premise: the competing login advances the stored counter past the reauth snapshot"
+    );
+
+    let resp = match stepped {
+        Stepped::Parked(task) => {
+            park.release();
+            task.await.unwrap()
+        }
+        Stepped::Done(resp) => resp,
+    };
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the parked older assertion loses to the newer stored counter"
+    );
+    assert_eq!(
+        stored_counter(&pool).await,
+        counter_after_login,
+        "the stored counter never rolls back to the parked reauth assertion"
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE action = 'counter_regression'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        audits - audits_before,
+        0,
+        "step-up failures log WARN only, no audit_events row"
+    );
+}
+
+// [covers:auth-reauth.delayed-assertion-rejected]
+// Direct TTL-window reproduction, no hook: the reauth ceremony snapshots
+// counter c at start; a cookie-less login then advances the stored counter;
+// the assertion R (c+1) still satisfies the stale snapshot (pre-fix:
+// accepted, red) but regresses against the fresh stored value and must be
+// rejected without touching auth_at or the stored counter.
+#[tokio::test]
+async fn delayed_reauth_assertion_after_login_is_rejected() {
+    let (router, pool) = setup().await;
+    let mut client = Client::new();
+    let user = register_setup_user(&mut client, &router, &pool, "reauth-delayed").await;
+    let session = client.cookies.get("__Host-bb_session").cloned().unwrap();
+    let auth_at_before: i64 = sqlx::query_scalar(
+        "SELECT auth_at FROM web_sessions WHERE user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let (rcr, ceremony) = reauth_start_raw(&mut client, &router).await;
+    let reauth_cred = cred_value(&client.authenticate(rcr)); // c+1 vs snapshot c
+
+    let counter_after_login =
+        competing_login_advances_counter(&router, &pool, &mut client, user).await;
+
+    // pin the final read to session A's row: the cookie-less competing login
+    // issued a second live session for the same user, and fetch_one over the
+    // id_hash-keyed table picks an arbitrary one
+    let session_hash = cookie_hash(&session);
+    let resp = reauth_finish_raw(router.clone(), session, ceremony, reauth_cred).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "an assertion behind the stored counter is rejected even inside the ceremony TTL"
+    );
+    assert_eq!(
+        stored_counter(&pool).await,
+        counter_after_login,
+        "the stored counter stays at the login value"
+    );
+    let auth_at: i64 = sqlx::query_scalar(
+        "SELECT auth_at FROM web_sessions WHERE id_hash = ? AND revoked_at IS NULL",
+    )
+    .bind(&session_hash)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(auth_at, auth_at_before, "auth_at is not renewed on the 401");
+}
+
+// [covers:auth-reauth.sequential-both-succeed]
+// Arrivals in signing order never hit the fresh-counter rule: two reauth
+// rounds on one session both succeed, the stored counter only moves forward
+// and the same session row's auth_at is renewed (no false rejections; a
+// counter-0-fixed authenticator passes the rule as received=0/stored=0 and
+// cannot be produced by the soft token — recorded as a rule, not a case).
+#[tokio::test]
+async fn sequential_reauths_in_generation_order_both_succeed() {
+    let (router, pool) = setup().await;
+    let mut client = Client::new();
+    let user = register_setup_user(&mut client, &router, &pool, "reauth-seq").await;
+    let session = client.cookies.get("__Host-bb_session").cloned().unwrap();
+    // pin every session read to session A's row (id_hash-keyed table)
+    let session_hash = cookie_hash(&session);
+
+    let mut last = stored_counter(&pool).await;
+    for round in 0..2 {
+        // age the step-up freshness first: registration leaves auth_at inside
+        // the freshness window, so without aging a missing renewal would
+        // still satisfy the assertion below
+        stale_auth_at(&pool, user).await;
+        let (rcr, ceremony) = reauth_start_raw(&mut client, &router).await;
+        let cred = cred_value(&client.authenticate(rcr));
+        let resp = reauth_finish_raw(router.clone(), session.clone(), ceremony, cred).await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "round {round}: {}",
+            body_text(resp).await
+        );
+        let counter = stored_counter(&pool).await;
+        assert!(
+            counter > last,
+            "round {round}: the stored counter only moves forward"
+        );
+        last = counter;
+        let auth_at: i64 = sqlx::query_scalar(
+            "SELECT auth_at FROM web_sessions WHERE id_hash = ? AND revoked_at IS NULL",
+        )
+        .bind(&session_hash)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            budget_book::auth::session::now_ms() - auth_at < 60_000,
+            "round {round}: auth_at renewed on the same session row"
+        );
+    }
+}
+
+// [covers:auth-reauth.atomic-rollback-on-session-vanish]
+// The session row vanishing between the handler's session check and the
+// reauth write must fail the whole step-up: the auth_at UPDATE touching 0
+// rows rolls the credential update (counter, last_used_at) back with it. A
+// partial fix that only adds the counter re-check but keeps autocommit
+// writes would advance the stored counter — caught here too. Pre-fix the
+// request completes at spawn time (200, writes already landed): red.
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+async fn reauth_rolls_back_when_session_row_vanishes_under_park() {
+    let park = ReauthPark::new();
+    let (router, pool, _dir) = auth_setup_file_with_hooks(park.hooks()).await;
+    let mut client = Client::new();
+    register_setup_user(&mut client, &router, &pool, "reauth-vanish").await;
+    let session = client.cookies.get("__Host-bb_session").cloned().unwrap();
+    let counter_before = stored_counter(&pool).await;
+
+    let (rcr, ceremony) = reauth_start_raw(&mut client, &router).await;
+    let cred = cred_value(&client.authenticate(rcr)); // generation order
+
+    let stepped = park
+        .park(reauth_finish_raw(
+            router.clone(),
+            session.clone(),
+            ceremony.clone(),
+            cred,
+        ))
+        .await;
+
+    // the session row disappears while the finish is in flight
+    sqlx::query("DELETE FROM web_sessions WHERE id_hash = ?")
+        .bind(cookie_hash(&session))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let resp = match stepped {
+        Stepped::Parked(task) => {
+            park.release();
+            task.await.unwrap()
+        }
+        Stepped::Done(resp) => resp,
+    };
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "0 updated session rows fail the step-up instead of silently succeeding"
+    );
+    assert_eq!(
+        stored_counter(&pool).await,
+        counter_before,
+        "the credential update rolls back with the failed auth_at update"
+    );
+    let last_used: Option<i64> =
+        sqlx::query_scalar("SELECT last_used_at FROM webauthn_credentials")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        last_used, None,
+        "last_used_at rolls back in the same transaction"
+    );
+}
+
+// [covers:auth-reauth.ceremony-single-consume]
+// One ceremony accepts exactly one submission: while the first finish is
+// parked mid-flight (post-fix: past the atomic ceremony consumption, before
+// the write lock), the same ceremony + assertion submitted again is rejected
+// as ceremony_invalid, and only the released first request succeeds. Pre-fix
+// (no hook call) the first request completes at spawn time, so the
+// re-submission degenerates to the sequential case with the same outcome —
+// the assertion holds before and after the fix (green pinning).
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+async fn reauth_ceremony_is_consumed_exactly_once() {
+    let park = ReauthPark::new();
+    let (router, pool, _dir) = auth_setup_file_with_hooks(park.hooks()).await;
+    let mut client = Client::new();
+    register_setup_user(&mut client, &router, &pool, "reauth-once").await;
+    let session = client.cookies.get("__Host-bb_session").cloned().unwrap();
+
+    let (rcr, ceremony) = reauth_start_raw(&mut client, &router).await;
+    let cred = cred_value(&client.authenticate(rcr));
+
+    let stepped = park
+        .park(reauth_finish_raw(
+            router.clone(),
+            session.clone(),
+            ceremony.clone(),
+            cred.clone(),
+        ))
+        .await;
+
+    // the same ceremony + assertion again while the first finish is in flight
+    let resp2 = reauth_finish_raw(router.clone(), session, ceremony, cred).await;
+    assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp2).await["error"], "ceremony_invalid");
+
+    let resp1 = match stepped {
+        Stepped::Parked(task) => {
+            park.release();
+            task.await.unwrap()
+        }
+        Stepped::Done(resp) => resp,
+    };
+    assert_eq!(
+        resp1.status(),
+        StatusCode::OK,
+        "exactly one submission of the ceremony succeeds: {}",
+        body_text(resp1).await
+    );
+    // the ceremony row is gone (consumed by the successful submission only —
+    // no residue for a third attempt either)
+    let ceremonies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM webauthn_ceremonies")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ceremonies, 0, "the ceremony row is consumed exactly once");
+}
+
 // [covers:auth-passkey.rename-label]
 #[tokio::test]
 async fn rename_own_passkey_only() {

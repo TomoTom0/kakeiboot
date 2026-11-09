@@ -10,7 +10,7 @@ import {
   type ReceiptSet,
   type ReceiptView,
 } from '../api/data'
-import { errorCodeOf, errorMessage, formatDateTime, formatYen } from '../composables/format'
+import { errorCodeOf, errorMessage, formatYen } from '../composables/format'
 import { PAYMENT_LABEL } from '../composables/labels'
 import AppIcon from './AppIcon.vue'
 import { dayLabel } from '../composables/period'
@@ -369,7 +369,7 @@ const labelSlotProps = computed(() => ({
           >
             <span data-test="store-name"><RouterLink
                                            v-if="receipt.store"
-                                           class="store-link"
+                                           class="store-link hover-ink"
                                            :to="{ path: `/axes/store/${receipt.store.store_id}`, query: linkQuery }"
                                          >{{ receipt.store.name }}</RouterLink>
               <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
@@ -379,46 +379,47 @@ const labelSlotProps = computed(() => ({
               data-test="deleted"
             >削除済み</span>
           </h2>
-          <p class="muted">
-            {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}
-          </p>
-          <div class="tags">
-            <!-- TASK-65: the payment tag filters the receipts list (the
-                 store-category tag pattern: the purchase month rides along) -->
-            <RouterLink
-              v-if="receipt.payment_method"
-              class="tag tag-link"
+          <!-- TASK-167 D-10: the chip tags row is gone — the payment method
+               and the store category ride as inline muted links on the
+               datetime line, and the labels slot closes the line -->
+          <p class="muted receipt-when">
+            {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}<template v-if="receipt.payment_method">・<RouterLink
+              class="when-link hover-ink"
               :to="{ path: '/receipts', query: { payment_method: receipt.payment_method, ...linkQuery } }"
               data-test="payment-method"
-            >
-              {{ PAYMENT_LABEL[receipt.payment_method] }}
-            </RouterLink>
-            <RouterLink
-              v-if="receipt.store?.category"
-              class="tag tag-link"
+            >{{ PAYMENT_LABEL[receipt.payment_method] }}</RouterLink></template><template v-if="receipt.store?.category">・<RouterLink
+              class="when-link hover-ink"
               :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
               data-test="store-category"
-            >
-              {{ receipt.store.category }}
-            </RouterLink>
-            <span
-              v-if="receipt.has_image"
-              class="tag"
-            >画像あり</span>
-            <!-- TASK-17/26: the labels slot rides at the end of the tags row -->
-            <slot
+            >{{ receipt.store.category }}</RouterLink></template><slot
               name="labels"
               v-bind="labelSlotProps"
             />
-          </div>
+          </p>
         </div>
-        <div class="receipt-total">
-          <span class="muted small">合計</span>
-          <strong data-test="total">{{ formatYen(receipt.total_amount ?? receipt.items_total) }}</strong>
-          <span
-            v-if="receipt.total_diff"
-            class="warn small"
-          >明細合計 {{ formatYen(receipt.items_total) }}（差額 {{ formatYen(receipt.total_diff) }}）</span>
+        <div class="receipt-side">
+          <!-- TASK-167 D-7: the edit action is a pencil icon-only ibtn at the
+               head's top-right (above the total) — its name lives in the
+               aria-label alone -->
+          <button
+            v-if="!receipt.deleted_at"
+            class="ibtn"
+            type="button"
+            aria-label="修正"
+            title="修正"
+            data-test="edit"
+            @click="startEdit"
+          >
+            <AppIcon name="pencil" />
+          </button>
+          <div class="receipt-total">
+            <span class="muted small">合計</span>
+            <strong data-test="total">{{ formatYen(receipt.total_amount ?? receipt.items_total) }}</strong>
+            <span
+              v-if="receipt.total_diff"
+              class="warn small"
+            >明細合計 {{ formatYen(receipt.items_total) }}（差額 {{ formatYen(receipt.total_diff) }}）</span>
+          </div>
         </div>
       </section>
 
@@ -590,7 +591,6 @@ const labelSlotProps = computed(() => ({
           class="card"
           data-test="items-card"
         >
-          <h2>明細</h2>
           <table
             class="items"
             data-test="items"
@@ -604,7 +604,7 @@ const labelSlotProps = computed(() => ({
                   {{ row.it.name }}
                   <RouterLink
                     v-if="row.catTo"
-                    class="cat-link"
+                    class="cat-link hover-ink"
                     :to="row.catTo"
                     :data-test="`item-cat-${row.it.item_id}`"
                   >
@@ -612,7 +612,7 @@ const labelSlotProps = computed(() => ({
                   </RouterLink>
                   <span
                     v-else
-                    class="muted small block"
+                    class="muted small"
                   >{{ row.it.category ?? '未分類' }}</span>
                 </td>
                 <td
@@ -635,20 +635,12 @@ const labelSlotProps = computed(() => ({
               </tr>
             </tfoot>
           </table>
-          <p
-            v-if="receipt.note"
-            class="note break"
-            data-test="note"
-          >
-            {{ receipt.note }}
-          </p>
         </section>
 
         <section
           v-if="imageUrl"
           class="card"
         >
-          <h2>画像</h2>
           <p
             v-if="imageFailed"
             class="muted small"
@@ -677,24 +669,6 @@ const labelSlotProps = computed(() => ({
           </figure>
         </section>
       </div>
-
-      <footer
-        v-if="!form"
-        class="receipt-foot muted small"
-      >
-        <span>レシート #{{ receipt.receipt_id }} ・ 版 <span data-test="revision">{{ receipt.revision }}</span> ・ 更新 {{ formatDateTime(receipt.updated_at) }}</span>
-        <button
-          v-if="!receipt.deleted_at"
-          class="btn btn-small btn-quiet"
-          data-test="edit"
-          @click="startEdit"
-        >
-          <AppIcon
-            name="pencil"
-            :size="14"
-          />内容を修正
-        </button>
-      </footer>
     </template>
   </div>
 </template>

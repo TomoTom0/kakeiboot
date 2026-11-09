@@ -1,4 +1,4 @@
-# budget-book MCP tool settings (single source of truth; docs/spec_mcp-tools.md).
+# budget-book MCP tool settings (single source of truth; docs/spec/spec_mcp-tools.md).
 # Values are the initial values of the spec (sections 3-5, 5-3, 11-5).
 
 [limits]

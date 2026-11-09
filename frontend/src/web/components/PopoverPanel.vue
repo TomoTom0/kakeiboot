@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, useAttrs, useId } from 'vue'
 import { usePopover } from '../composables/popover'
+import { prefersReducedMotion } from '../composables/reducedMotion'
 
 // PopoverPanel (TASK-27 §4): the shared non-modal role=dialog popover for
 // forms and toggles (PopoverMenu keeps role=menu for real menus). The
@@ -8,7 +9,10 @@ import { usePopover } from '../composables/popover'
 // its own button; the panel takes its aria-label from `label` (required),
 // opens below the trigger and lands the focus on [data-autofocus] (or the
 // first focusable element). variant="sheet-narrow" turns into a bottom
-// sheet at 480px and below.
+// sheet at 480px and below. TASK-146 §3 #15: the open/close is an appear
+// fade (the page vocabulary) on the panel and the scrim — one Transition
+// here covers every popover use; the role / focus / outside / Escape
+// contracts are unchanged.
 const props = withDefaults(
   defineProps<{ variant?: 'anchored' | 'sheet-narrow'; label: string }>(),
   { variant: 'anchored' },
@@ -57,6 +61,10 @@ const panelAttrs = computed(() => {
 })
 
 defineOptions({ inheritAttrs: false })
+
+// reduced motion skips the fade classes entirely (an instant swap; the
+// stylesheet repeats the guard) — web-common.overlay-transition
+const motion = computed(() => !prefersReducedMotion())
 </script>
 
 <template>
@@ -75,23 +83,35 @@ defineOptions({ inheritAttrs: false })
         v-bind="{ 'aria-expanded': open, 'aria-controls': panelId }"
       />
     </div>
-    <div
-      v-if="open && narrow"
-      class="popover-scrim"
-      aria-hidden="true"
-      @click="close"
-    />
-    <div
-      v-if="open"
-      :id="panelId"
-      ref="panelEl"
-      class="popover-dialog"
-      :class="{ 'is-narrow': narrow }"
-      role="dialog"
-      :aria-label="label"
-      v-bind="panelAttrs"
+    <Transition
+      name="page"
+      appear
+      :css="motion"
     >
-      <slot />
-    </div>
+      <div
+        v-if="open && narrow"
+        class="popover-scrim"
+        aria-hidden="true"
+        @click="close"
+      />
+    </Transition>
+    <Transition
+      name="page"
+      appear
+      :css="motion"
+    >
+      <div
+        v-if="open"
+        :id="panelId"
+        ref="panelEl"
+        class="popover-dialog"
+        :class="{ 'is-narrow': narrow }"
+        role="dialog"
+        :aria-label="label"
+        v-bind="panelAttrs"
+      >
+        <slot />
+      </div>
+    </Transition>
   </div>
 </template>

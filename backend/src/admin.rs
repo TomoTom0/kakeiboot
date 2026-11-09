@@ -133,6 +133,13 @@ pub enum GrantCmd {
         #[arg(long)]
         all_of: Option<String>,
     },
+    /// List grants whose refresh family holds two or more concurrent tips
+    /// (read-only; TASK-155). Omit --user to scan all users.
+    ConcurrentFamilies {
+        /// Target user (account number or id).
+        #[arg(long)]
+        user: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -398,6 +405,13 @@ pub async fn run_with(
         }
         Command::Grant(GrantCmd::Revoke { grant_id, all_of }) => {
             grant_revoke(pool, *grant_id, all_of.as_deref(), prompter, out).await
+        }
+        Command::Grant(GrantCmd::ConcurrentFamilies { user }) => {
+            let target = match user {
+                Some(u) => Some(resolve_user(pool, u).await?.id),
+                None => None,
+            };
+            concurrent_families(pool, target, out).await
         }
         Command::Session(SessionCmd::List { user }) => {
             let u = resolve_user(pool, user).await?;
@@ -1402,6 +1416,126 @@ async fn grant_revoke(
     }
     tx.commit().await?;
     writeln!(out, "revoked {} grant(s)", targets.len())?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// concurrent refresh families (TASK-155)
+
+/// `concurrent_families` grant aggregate: one row per grant holding >= 2 tips.
+#[derive(Debug, sqlx::FromRow)]
+struct ConcurrentFamilyRow {
+    id: i64,
+    user_id: i64,
+    account_number: String,
+    display_name: String,
+    client_id: String,
+    revoked_at: Option<i64>,
+    absolute_expires_at: i64,
+    tips: i64,
+}
+
+/// One tip row of a listed family: the tip's own hash, the referencing
+/// parent's hash (`child_hash` reverse lookup; `parent_hash` is always NULL),
+/// and its created/expires timestamps.
+type ConcurrentTipRow = (Vec<u8>, Option<Vec<u8>>, i64, i64);
+
+/// `admin grant concurrent-families [--user U]`: read-only inquiry for grants
+/// whose refresh token family still holds two or more concurrent tips — the
+/// residue the pre-TASK-140 grace-period re-presentation could leave behind
+/// and migration 0012 cannot revoke (both branches are referenced by another
+/// row's `child_hash`, so neither is an orphan).
+///
+/// A tip follows the 0012 definition: `used_at IS NULL AND revoked_at IS NULL`
+/// and referenced by some row's `child_hash`. Expired tips count (their
+/// evidence rows survive until the sweep) and dead grants are listed with
+/// their state rather than filtered out, so the output stays a stable
+/// observation. Every SELECT runs inside one `BEGIN DEFERRED` read
+/// transaction: header counts, tip details and grant state must come from a
+/// single snapshot, not from pool reads a rotation or sweep can interleave
+/// with. No audit and no prompt — like the other list commands.
+///
+/// Observation limit: a zero count does not prove no concurrency ever
+/// existed. Refresh rows expire 30 days after issue without extension, so
+/// once only the referencing parent rows are swept, surviving tips lose
+/// their reference and the family falls below detection.
+async fn concurrent_families(
+    pool: &SqlitePool,
+    user: Option<i64>,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin_with("BEGIN DEFERRED").await?;
+    // `? IS NULL OR g.user_id = ?` folds the optional --user filter into one
+    // static statement (sqlx 0.9 only takes static SQL): a NULL bind (no
+    // --user) keeps the scan user-wide.
+    let families: Vec<ConcurrentFamilyRow> = sqlx::query_as(
+        "SELECT g.id, g.user_id, u.account_number, u.display_name, g.client_id,
+                g.revoked_at, g.absolute_expires_at, COUNT(*) AS tips
+         FROM oauth_refresh_tokens r
+         JOIN oauth_grants g ON g.id = r.grant_id
+         JOIN users u       ON u.id = g.user_id
+         WHERE r.used_at IS NULL AND r.revoked_at IS NULL
+           AND r.token_hash IN (SELECT child_hash FROM oauth_refresh_tokens
+                                WHERE child_hash IS NOT NULL)
+           AND (? IS NULL OR g.user_id = ?)
+         GROUP BY r.grant_id
+         HAVING COUNT(*) >= 2
+         ORDER BY g.id",
+    )
+    .bind(user)
+    .bind(user)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut total_tips = 0;
+    for f in &families {
+        // token_hash tiebreak: same-ms insertions must order stably
+        let tips: Vec<ConcurrentTipRow> = sqlx::query_as(
+            "SELECT r.token_hash, p.token_hash AS parent_token_hash,
+                    r.created_at, r.expires_at
+             FROM oauth_refresh_tokens r
+             LEFT JOIN oauth_refresh_tokens p ON p.child_hash = r.token_hash
+             WHERE r.grant_id = ? AND r.used_at IS NULL AND r.revoked_at IS NULL
+               AND r.token_hash IN (SELECT child_hash FROM oauth_refresh_tokens
+                                    WHERE child_hash IS NOT NULL)
+             ORDER BY r.created_at, r.token_hash",
+        )
+        .bind(f.id)
+        .fetch_all(&mut *tx)
+        .await?;
+        writeln!(
+            out,
+            "grant {} user {} {} {} client={} grant_revoked={} grant_expires={} tips={}",
+            f.id,
+            f.user_id,
+            f.account_number,
+            f.display_name,
+            f.client_id,
+            f.revoked_at.map(ms_to_jst).as_deref().unwrap_or("-"),
+            ms_to_jst(f.absolute_expires_at),
+            f.tips,
+        )?;
+        for (hash, parent, created, expires) in &tips {
+            writeln!(
+                out,
+                "  tip {} parent={} created={} expires={}",
+                &to_hex(hash)[..8],
+                parent
+                    .as_ref()
+                    .map(|p| to_hex(p)[..8].to_string())
+                    .unwrap_or_else(|| "-".into()),
+                ms_to_jst(*created),
+                ms_to_jst(*expires),
+            )?;
+        }
+        total_tips += f.tips;
+    }
+    tx.commit().await?;
+    writeln!(
+        out,
+        "{fam} concurrent family(ies), {total_tips} tip(s)",
+        fam = families.len()
+    )?;
     Ok(())
 }
 

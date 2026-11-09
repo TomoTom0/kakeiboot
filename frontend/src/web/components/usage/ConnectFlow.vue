@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // F1: the connection-flow overview diagram of /usage/connect (TASK-37), an
 // inline SVG like the charts (no v-html). Four panels on one wide viewBox:
-// register the URL -> log in and allow in the browser -> back in ChatGPT ->
-// send receipts. The <text> is limited to the panel titles (<= 6 chars) so
+// register the URL -> log in and allow in the browser -> back in the
+// service -> send receipts. The <text> is limited to the panel titles
+// (<= 6 chars) so
 // the glyphs stay readable at the 390px phone width: the figure renders at
 // ~316px there (card padding), so a 28-unit font lands around 11-12px. The
 // explanations live in the step bodies and the figcaption, not inside the
@@ -14,10 +15,10 @@
     viewBox="0 0 760 210"
     class="usage-flow"
     role="img"
-    aria-label="接続の流れ: ChatGPTにURLを登録し、ブラウザでログインと許可を行い、ChatGPTでレシートを送って記録する"
+    aria-label="接続の流れ: サービスにURLを登録し、ブラウザでログインと許可を行い、サービスでレシートを送って記録する"
     data-test="connect-flow"
   >
-    <!-- panel 1: phone with a link glyph (register the URL in ChatGPT) -->
+    <!-- panel 1: phone with a link glyph (register the URL in the service) -->
     <g transform="translate(8 8)">
       <rect
         x="0"
@@ -105,7 +106,7 @@
       >ログイン許可</text>
     </g>
 
-    <!-- panel 3: done (a circled check back in ChatGPT) -->
+    <!-- panel 3: done (a circled check back in the service) -->
     <g transform="translate(388 8)">
       <rect
         x="0"

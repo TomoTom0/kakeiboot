@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import PeriodHeader from '@/web/components/PeriodHeader.vue'
 import RankedList from '@/web/components/RankedList.vue'
+import RowBar from '@/web/components/RowBar.vue'
+import type { AllocatedSegment } from '@/shared/lib/stackedBars'
 import { setDataApi, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
-import { ME, cleanup, fireMediaChange, mockFetch, mountApp, setMediaMatches, settle } from './helpers'
+import { usePeriodStore } from '@/web/stores/period'
+import { ME, cleanup, fireMediaChange, mockFetch, mountApp, patchTrackWidth, setMediaMatches, settle } from './helpers'
 
 let api: DataApi
 
@@ -18,6 +22,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   setDataApi(null)
+  window.history.replaceState(null, '')
   cleanup()
 })
 
@@ -43,24 +48,30 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // TASK-103: the month mode's fourth load — the selected month's week
     // buckets. TASK-116 (design §3-1): the week rows carry the series
     // breakdown now, so the fetch lifts limit 1 -> 5 (top-5 series + the
-    // bucket_totals the row amounts read).
-    // TASK-115 §3-2 (design tmp/tasks/tm-115/design_trend-continuous-window.md):
-    // the month window's initial commit prefetches its prev-adjacent window
-    // (from=2025-11-01 — trend-window.test.ts expects the same prefetch), so
-    // the trend endpoint sees three calls: display, prefetch, week
-    expect(trendSpy).toHaveBeenCalledTimes(3)
+    // bucket_totals the row amounts read). TASK-146 §2: the range crosses the
+    // month now — the Monday of the week holding the 1st (2026-09-28) through
+    // the Sunday of the week holding the 31st (2026-11-01), so every row is a
+    // full 7-day week.
+    // TASK-115 §3-2 (design tmp/tasks/tm-115/design_trend-continuous-window.md)
+    // + TASK-161 §1-2 (設計 tmp/tasks/tm-161/design_period_ui.md v2): the
+    // month window's initial commit prefetches AROUND itself — the ±span
+    // pages both ways plus the ±1-month move windows (4 prefetches) — so the
+    // trend endpoint sees six calls: display, 4 prefetches, week
+    expect(trendSpy).toHaveBeenCalledTimes(6)
     expect(trendSpy).toHaveBeenCalledWith(1, {
       axis: 'category',
       metric: 'amount',
       granularity: 'week',
-      from: '2026-10-01',
-      to: '2026-10-31',
+      from: '2026-09-28',
+      to: '2026-11-01',
       limit: 5,
     })
     // the period header: the period label and the big total — no compare
     // selector, no diff values, no KPI card
     const head = wrapper.find('.period-head')
-    expect(head.find('.period-label').text()).toBe('2026年10月の支出')
+    // TASK-161 §4 (指摘5): the label is period.label alone — the「の支出」
+    // suffix is gone from every caller
+    expect(head.find('.period-label').text()).toBe('2026年10月')
     expect(head.find('[data-test="period-total"]').text()).toBe('948円')
     expect(wrapper.find('[data-test="compare-select"]').exists()).toBe(false)
     expect(wrapper.find('[data-test^="compare-diff-"]').exists()).toBe(false)
@@ -79,16 +90,16 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // every zone heading is a visible .zone-title inside the .zone-head row,
     // keeping the TASK-95 wording as-is (no invented copy)
     const headings = wrapper.findAll('.zone .zone-head h2.zone-title')
-    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '支出の内訳', '最近のレシート'])
+    // TASK-161 §5 (指摘7): the breakdown moved under the period header as a
+    // full-width zone with NO heading (the position and the bars carry it)
+    expect(headings.map((h) => h.text())).toEqual(['支出の推移', '週ごとの支出', '最近のレシート'])
     // no zone heading stays sr-only and none sits outside a .zone-head
     expect(wrapper.find('.zone h2.sr-only').exists()).toBe(false)
     expect(wrapper.findAll('.zone h2.zone-title').length).toBe(wrapper.findAll('.zone .zone-head h2.zone-title').length)
-    // the section links are icon-only (chevron), not word links — and they
-    // ride the heading row as its last child (the .zone-more row is gone)
-    const cat = wrapper.find('[data-test="breakdown-more"]')
-    expect(cat.attributes('aria-label')).toBe('カテゴリ別に見る')
-    expect(new URL(cat.attributes('href')!, 'http://localhost').pathname).toBe('/categories')
-    expect(cat.element.closest('.zone-head')!.lastElementChild).toBe(cat.element)
+    // the remaining guide links are icon-only (chevron), not word links,
+    // and ride the heading row as its last child (the .zone-more row is
+    // gone; the breakdown zone-head itself is TASK-165's removal — see the
+    // breakdown-guide-removed test below)
     const all = wrapper.find('[data-test="recent-more"]')
     expect(all.attributes('aria-label')).toBe('すべて見る')
     expect(new URL(all.attributes('href')!, 'http://localhost').pathname).toBe('/receipts')
@@ -96,14 +107,42 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.zone-more').exists()).toBe(false)
   })
 
+  // TASK-165 (design: tmp/tasks/tm-165/design_breakdown_button.md v2 §2):
+  // the breakdown zone-head row is gone entirely — the lone icon-only
+  // /categories chevron on a heading-less row explains itself nowhere
+  // (the real-device指摘), its destination is the resident tabbar tab and
+  // the shared period store already carries the period over. The zone is
+  // the bar (+ the empty state) only. Test-first: red until it lands.
+  it('[covers:web-home.breakdown-guide-removed] 内訳zoneにzone-head行は無く（chevron単独link廃止）bar・空状態のみ', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    expect(wrapper.find('[data-test="breakdown-more"]').exists()).toBe(false)
+    // the breakdown zone itself stays (the bar + the empty state) with no
+    // .zone-head row inside
+    const zone = wrapper.find('.zone--breakdown')
+    expect(zone.exists()).toBe(true)
+    expect(zone.find('.zone-head').exists()).toBe(false)
+  })
+
+
+  // TASK-149 D3 (web-common.fixed-guidance-names-both-services): the recent
+  // zone's empty-state guidance names both services (the corpus copy policy)
+  it('[covers:web-common.fixed-guidance-names-both-services] 最近のレシート空状態の案内は ChatGPT と Claude を併記', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    vi.spyOn(api, 'listReceipts').mockResolvedValue({ total_count: 0, sum_amount: 0, receipts: [], next_cursor: null })
+    const { wrapper } = await mountApp('/')
+    const empty = wrapper.find('[data-test="recent"] .empty-state')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('ChatGPT')
+    expect(empty.text()).toContain('Claude')
+  })
 
   // TASK-105 (web-home.breakdown-rest-row revised + web-common.series-color-
-  // assignment, design §4-2): every row — top rows AND the「ほか」rest row —
-  // carries the leading 12px round swatch `.ranked-swatch`; RankedList sets
-  // `--rank-color` = seriesColor(row.keys[0] ?? null, axis) on each row, the
-  // top rows' swatch + in-row bar carry the series color and the「ほか n件・
-  // 計xx円」row resolves to var(--series-rest).
-  it('[covers:web-home.breakdown-rest-row] 内訳ランキング: 上位5行+「ほか n件・計xx円」の残余集計行（全行swatch・上位行は系列色・残余行はrest色）', async () => {
+  // assignment, design §4-2) — TASK-162 §1 rewrote the surface to the ONE
+  // stacked bar: the kept top-5 series are the pressable segments (each
+  // painted seriesColor of its key) and the「ほか n件・計xx円」residual is
+  // the closing rest segment in var(--series-rest), inert (never a button).
+  it('[covers:web-home.breakdown-rest-row] 内訳1本bar: 上位5系列segment+「ほか n件・計xx円」残余rest segment（上位は系列色button・残余はrest色で非button）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     // seven top categories this month (five extra items on receipt 102)
     await api.updateReceipt(1, 102, {
@@ -119,27 +158,83 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       ],
     })
     const { wrapper } = await mountApp('/')
-    const rows = wrapper.findAll('[data-test="breakdown"] .ranked-row')
+    const segs = wrapper.findAll('[data-test="breakdown"] [data-test="breakdown-seg"]')
     // six real categories (日用品698・食費550・趣味350・未分類270・交通費200・
-    // その他120) fold into top-5 + the rest row (その他 120)
-    expect(rows.length).toBe(6)
-    const rest = rows.at(-1)!
-    // REVIEW-13 M-1: the exact rest-row text — formatYen already appends 円
-    // (the old label doubled it) and the amount cell holds the rest amount,
-    // never the truncated row count
-    expect(rest.find('.ranked-label').text()).toBe('ほか 1件・計120円')
-    expect(rest.find('.amount').text()).toBe('120円')
-    expect(rest.element.tagName).not.toBe('A')
-    // every row renders the leading swatch (the legend the graph never
-    // grows), rest rows included — the swatch paints var(--rank-color) and
-    // the rest row's color resolves to the unattributed rest token
-    expect(rows.map((r) => r.find('.ranked-swatch').exists())).toEqual([true, true, true, true, true, true])
-    expect((rest.attributes('style') ?? '')).toContain('--rank-color: var(--series-rest)')
-    // the top rows keep their drill links into /axes/category/<id> and carry
-    // a series slot color (日用品 is catalog id 4 -> var(--series-4), the
-    // same token the trend segment paints)
-    expect(new URL(rows[0]!.attributes('href')!, 'http://localhost').pathname).toBe('/axes/category/4')
-    expect((rows[0]!.attributes('style') ?? '')).toContain('--rank-color: var(--series-4)')
+    // その他120) fold into the top-5 series + the「ほか」rest segment
+    expect(segs.length).toBe(6)
+    const rest = segs.at(-1)!
+    // REVIEW-13 M-1's text contract rides the rest SEGMENT's title now —
+    // formatYen already appends 円 (the old label doubled it)
+    expect(rest.attributes('title')).toBe('ほか 1件・計120円（5%）')
+    // the residual never presses (§1-7): the rest stays a span while every
+    // kept series renders as the pressable button carrying its share title
+    expect(rest.element.tagName).not.toBe('BUTTON')
+    expect(segs.slice(0, 5).map((s) => s.element.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'])
+    expect(segs[0]!.attributes('title')).toBe('日用品 698円（32%）')
+    // the kept series paint their key's seriesColor (日用品 is catalog id 4
+    // -> var(--series-4), the same token the trend segment paints); the rest
+    // resolves to the unattributed rest token
+    expect(segs[0]!.attributes('style') ?? '').toContain('background-color: var(--series-4)')
+    expect(segs[1]!.attributes('style') ?? '').toContain('background-color: var(--series-1)')
+    expect(rest.attributes('style') ?? '').toContain('background-color: var(--series-rest)')
+    // TASK-129 (web-home.breakdown-rest-row): the share-less residual paints
+    // from its own VALUE on the screen's absolute scale — the rest segment
+    // exists in the rest grey and its length ratio against the top segment
+    // equals the value ratio (120/698), regardless of the scale itself
+    const restore = patchTrackWidth(300)
+    try {
+      const remounted = await mountApp('/')
+      const resegs = remounted.wrapper.findAll('[data-test="breakdown"] [data-test="breakdown-seg"]')
+      const widthOf = (s: { attributes: (k: string) => string | undefined }) =>
+        Number.parseFloat(/width:\s*([\d.]+)px/.exec(s.attributes('style') ?? '')?.[1] ?? 'NaN')
+      const restSeg = resegs.at(-1)!
+      const topSeg = resegs[0]!
+      expect(restSeg.exists()).toBe(true)
+      expect(restSeg.attributes('style') ?? '').toContain('background-color: var(--series-rest)')
+      expect(widthOf(restSeg) / widthOf(topSeg)).toBeCloseTo(120 / 698, 3)
+    } finally {
+      restore()
+    }
+  })
+
+  // TASK-129 (web-common.bar-scale, the HomePage wiring + the u1 same-scale
+  // proof): the screen scale aggregates every bar's outer amount — the
+  // breakdown rows (Food 550 / Daily necessities 398) and the week totals
+  // (max 948) — into barScale(948) = 1000. Every row bar then renders at
+  // value/1000 × track, so the same amount paints the same length wherever
+  // it appears on the screen (the week's Food segment and the breakdown's
+  // Food row hold the identical px over the identical track width).
+  it('[covers:web-common.bar-scale][covers:web-home.week-card] Home の画面scaleは内訳行と週行の外形金額の集約（barScale(948)=1000）で同一金額=同一長さ', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const restore = patchTrackWidth(300)
+    try {
+      const { wrapper } = await mountApp('/')
+      const widthOf = (s: { attributes: (k: string) => string | undefined }) =>
+        Number.parseFloat(/width:\s*([\d.]+)px/.exec(s.attributes('style') ?? '')?.[1] ?? 'NaN')
+      // the week bar: the 948 yen week = 948/1000 × 300 = 284.4px (NOT the
+      // full track — the old list-max 100% peg is gone)
+      const weekBar = wrapper.find('[data-test="week-card"] [data-test="row-2026-10-05"] .row-bar')
+      expect(widthOf(weekBar)).toBeCloseTo((948 / 1000) * 300, 1)
+      // TASK-162 §1: the breakdown is the ONE bar — its own length is the
+      // TOTAL over the scale (948/1000 × 300) and its 食費・日用品 segments
+      // are the values over the same 1000: 550 → 165px, 398 → 119.4px
+      const bdBar = wrapper.find('[data-test="breakdown"] [data-test="breakdown-bar"]')
+      expect(widthOf(bdBar)).toBeCloseTo((948 / 1000) * 300, 1)
+      const bdSegs = wrapper.findAll('[data-test="breakdown"] [data-test="breakdown-seg"]')
+      expect(bdSegs[0]!.attributes('title')).toBe('食費 550円（58%）')
+      expect(widthOf(bdSegs[0]!)).toBeCloseTo((550 / 1000) * 300, 1)
+      expect(widthOf(bdSegs[1]!)).toBeCloseTo((398 / 1000) * 300, 1)
+      // same scale, same value, same track width ⇒ same length: the week
+      // bar's 食費 segment (550 of the 948 week) and the one bar's 食費
+      // segment paint the identical px (the "same measure" the design §4-1
+      // guarantees — a dependent property of equal available sizes)
+      const weekFoodSeg = weekBar.findAll('.row-seg')[0]!
+      expect(weekFoodSeg.attributes('title')).toBe('食費 550円（58%）')
+      expect(widthOf(weekFoodSeg)).toBeCloseTo(widthOf(bdSegs[0]!), 1)
+      expect(widthOf(weekFoodSeg)).toBeCloseTo((550 / 1000) * 300, 1)
+    } finally {
+      restore()
+    }
   })
 
   // TASK-105 (web-home.stacked-trend-fixed revised, design §4-1): the
@@ -147,9 +242,14 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
   // mock's current month holds 食費 (id 1) -> var(--series-1) and 日用品
   // (id 4) -> var(--series-4) — the residual「ほか」segment is
   // var(--series-rest), the hover titles carry the share form「名称 〜円
-  // （n%）」, value-0 series segments are omitted from the assembly, and
-  // .bar-seg gains min-height: 2px + the 1px var(--bb-surface) border
-  // between adjacent segments.
+  // （n%）」, value-0 series segments are omitted from the assembly.
+  // TASK-123 (design tmp/tasks/tm-123/design_breakdown-visual.md §4-4):
+  // the segment separation is the full-perimeter 1px var(--seg-outline)
+  // border now (the old 1px surface border-top is gone — the real-paint
+  // checks live in styles.test.ts and verify.spec.ts; jsdom cannot compute
+  // stylesheet rules) and the assembly is top-3 +「ほか」(web-common.
+  // stack-dimension-rules — proven in trend-window.test.ts's 7-series
+  // fixture; this mock month only holds two series so the count stays 2).
   it('[covers:web-home.stacked-trend-fixed] 推移カード: 積み上げ金額の1形固定（mode/metric chromeなし・セグメントは金額+構成比title・色はseriesColor写像）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/')
@@ -207,10 +307,11 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     const trendSpy = vi.spyOn(api, 'getAnalysisTrend')
     const { wrapper } = await mountApp('/')
     const zone = () => wrapper.find('[data-test="week-card"]')
-    // month mode: the selected month's weeks as Monday-anchored rows — the
-    // first bucket's Monday lives in September so its label clips at the
-    // month edge, and the month's three receipts (948円) all sit in the
-    // 10/5 week (the zero rows keep their 0円 stubs)
+    // month mode: the selected month's weeks as Monday-anchored rows —
+    // TASK-146 §2: the fetch range crosses the month, so the edge rows are
+    // FULL 7-day weeks whose labels write the month crossing as-is. The
+    // month's three receipts (948円) all sit in the 10/5 week (the zero rows
+    // keep their 0円 stubs)
     expect(zone().exists()).toBe(true)
     const rows = zone().findAll('button.week-row')
     expect(rows.map((b) => b.attributes('data-test'))).toEqual([
@@ -221,47 +322,44 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       'row-2026-10-26',
     ])
     expect(rows.map((b) => b.find('.week-label').text())).toEqual([
-      '10/1〜10/4',
+      '9/28〜10/4',
       '10/5〜10/11',
       '10/12〜10/18',
       '10/19〜10/25',
-      '10/26〜10/31',
+      '10/26〜11/1',
     ])
     expect(rows.map((b) => b.find('.amount').text())).toEqual(['0円', '948円', '0円', '0円', '0円'])
-    // TASK-116 (design §3-1): the row's inline bar carries the series
-    // breakdown — the 948円 week (all three receipts) splits its gradient
-    // into the month's top series 食費 (id 1) and 日用品 (id 4), sharing the
-    // exact seriesColor tokens the breakdown ranking rows paint
+    // TASK-123 (design §4-7, web-home.week-row-stack-bar): the row's inline
+    // bar is a DOM stacked bar now — TASK-129 routes it through the shared
+    // component (.row-bar flex row + .row-seg children), so the TASK-116
+    // multi-stop gradient string is gone. The 948円 week (all three
+    // receipts) splits into the month's top series 食費 (id 1) and 日用品
+    // (id 4), sharing the exact seriesColor tokens the breakdown ranking
+    // rows paint, each segment titled with the share form
     const filled = zone().find('[data-test="row-2026-10-05"]')
-    const bg = filled.attributes('style') ?? ''
-    expect(bg).toContain('background-image')
-    expect(bg).toContain('var(--series-1)')
-    expect(bg).toContain('var(--series-4)')
-    const img = /background-image:\s*([^;]+)/.exec(bg)?.[1] ?? ''
-    expect(img).toContain('linear-gradient(to right')
-    expect(img).toContain('transparent')
-    // REVIEW-3 Low-1 (design §5-1): the color stops stay inside the row's
-    // OWN fill — the fill% rides the same inline style as --rank-fill, so
-    // the bound is that value (the head stops before the transparent tail
-    // sit at or below it and the last one closes exactly at it), not the
-    // loose 100 the single-week mock makes coincide with it by accident
-    const fill = Number(/--rank-fill:\s*(\d+(?:\.\d+)?)%/.exec(bg)?.[1] ?? NaN)
-    expect(Number.isNaN(fill)).toBe(false)
-    const head = img.slice(0, img.indexOf('transparent'))
-    const pcts = [...head.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => Number(m[1]))
-    expect(pcts.length).toBeGreaterThanOrEqual(2)
-    for (const p of pcts) expect(p).toBeLessThanOrEqual(fill)
-    expect(Math.max(...pcts)).toBe(fill)
-    // the breakdown ranking's row for the same key paints the identical
-    // token (same key = same color across the week bar and the legend rows)
-    const ranked = wrapper.findAll('[data-test="breakdown"] .ranked-row')
-    expect((ranked[0]!.attributes('style') ?? '')).toContain('--rank-color: var(--series-1)')
-    expect(ranked[0]!.find('.ranked-label').text()).toBe('食費')
-    // zero-total weeks draw no gradient at all (the meaningless 1% accent
-    // sliver is gone — no color stops on those rows)
+    const bar = filled.find('.row-bar')
+    expect(bar.exists()).toBe(true)
+    const segs = bar.findAll('.row-seg')
+    expect(segs.length).toBe(2)
+    // array order = left = top-ranked first (the trend stack's bottom = the
+    // first series correspondence, laid out horizontally)
+    expect(segs[0]!.attributes('style')).toContain('background-color: var(--series-1)')
+    expect(segs[1]!.attributes('style')).toContain('background-color: var(--series-4)')
+    // 食費 550円（58%）/ 日用品 398円（42%）of the 948円 week
+    expect(segs[0]!.attributes('title')).toBe('食費 550円（58%）')
+    expect(segs[1]!.attributes('title')).toBe('日用品 398円（42%）')
+    // the week row left the shared ranked-row gradient: no background-image
+    // on the row itself anymore (the bar elements carry the composition)
+    expect(filled.attributes('style') ?? '').not.toContain('background-image')
+    // the breakdown ONE bar's segment for the same key paints the identical
+    // token (same key = same color across the week bar and the one bar)
+    const bdSegs = wrapper.findAll('[data-test="breakdown"] [data-test="breakdown-seg"]')
+    expect((bdSegs[0]!.attributes('style') ?? '')).toContain('background-color: var(--series-1)')
+    expect(bdSegs[0]!.attributes('title')).toBe('食費 550円（58%）')
+    // zero-total weeks draw no bar element at all (the meaningless 1% accent
+    // sliver is gone)
     for (const t of ['row-2026-09-28', 'row-2026-10-12', 'row-2026-10-19', 'row-2026-10-26']) {
-      const style = zone().find(`[data-test="${t}"]`).attributes('style') ?? ''
-      expect(style, t).not.toContain('var(--series-')
+      expect(zone().find(`[data-test="${t}"] .row-bar`).exists(), t).toBe(false)
     }
     // today (2026-10-15) highlights the row of the week holding it
     expect(zone().find('[data-test="row-2026-10-12"]').classes()).toContain('current')
@@ -272,8 +370,8 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     await settle()
     expect(trendSpy).toHaveBeenCalledWith(1, expect.objectContaining({
       granularity: 'week',
-      from: '2026-10-01',
-      to: '2026-10-31',
+      from: '2026-09-28',
+      to: '2026-11-01',
       limit: 5,
       label_colors: ['red'],
     }))
@@ -286,15 +384,15 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(store.week).toBe('2026-10-05')
     expect(zone().exists()).toBe(false)
     // week / year / range modes never mount the zone and never run the
-    // week-bucket fetch (day or month granularity only). TASK-115 §3-2
-    // (design tmp/tasks/tm-115/design_trend-continuous-window.md): a
-    // month/year commit prefetches its prev-adjacent window, so only the
-    // year mount holds a second call (from=2025-01-01 — trend-window.test.ts
-    // expects the same prefetch); the inactive week/range windows' adjacent
-    // key equals their own display key, so no prefetch issues for them
+    // week-bucket fetch (day or month granularity only). TASK-161 §1-2: a
+    // month/year commit prefetches AROUND itself — the year window pages by
+    // whole spans, so its ±span pair alone issues (2 prefetches + display =
+    // 3 calls); the month window adds the ±1-month move windows (4 prefetches
+    // + display = 5); the inactive week/range windows' adjacent key equals
+    // their own display key, so no prefetch issues for them
     const trendCallsByPath: [string, number][] = [
       ['/?week=2026-10-05', 1],
-      ['/?year=2026', 2],
+      ['/?year=2026', 3],
       ['/?from=2026-10-03&to=2026-10-15', 1],
     ]
     for (const [path, calls] of trendCallsByPath) {
@@ -318,57 +416,212 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(true)
   })
 
-  // REVIEW-3 Low-1: the fill-bound stop check above only proves itself when
-  // a row's fill actually sits below 100 — the stock mock records a single
-  // week (that row IS the max, fill=100, where "stops <= fill" and
-  // "<= 100" coincide by accident). A second, heavier recorded week drops
-  // the 10/5 row's fill below 100 and its stops must still close inside it.
-  it('[covers:web-home.week-card] 週行gradientの停止はfill<100の行でもfill内に収まる: 記録2週で重い週がmaxのとき軽い週の全色停止が当該行のfill以下・最終停止とtransparent尾はfillで閉じる', async () => {
+  // TASK-146 §2 (web-home.week-card current continuation): the current-week
+  // highlight survives onto the edge row whose Monday sits in the ADJACENT
+  // month. Today = 2026-10-01 (Thu): its week is 2026-09-28..10-04, so with
+  // October selected the first row IS the current week — the old month-clip
+  // rule (range within the month) dropped the highlight there.
+  it('[covers:web-home.week-card] 当週が隣接月側にいても current 強調は継続（今日=10/1 で row-2026-09-28 が当週）', async () => {
+    vi.setSystemTime(new Date('2026-10-01T03:00:00Z'))
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/?month=2026-10')
+    const zone = () => wrapper.find('[data-test="week-card"]')
+    expect(zone().exists()).toBe(true)
+    expect(zone().find('[data-test="row-2026-09-28"]').classes()).toContain('current')
+    // the rest of the rows are not the current week
+    for (const t of ['row-2026-10-05', 'row-2026-10-12', 'row-2026-10-19', 'row-2026-10-26']) {
+      expect(zone().find(`[data-test="${t}"]`).classes(), t).not.toContain('current')
+    }
+    // the month's records (all in the 10/5 week) keep their amounts — the
+    // extended range changes the WEEK DEFINITION, not the mock's data
+    expect(zone().find('[data-test="row-2026-10-05"] .amount').text()).toBe('948円')
+  })
+
+  // TASK-146 §1 (web-shell.period-uncapped-step): a future month renders with
+  // the existing empty vocabulary — the data talks (0円 / no records), no
+  // "future" labeling or grey-out is added
+  it('[covers:web-shell.period-uncapped-step] 未来月は既存の空表現のまま（0円・記録なし・recent 空状態・週行0円・barなし）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/?month=2026-11')
+    expect(wrapper.find('[data-test="period-total"]').text()).toBe('0円')
+    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="recent"] .empty-state').exists()).toBe(true)
+    // November 2026 spans six overlapping weeks (10/26 .. 11/30 Mondays) —
+    // all zero, no bars, and nothing explains the future
+    const rows = wrapper.findAll('[data-test="week-card"] button.week-row')
+    expect(rows.map((b) => b.attributes('data-test'))).toEqual([
+      'row-2026-10-26',
+      'row-2026-11-02',
+      'row-2026-11-09',
+      'row-2026-11-16',
+      'row-2026-11-23',
+      'row-2026-11-30',
+    ])
+    expect(rows.every((b) => b.find('.amount').text() === '0円')).toBe(true)
+    expect(wrapper.findAll('[data-test="week-card"] .row-bar')).toHaveLength(0)
+    expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+  })
+
+  // TASK-146 §3 #11 (web-common.content-swap): the skeleton -> data handover
+  // is the ContentSwap's appear fade, and it is the ONLY motion — the trend
+  // chart inside the appearing pane carries no enter classes of its own
+  it('[covers:web-common.content-swap] 初回確定（skeleton→実データ）は appear fade で現れる・chart は自分の fade を持たない（単一演出）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/', { attach: true, stubs: { transition: false } })
+    // mid-load: the skeleton holds the shape (the two-stage render stands).
+    // The skeleton itself paints a .view-stack silhouette — the REAL stack
+    // (the non-skeleton one) is what must not exist yet
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(true)
+    expect(wrapper.find('.view-stack:not(.skeleton)').exists()).toBe(false)
+    release()
+    await flushPromises()
+    // the first content commit appears through the fade vocabulary: the
+    // content-swap wrapper's child carries the appear fade's enter classes
+    const swap = wrapper.find('.view-stack .content-swap')
+    expect(swap.exists()).toBe(true)
+    expect(swap.element.children).toHaveLength(1)
+    const child = swap.element.firstElementChild!
+    expect(child.classList.contains('page-enter-active')).toBe(true)
+    expect(child.classList.contains('page-enter-from')).toBe(true)
+    // single motion: the pane's appear is the only animation — after the
+    // settle the trend chart itself carries no enter classes of its own
+    await settle()
+    const chart = wrapper.find('[data-test="trend"]')
+    expect(chart.exists()).toBe(true)
+    expect(
+      Array.from(chart.element.classList).some((c) => c.includes('-enter-') || c.includes('-leave-')),
+    ).toBe(false)
+  })
+
+  // TASK-146 §3 #6/#7 (web-common.content-swap): the content transition fires
+  // at the LOAD COMMIT, not at the press. Mid-load the old content stays
+  // (dimmed, swap key unmoved — the two-stage render of
+  // web-shell.loading-skeleton survives). TASK-161 §2 (web-common.period-
+  // move-voice, 指摘3): a PERIOD step no longer slides/remounts the pane —
+  // the committedKey drops the period range, so the commit renders in place
+  // (same pane node, no slide vocabulary) and the value-level vocabulary
+  // owns the change; a mode switch keeps crossing through the fade.
+  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepはpaneを再mountしない（load確定時もslide classなし・同一DOM）・mode切替はfadeのまま', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    let gated = false
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      if (gated) await gate
+      return orig(...args)
+    })
+    const { wrapper } = await mountApp('/', { attach: true, stubs: { transition: false } })
+    const swap = () => wrapper.find('.view-stack .content-swap')
+    expect(swap().exists()).toBe(true)
+    const children = () => Array.from(swap().element.children)
+    const still = () =>
+      children().every((el) =>
+        Array.from(el.classList).every((c) => !c.includes('-enter-') && !c.includes('-leave-')),
+      )
+
+    // press › into the future month (TASK-146 §1) through the period dialog;
+    // the re-fetch is held at the gate
+    gated = true
+    await wrapper.find('[data-test="filter-period"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(wrapper.find('[data-test="period-total"]').text()).toBe('948円')
+    expect(still()).toBe(true)
+    const paneBefore = swap().element.firstElementChild
+    // TASK-161: the commit lands IN PLACE — no slide-forward/back classes and
+    // the pane element is the SAME node (the period change never bumps the
+    // committedKey, so ContentSwap does not remount the pane at all)
+    release()
+    await flushPromises()
+    expect(still()).toBe(true)
+    expect(swap().element.children).toHaveLength(1)
+    expect(swap().element.firstElementChild).toBe(paneBefore)
+    await settle()
+    expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+
+    // a mode switch (month -> week) still remounts the pane: the fade
+    // vocabulary carries the swap (the dialog stays open through both)
+    gated = false
+    await wrapper.find('[data-test="mode-week"]').trigger('click')
+    await flushPromises()
+    const fading = children().find((el) => el.classList.contains('page-enter-active'))
+    expect(fading).toBeDefined()
+    const fadingOut = children().find((el) => el.classList.contains('page-leave-active'))
+    expect(fadingOut).toBeDefined()
+    await settle()
+    expect(wrapper.find(".period-label").text()).toBe('2026年10月12日の週')
+  })
+
+  // REVIEW-3 Low-1's non-vacuity (a second, heavier recorded week so the
+  // light row's bar really sits below the max) carries over to the TASK-129
+  // absolute scale: the bars no longer peg the list max at 100% — the screen
+  // scale = barScale(max(breakdown rows 食費1600/日用品398, week totals
+  // 798/1200)) = barScale(1600) = 2000, so the light week renders at
+  // 798/2000 = 0.399 of the track and even the max week sits at 0.6. The
+  // px-level proof with a REAL track width lives in verify.spec.ts; here the
+  // unit side pins the math over the patched 300px track plus the
+  // composition of both weeks under the reseeded month.
+  it('[covers:web-home.week-row-stack-bar][covers:web-common.bar-scale] 記録2週でもbar長は絶対scale（画面scale=2000・max週も全長でない）で軽い週のbarも両系列を維持', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     // move receipt 103 (おにぎり・食費) into the 10/12 week and raise it to
     // 1200円: the 10/5 week keeps both series (食費400 + 日用品398 = 798円)
-    // while the max moves to the 10/12 week — fill(10/5) =
-    // round(798/1200*100) = 67, a real sub-100 fill with TWO color stops
+    // while the month max moves to 食費 1600円 (breakdown) — the screen
+    // scale therefore comes from the RANKING max, not the week max
     await api.updateReceipt(1, 103, {
       revision: 1,
       set: { purchased_on: '2026-10-13' },
       upsert_items: [{ item_id: 1004, amount: 1200 }],
     })
-    const { wrapper } = await mountApp('/')
-    const zone = () => wrapper.find('[data-test="week-card"]')
-    expect(zone().findAll('button.week-row').map((b) => b.find('.amount').text())).toEqual([
-      '0円', '798円', '1,200円', '0円', '0円',
-    ])
-    const stopsOf = (testId: string) => {
-      const bg = zone().find(`[data-test="${testId}"]`).attributes('style') ?? ''
-      const fill = Number(/--rank-fill:\s*(\d+(?:\.\d+)?)%/.exec(bg)?.[1] ?? NaN)
-      expect(Number.isNaN(fill), testId).toBe(false)
-      const img = /background-image:\s*([^;]+)/.exec(bg)?.[1] ?? ''
-      const head = img.slice(0, img.indexOf('transparent'))
-      const pcts = [...head.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => Number(m[1]))
-      const tail = Number(/transparent\s+(\d+(?:\.\d+)?)%/.exec(img)?.[1] ?? NaN)
-      return { bg, fill, pcts, tail }
+    const restore = patchTrackWidth(300)
+    try {
+      const { wrapper } = await mountApp('/')
+      const zone = () => wrapper.find('[data-test="week-card"]')
+      expect(zone().findAll('button.week-row').map((b) => b.find('.amount').text())).toEqual([
+        '0円', '798円', '1,200円', '0円', '0円',
+      ])
+      // the light week keeps BOTH series in the DOM bar — the series lineup
+      // follows the month-total order (食費 series-1 then 日用品 series-4),
+      // the bucket's own composition splits the segments and every recorded
+      // segment carries the share title
+      const lightSegs = zone().find('[data-test="row-2026-10-05"] .row-bar').findAll('.row-seg')
+      expect(lightSegs.length).toBe(2)
+      expect(lightSegs[0]!.attributes('style')).toContain('background-color: var(--series-1)')
+      expect(lightSegs[1]!.attributes('style')).toContain('background-color: var(--series-4)')
+      expect(lightSegs[0]!.attributes('title')).toBe('食費 400円（50%）')
+      expect(lightSegs[1]!.attributes('title')).toBe('日用品 398円（50%）')
+      // the heavier week (single 食費 1200円) draws its own one segment bar
+      const maxSegs = zone().find('[data-test="row-2026-10-12"] .row-bar').findAll('.row-seg')
+      expect(maxSegs.length).toBe(1)
+      expect(maxSegs[0]!.attributes('style')).toContain('background-color: var(--series-1)')
+      expect(maxSegs[0]!.attributes('title')).toBe('食費 1,200円（100%）')
+      // TASK-129 absolute scale (web-common.bar-scale): the bar lengths are
+      // value/2000×300 — the light week 119.7px, the max week 180px (NOT the
+      // full track: the old max=100% peg is gone) and the breakdown ONE
+      // bar's 食費 1600円 segment paints 240px on the SAME screen scale
+      const widthOf = (s: { attributes: (k: string) => string | undefined }) =>
+        Number.parseFloat(/width:\s*([\d.]+)px/.exec(s.attributes('style') ?? '')?.[1] ?? 'NaN')
+      expect(widthOf(zone().find('[data-test="row-2026-10-05"] .row-bar'))).toBeCloseTo((798 / 2000) * 300, 1)
+      expect(widthOf(zone().find('[data-test="row-2026-10-12"] .row-bar'))).toBeCloseTo((1200 / 2000) * 300, 1)
+      const foodSeg = wrapper.findAll('[data-test="breakdown"] [data-test="breakdown-seg"]')[0]!
+      expect(foodSeg.attributes('title')).toBe('食費 1,600円（80%）')
+      expect(widthOf(foodSeg)).toBeCloseTo((1600 / 2000) * 300, 1)
+      // the zero weeks still draw no bar at all
+      for (const t of ['row-2026-09-28', 'row-2026-10-19', 'row-2026-10-26']) {
+        expect(zone().find(`[data-test="${t}"] .row-bar`).exists(), t).toBe(false)
+      }
+    } finally {
+      restore()
     }
-    // the sub-100 fill row: every color stop sits at or below the row's own
-    // fill, the last one closes exactly at it and the transparent tail
-    // opens there (the bar ends where the fill ends)
-    const light = stopsOf('row-2026-10-05')
-    expect(light.fill).toBe(67)
-    expect(light.fill).toBeLessThan(100)
-    expect(light.pcts.length).toBeGreaterThanOrEqual(2)
-    for (const p of light.pcts) expect(p, `stop ${p} > fill ${light.fill}`).toBeLessThanOrEqual(light.fill)
-    expect(Math.max(...light.pcts)).toBe(light.fill)
-    expect(light.tail).toBe(light.fill)
-    // the row keeps the month-total series order (食費 series-1 then 日用品
-    // series-4) — both stops live inside the sub-100 fill
-    expect(light.bg).toContain('var(--series-1)')
-    expect(light.bg).toContain('var(--series-4)')
-    // the heavier week becomes the max (fill=100) and closes the same way
-    const max = stopsOf('row-2026-10-12')
-    expect(max.fill).toBe(100)
-    for (const p of max.pcts) expect(p).toBeLessThanOrEqual(max.fill)
-    expect(Math.max(...max.pcts)).toBe(max.fill)
-    expect(max.tail).toBe(max.fill)
   })
 
   it('[covers:web-home.trend-granularity][covers:web-browse.trend-axis-minimal][covers:web-browse.trend-y-axis][covers:web-browse.trend-note-removed] 推移は期間の粒度に追従（月/年=月棒・range は 62/366 日閾値）・軸ラベルは間引き・値ラベルは全棒', async () => {
@@ -442,16 +695,54 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
 })
 
 describe('PeriodHeader (component)', () => {
-  it('期間labelと合計のみを描画する（diff・選択器の部位を持たない）', () => {
+  it('[covers:web-home.period-header] 期間label（「の支出」なし）・step pair・合計のみを描く（diff・選択器の部位を持たない）', () => {
+    // TASK-161 §3/§4: PeriodStep reads the period store directly, so the
+    // component mount needs the pinia instance (the fake clock keeps the
+    // store's month at 2026-10)
+    const pinia = createPinia()
+    setActivePinia(pinia)
     const w = mount(PeriodHeader, {
       props: {
-        label: '2026年10月の支出',
+        label: '2026年10月',
         total: 948,
       },
+      global: { plugins: [pinia] },
     })
-    expect(w.find('.period-label').text()).toBe('2026年10月の支出')
+    expect(w.find('.period-label').text()).toBe('2026年10月')
     expect(w.find('[data-test="period-total"]').text()).toBe('948円')
     expect(w.find('[data-test^="compare-"]').exists()).toBe(false)
+    // the step pair brackets the label (web-common.period-step)
+    expect(w.find('[data-test="period-step-prev"]').attributes('aria-label')).toBe('前の月')
+    expect(w.find('[data-test="period-step-next"]').attributes('aria-label')).toBe('次の月')
+  })
+
+  // TASK-161 §2-2/§4 (review 中5): the period label's direction micro move —
+  // the FIRST move after mount animates (the baseline is captured at mount,
+  // not on the first change), a rapid same-direction press RESTARTS the
+  // animation (the class is stripped and re-applied a frame apart, never
+  // merely re-set), and a reversal flips the direction class.
+  it('[covers:web-common.period-move-voice] label micro move: 初回の期間移動で発火・方向は移動へ追従・同方向連打で再始動・逆方向で反転', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const period = usePeriodStore()
+    const w = mount(PeriodHeader, {
+      props: { label: period.label, total: 0 },
+      global: { plugins: [pinia] },
+    })
+    const label = () => w.find('.period-step-label')
+    expect(label().classes()).not.toContain('label-move-next')
+    // the FIRST move after the mount animates (2026-10 → 11: forward)
+    period.step(1)
+    await settle()
+    expect(label().classes()).toContain('label-move-next')
+    // a rapid same-direction press restarts the pass (strip → re-apply)
+    period.step(1)
+    await settle()
+    expect(label().classes()).toContain('label-move-next')
+    // a reversal flips the direction
+    period.step(-1)
+    await settle()
+    expect(label().classes()).toContain('label-move-prev')
   })
 })
 
@@ -464,6 +755,7 @@ describe('RankedList (component)', () => {
           { keys: [null], labels: ['ほか 2件・計270円'], value: 270, share: undefined },
         ],
         to: (r) => (typeof r.keys[0] === 'number' ? { path: '/axes/category/1' } : null),
+        scale: 1000,
       },
       global: {
         stubs: {
@@ -934,5 +1226,363 @@ describe('Brand logo (TASK-16 / TASK-27)', () => {
     // the sidebar carries neither a brand link nor a logo
     expect(wrapper.find('[data-test="sidebar"] a.brand').exists()).toBe(false)
     expect(wrapper.find('[data-test="sidebar"] [aria-label="kakeiboot"]').exists()).toBe(false)
+  })
+})
+
+// TASK-161 (design: tmp/tasks/tm-161/design_period_ui.md v2 §3〜§7, the
+// period-UI rework), test-first — the step pair inside the reworked period
+// header (指摘4), the「の支出」suffix removal (指摘5), the breakdown zone moved
+// under the header with the absolute ticks and no % column (指摘7), and the
+// in-bar series labels' unmeasured fallback (指摘8; the CSS thickness side
+// of 指摘9 lives in styles.test.ts). Red until the implementation lands.
+describe('HomePage period UI (TASK-161)', () => {
+  it('[covers:web-common.period-step][covers:web-home.period-header] 期間step pair: 期間labelを挟む‹›（aria「前の月」「次の月」・押下で月±1）・labelはperiod.labelのみ（「の支出」なし）・rangeモードはstep pairなし', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    const prev = wrapper.find('[data-test="period-step-prev"]')
+    const next = wrapper.find('[data-test="period-step-next"]')
+    expect(prev.exists()).toBe(true)
+    expect(next.exists()).toBe(true)
+    expect(prev.attributes('aria-label')).toBe('前の月')
+    expect(next.attributes('aria-label')).toBe('次の月')
+    // the pair brackets the period label (§4's one-line layout)
+    expect(prev.element.nextElementSibling?.textContent).toContain('2026年10月')
+    // a press moves the period (§3: the pair calls period.step)
+    await next.trigger('click')
+    await settle()
+    expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+    await prev.trigger('click')
+    await settle()
+    expect(wrapper.find('.period-label').text()).toBe('2026年10月')
+    // range mode hides the pair entirely (the PeriodPicker rule: a range is
+    // a one-off narrowing — no "previous/next" series to step along)
+    const period = usePeriodStore()
+    period.mode = 'range'
+    period.from = '2026-10-01'
+    period.to = '2026-10-15'
+    await settle()
+    expect(wrapper.find('[data-test="period-step-prev"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="period-step-next"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-home.breakdown-absolute-ticks][covers:web-common.axis-ticks] 内訳zoneのheader直下移動: 1本積み上げbar化（行list廃止・segment button・累積額軸の絶対目盛り5段階）・空状態維持', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    // the breakdown zone sits DIRECTLY under the period header (§5-1) with
+    // no heading of its own — the position and the bar carries it
+    const head = wrapper.find('.period-head')
+    const zone = head.element.nextElementSibling
+    expect(zone).not.toBeNull()
+    expect(zone?.querySelector('.zone-title')?.textContent ?? '').not.toContain('支出の内訳')
+    // TASK-162 §1: the row list is GONE — the surface is ONE stacked bar
+    // (BreakdownBar) whose segments are the pressable links; the ranked-row
+    // grammar (rows, swatches, the % share column) no longer exists here
+    expect(zone?.querySelectorAll('.ranked-row').length ?? 1).toBe(0)
+    expect(zone?.querySelectorAll('.ranked-swatch').length ?? 1).toBe(0)
+    expect(zone?.querySelectorAll('.ranked-share').length ?? 1).toBe(0)
+    // the ONE bar: the mock month holds 食費550 + 日用品398 = the totals
+    // 948 with no residual — two series segments (buttons carrying the
+    // series keys), no「ほか」segment (the residual would be 0)
+    const bar = wrapper.find('[data-test="breakdown-bar"]')
+    expect(bar.exists()).toBe(true)
+    const segs = wrapper.findAll('[data-test="breakdown-seg"]')
+    expect(segs).toHaveLength(2)
+    expect(segs[0]!.element.tagName).toBe('BUTTON')
+    expect(segs[0]!.attributes('title')).toMatch(/^食費 550円（\d+%）$/)
+    expect(segs[1]!.attributes('title')).toMatch(/^日用品 398円（\d+%）$/)
+    // the absolute ticks over the track: 5 ascending (axisTicksOf steps=4),
+    // the base (ratio=0) keeps its gridline but no value label, and the top
+    // tick shows the screen scale (barScale over the 948円 month = 1000)
+    const ticks = wrapper.findAll('[data-test^="breakdown-tick-"]')
+    expect(ticks).toHaveLength(5)
+    expect(ticks[0]!.text()).toBe('')
+    expect(ticks[4]!.text()).toBe('1千')
+    // the empty state keeps its one line (§1-1): September holds no records
+    // — no bar, no segments, no ticks
+    await wrapper.find('[data-test="period-step-prev"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="breakdown-bar"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="breakdown-seg"]').length).toBe(0)
+    expect(wrapper.findAll('[data-test^="breakdown-tick-"]').length).toBe(0)
+    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+  })
+
+  it('[covers:web-home.week-row-in-bar-label] 週行segmentのbar内label: jsdom未測定では非表示fallback（色のみ）・title「名称 金額（n%）」は維持', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    // unmeasured tracks (jsdom) keep the in-bar labels off — the fit rule
+    // needs the drawn px; the segments keep their full titles either way
+    const segs = wrapper.findAll('[data-test="week-card"] .row-seg')
+    expect(segs.length).toBeGreaterThan(0)
+    expect(segs.every((s) => s.element.textContent === '')).toBe(true)
+    expect(segs[0]!.attributes('title')).toMatch(/^.+ \d+円（\d+%）$/)
+  })
+
+  // TASK-161 §6-1 (review 低9 + the 検証不足 boundary): the in-bar label's
+  // three-state fit, driven straight off the segment's drawn px — the FULL
+  // name whenever it fits (a single-code-point name fits widths the
+  // truncation minimum never could), the width-budget … truncation next, and
+  // the colour-only fallback under both. TASK-162 §3-1 moved the type to
+  // 11px/600/0.02em (the --bar-label-* tokens' JS twin) — the ladder's px
+  // budgets shift with it (22px per full-width char).
+  it('[covers:web-home.week-row-in-bar-label] bar内labelのfit境界: 全文→…切り詰め→非表示の3段階・1字名は全文が先にfit・inkはcontrast token', () => {
+    const seg = (label: string, size: number): AllocatedSegment => ({
+      label,
+      value: 100,
+      color: 'var(--series-1)',
+      size,
+      outline: true,
+    })
+    const mountBar = (label: string, size: number) =>
+      mount(RowBar, { props: { width: size, segs: [seg(label, size)], inBarLabels: true } })
+    // the FULL name fits: 「食費」 (2 × 11.22px pitch = 22.44px) within
+    // avail 23 (size 31) — PR#4 review 6: the estimate counts the 0.02em
+    // tracking (1.02em pitch, verticalSegLabel's errs-wide twin), so the
+    // old 30px boundary (22px at the bare 11px) no longer claims the fit
+    const full = mountBar('食費', 31)
+    expect(full.find('.row-seg-label').text()).toBe('食費')
+    expect(full.find('.row-seg').attributes('style') ?? '').toContain('color: var(--series-1-ink)')
+    full.unmount()
+    // too narrow for the full name but wide enough for the truncation
+    // minimum: 「日用品」 at avail 25 → 「日…」 (2 × 11.22 = 22.44px)
+    const cut = mountBar('日用品', 33)
+    expect(cut.find('.row-seg-label').text()).toBe('日…')
+    cut.unmount()
+    // under both: colour only (avail 20 < the truncation minimum 22.44)
+    const none = mountBar('日用', 28)
+    expect(none.find('.row-seg-label').exists()).toBe(false)
+    none.unmount()
+    // a single-code-point name (review 低9): its FULL form (11.22px) fits
+    // avail 12 — widths the 2-code-point truncation minimum never could
+    const one = mountBar('食', 20)
+    expect(one.find('.row-seg-label').text()).toBe('食')
+    one.unmount()
+  })
+})
+
+// TASK-164 §1 (design: tmp/tasks/tm-164/design_back_home.md v4): the home
+// re-press reset — on the home route every home affordance (the tabbar home
+// tab, the brand logo, the sidebar home link) re-confirms the base: it
+// resets the period to the default (the current month · month mode) WITHOUT
+// issuing a navigation, keeps the label filter, and the sidebar press closes
+// the drawer (the navKey watcher never fires on the same path). The
+// judgement is route.name === 'home' alone — the axis detail screens share
+// meta.section 'home' but are NOT the home route, so their home press keeps
+// the ordinary keys-less navigation. Test-first: red until it lands.
+describe('Home re-press reset (TASK-164 §1)', () => {
+  const MOCK = { 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } }
+
+  /** A home affordance press by its selector (the three home routes). */
+  const press = async (wrapper: Awaited<ReturnType<typeof mountApp>>['wrapper'], route: string): Promise<void> => {
+    const el =
+      route === 'tabbar'
+        ? wrapper.find('[data-test="tabbar"] a')
+        : route === 'brand'
+          ? wrapper.find('a.brand')
+          : wrapper.find('[data-test="nav-home"]')
+    await el.trigger('click')
+    await settle()
+  }
+
+  it('[covers:web-shell.home-repress-reset] home画面でのhome再押下3経路（tabbar・brand・sidebar）はデフォルト期間へ復帰（遷移なし・URLは当月keysへ・labels維持）', async () => {
+    for (const route of ['tabbar', 'brand', 'sidebar']) {
+      mockFetch(MOCK)
+      const m = await mountApp('/?month=2026-09&labels=red')
+      const store = usePeriodStore(m.pinia)
+      const push = vi.spyOn(m.router, 'push')
+      await press(m.wrapper, route)
+      // the period returns to the default (2026-10, month mode) ...
+      expect(store.mode, route).toBe('month')
+      expect(store.month, route).toBe('2026-10')
+      // ... the labels ride along untouched (B1)
+      expect(store.labelColors, route).toEqual(['red'])
+      // no navigation: the reset is a store change the write-back paints
+      // onto the URL (a replace), never a router.push
+      expect(push, route).not.toHaveBeenCalled()
+      expect(m.router.currentRoute.value.path, route).toBe('/')
+      expect(m.router.currentRoute.value.query.month, route).toBe('2026-10')
+      expect(m.router.currentRoute.value.query.labels, route).toBe('red')
+    }
+  })
+
+  it('[covers:web-shell.home-repress-recompute] 月越しsessionでのhome再押下は押下時の当月へ復帰する（生成時の当月でない）', async () => {
+    mockFetch(MOCK)
+    // the store was created at 2026-10-15; the session crosses into November
+    const m = await mountApp('/?month=2026-05')
+    vi.setSystemTime(new Date('2026-11-02T03:00:00Z'))
+    const store = usePeriodStore(m.pinia)
+    await press(m.wrapper, 'tabbar')
+    expect(store.month).toBe('2026-11')
+    expect(m.router.currentRoute.value.query.month).toBe('2026-11')
+  })
+
+  it('[covers:web-shell.home-repress-scope] 判定はroute.name==="home"のみ: axis詳細（section:"home"）やhome外からの押下は通常遷移（resetしない）・sidebar再押下はdrawerを閉じる', async () => {
+    // the name-keyed axes carry meta.section 'home' but are NOT the home
+    // route — their home press is the ordinary keys-less navigation (the
+    // shared period rides along, no reset)
+    mockFetch(MOCK)
+    const axis = await mountApp('/axes/item/牛乳?month=2026-09')
+    await press(axis.wrapper, 'tabbar')
+    expect(axis.router.currentRoute.value.path).toBe('/')
+    const axisStore = usePeriodStore(axis.pinia)
+    expect(axisStore.month).toBe('2026-09')
+    expect(axis.router.currentRoute.value.query.month).toBe('2026-09')
+
+    // off-home → home keeps the current behavior too (keys-less continuation)
+    mockFetch(MOCK)
+    const away = await mountApp('/categories?month=2026-09')
+    await press(away.wrapper, 'tabbar')
+    expect(away.router.currentRoute.value.path).toBe('/')
+    expect(usePeriodStore(away.pinia).month).toBe('2026-09')
+    expect(away.router.currentRoute.value.query.month).toBe('2026-09')
+
+    // the sidebar press closes the drawer: the navKey watcher never fires on
+    // the same path, so the handler itself must close it
+    mockFetch(MOCK)
+    const m = await mountApp('/?month=2026-09')
+    await m.wrapper.find('[data-test="menu-button"]').trigger('click')
+    await settle()
+    expect(m.wrapper.find('.shell').classes()).toContain('drawer-open')
+    await press(m.wrapper, 'sidebar')
+    expect(m.wrapper.find('.shell').classes()).not.toContain('drawer-open')
+    expect(usePeriodStore(m.pinia).month).toBe('2026-10')
+  })
+})
+
+// TASK-164 §2-4 (design: tmp/tasks/tm-164/design_back_home.md v4): the
+// browsing back affordance — the browsing screens (home / receipts /
+// categories / stores / the axes / search) get a topbar ‹ whose press is
+// router.back() (the SAME history the device back reads), bounded by the
+// shell-start position: at the boundary the four root screens hide the ‹
+// while the axes (a static fallback parent) and /search (fallback '/') keep
+// it and climb instead; the fallback push moves the boundary so a second
+// press never ping-pongs. A double press before the back lands is one back
+// (the in-flight guard). Test-first: red until it lands.
+describe('browsing topbar back ‹ (TASK-164 §2-4)', () => {
+  const MOCK = { 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } }
+
+  it('[covers:web-shell.browsing-back] 閲覧系画面のtopbar ‹ は app 内履歴があるとき router.back で戻る（parentTo push でない）', async () => {
+    for (const path of ['/', '/receipts', '/categories', '/stores', '/axes/category/1', '/search?q=牛乳']) {
+      mockFetch(MOCK)
+      // the shell starts at position 1 (the boundary) ...
+      window.history.replaceState({ position: 1 }, '')
+      const m = await mountApp('/')
+      // ... then the app moves: position 2 is inside the app's own history
+      window.history.replaceState({ position: 2 }, '')
+      await m.router.push(path)
+      await settle()
+      const back = m.wrapper.find('[data-test="topbar-back"]')
+      expect(back.exists(), path).toBe(true)
+      expect(back.attributes('aria-label'), path).toBe('戻る')
+      const backSpy = vi.spyOn(m.router, 'back')
+      const pushSpy = vi.spyOn(m.router, 'push')
+      await back.trigger('click')
+      await settle()
+      expect(backSpy, path).toHaveBeenCalledTimes(1)
+      expect(pushSpy, path).not.toHaveBeenCalled()
+      expect(m.router.currentRoute.value.path, path).toBe('/')
+    }
+  })
+
+  it('[covers:web-shell.browsing-back] ‹ の連打は1回のbackに抑止される（in-flight guard・1押下=1entry）', async () => {
+    mockFetch(MOCK)
+    window.history.replaceState({ position: 1 }, '')
+    const m = await mountApp('/')
+    window.history.replaceState({ position: 2 }, '')
+    await m.router.push('/categories?month=2026-10')
+    await settle()
+    const backSpy = vi.spyOn(m.router, 'back')
+    const btn = () => m.wrapper.find('[data-test="topbar-back"]')
+    expect(btn().exists()).toBe(true)
+    // two presses before the first back's navigation lands
+    await btn().trigger('click')
+    await btn().trigger('click')
+    await settle()
+    expect(backSpy).toHaveBeenCalledTimes(1)
+    expect(m.router.currentRoute.value.path).toBe('/')
+  })
+
+  it('[covers:web-browse.nav-boundary] 境界: ルート4画面はapp内履歴なしで ‹ 非表示・axes/searchはfallbackで親へpush（境界更新で往復しない）・position欠損もfallback扱い', async () => {
+    // a direct link IS the boundary: the four root screens (no fallback
+    // parent) hide the ‹ entirely
+    for (const path of ['/', '/categories', '/stores', '/receipts']) {
+      mockFetch(MOCK)
+      window.history.replaceState({ position: 3 }, '')
+      const m = await mountApp(path)
+      expect(m.wrapper.find('[data-test="topbar-back"]').exists(), path).toBe(false)
+    }
+
+    // the axes keep a static fallback parent and show the ‹ at the boundary
+    const FALLBACK: [string, string][] = [
+      ['/axes/category/1?month=2026-10', '/categories'],
+      ['/axes/category/1/2?month=2026-10', '/categories'],
+      ['/axes/category/uncategorized?month=2026-10', '/categories'],
+      ['/axes/store/1?month=2026-10', '/stores'],
+      ['/axes/item/牛乳?month=2026-10', '/'],
+      ['/axes/label/red?month=2026-10', '/'],
+      ['/axes/payment/cash?month=2026-10', '/'],
+      ['/search?q=牛乳', '/'],
+    ]
+    for (const [path, parent] of FALLBACK) {
+      mockFetch(MOCK)
+      window.history.replaceState({ position: 3 }, '')
+      const m = await mountApp(path)
+      const back = m.wrapper.find('[data-test="topbar-back"]')
+      expect(back.exists(), path).toBe(true)
+      const backSpy = vi.spyOn(m.router, 'back')
+      await back.trigger('click')
+      await settle()
+      // the fallback is a parent push (never a back past the boundary) ...
+      expect(backSpy, path).not.toHaveBeenCalled()
+      expect(m.router.currentRoute.value.path, path).toBe(parent)
+      // ... and the boundary moved with it: the next press on a root screen
+      // has nothing behind it (no axis → list → axis ping-pong)
+      // every fallback parent is a root screen: with the boundary moved by
+      // the fallback push the ‹ is gone there (no axis → list → axis
+      // ping-pong — the comparison (iii) of §2-4)
+      expect(m.wrapper.find('[data-test="topbar-back"]').exists(), path).toBe(false)
+    }
+
+    // a missing position (an unreadable history state) reads as "no app
+    // history": the fallback path, never a back
+    mockFetch(MOCK)
+    window.history.replaceState(null, '')
+    const lost = await mountApp('/axes/category/1?month=2026-10')
+    expect(lost.wrapper.find('[data-test="topbar-back"]').exists()).toBe(true)
+    const backSpy = vi.spyOn(lost.router, 'back')
+    await lost.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    await settle()
+    expect(backSpy).not.toHaveBeenCalled()
+    expect(lost.router.currentRoute.value.path).toBe('/categories')
+  })
+})
+
+
+// TASK-167 A系 (design: tmp/tasks/tm-167/design_row_hierarchy.md v2 §2
+// D-1/D-2/D-3): every list row is ONE shared grammar — the main line (the
+// data name 16px w600 + the amount 16px w700 tabular at the right) and a sub
+// line (the derived top items 0.8rem muted + the secondary figure + the
+// label dots). The class vocabulary (.data-row / .row-main / .row-sub) is
+// fixed by the conditions — the per-surface .recent-row definitions fold
+// into it. Test-first: red until the implementation lands.
+describe('list rows two-line hierarchy (TASK-167)', () => {
+  it('[covers:web-common.data-row-grammar][covers:web-common.row-top-items-display] Home最近のレシート行は2行構成（主行=店名+金額・副行=代表品目）で旧recent-row語彙は廃止', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    const rows = wrapper.findAll('[data-test="recent"] .data-row')
+    expect(rows.length).toBeGreaterThan(0)
+    const row = rows[0]!
+    // the main line: the store name and the strongest figure (the amount)
+    expect(row.find('.row-main').exists()).toBe(true)
+    expect(row.find('.row-main .amount').exists()).toBe(true)
+    // the sub line: the derived representative items (k = 2, amount desc —
+    // the mock's leading October receipt buys 牛乳 and パン) ride with the
+    // time and the label dots
+    const sub = row.find('.row-sub')
+    expect(sub.exists()).toBe(true)
+    expect(sub.text()).toContain('牛乳')
+    // the old single-line vocabulary is gone (the shared row component
+    // replaces the per-surface .recent-row definitions)
+    expect(wrapper.find('.recent-row').exists()).toBe(false)
   })
 })

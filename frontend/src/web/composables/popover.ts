@@ -64,7 +64,16 @@ export function usePopover(options: UsePopoverOptions): { toggle: () => void; cl
       if (rect.left < margin) shift = margin - rect.left
       else if (rect.right > window.innerWidth - margin) shift = window.innerWidth - margin - rect.right
     }
+    // the correction lands AT ONCE: the panel rides a Transition whose
+    // transform is live through the enter fade, so a plain property write
+    // would ease the correction in — the panel visibly sliding into the
+    // margin. Park the transition for the write, commit it with a forced
+    // reflow, then hand the transform back to the fade
+    const had = panel.style.transition
+    panel.style.transition = 'none'
     panel.style.setProperty('--popover-shift', `${Math.round(shift)}px`)
+    void panel.offsetWidth
+    panel.style.transition = had
   }
 
   watch(

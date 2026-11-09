@@ -2060,8 +2060,14 @@ async fn analysis_breakdown_axis_metric_rows() {
     // appear in the current-period analysis
     assert_eq!(v["truncated_rows"], 1);
 
-    // no query: category x amount defaults
-    let v = body_json(c.get(&router, "/api/ledgers/1/analysis").await).await;
+    // no axis / metric: category x amount defaults. The period is pinned to
+    // the fixture month (TASK-156): the default period is the JST current
+    // month, which would make this assertion depend on the run date.
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?month=2026-10")
+            .await,
+    )
+    .await;
     assert_eq!(v["axis"], "category");
     assert_eq!(v["metric"], "amount");
     // seeded catalog has no matching category -> 未分類 axis row
@@ -2487,4 +2493,140 @@ async fn analysis_input_validation() {
         let resp = c.get(&router, &q).await;
         assert_eq!(resp.status(), 404, "{q}");
     }
+}
+
+// --- TASK-167 D-3: the derived top_items on the list / analysis rows -------
+
+#[tokio::test]
+// [covers:web-data-api.receipt-top-items]
+async fn receipt_list_rows_carry_top_items() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    // 101: three items — the derivation picks the two most expensive
+    // (amount desc), NOT the file order
+    insert_receipt_bare(&pool, 101, 1, 1, "2026-10-10").await;
+    insert_priced_item(&pool, 10101, 101, 1, 1, "牛乳", "牛乳", 220, 1.0, None).await;
+    insert_priced_item(&pool, 10102, 101, 1, 2, "洗剤", "せんざい", 498, 1.0, None).await;
+    insert_priced_item(&pool, 10103, 101, 1, 3, "パン", "ぱん", 150, 1.0, None).await;
+    // 102: a same-amount pair — the tie-break is the lower line_no
+    insert_receipt_bare(&pool, 102, 1, 1, "2026-10-12").await;
+    insert_priced_item(&pool, 10201, 102, 1, 2, "酒", "さけ", 100, 1.0, None).await;
+    insert_priced_item(&pool, 10202, 102, 1, 1, "水", "みず", 100, 1.0, None).await;
+    // 103: a hand-typed receipt with no items at all — the sub line falls
+    // back to the time alone, so top_items is empty. Its single line is a
+    // DISCOUNT (REVIEW-15 低3): a non-item line must not surface as a
+    // representative item even when the receipt has fewer than two items
+    insert_receipt_full(&pool, 103, 1, 1, "2026-10-05", 300).await;
+    sqlx::query("DELETE FROM receipt_items WHERE receipt_id = 103")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO receipt_items (id, receipt_id, ledger_id, line_no, line_kind, name, name_norm,
+             amount, amount_incl, created_at, updated_at)
+         VALUES (10301, 103, 1, 1, 'discount', '値引', 'ねひき', -20, -20, 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let v = body_json(c.get(&router, "/api/ledgers/1/receipts").await).await;
+    let rows = v["receipts"].as_array().unwrap();
+    let by = |id: i64| rows.iter().find(|r| r["receipt_id"] == id).unwrap();
+
+    let top101 = by(101)["top_items"].as_array().unwrap();
+    assert_eq!(top101.len(), 2, "k = 2");
+    assert_eq!(top101[0]["name"], "洗剤");
+    assert_eq!(top101[0]["amount"], 498);
+    assert_eq!(top101[1]["name"], "牛乳");
+    assert_eq!(top101[1]["amount"], 220);
+
+    let top102 = by(102)["top_items"].as_array().unwrap();
+    assert_eq!(
+        top102[0]["name"], "水",
+        "the tie-break is the lower line_no"
+    );
+    assert_eq!(top102[1]["name"], "酒");
+
+    let top103 = by(103)["top_items"].as_array().unwrap();
+    assert!(
+        top103.iter().all(|t| t["name"] != "値引"),
+        "the discount line is never a representative item: {top103:?}"
+    );
+    assert!(top103.is_empty(), "an item-less receipt has no top items");
+}
+
+#[tokio::test]
+// [covers:web-data-api.analysis-top-items]
+async fn analysis_rows_carry_top_items_per_axis() {
+    let (router, pool) = setup().await;
+    let c = user_with_ledger(&router, &pool, "viewer").await;
+    insert_store(&pool, 1, 1, "Aマート", "aまーと").await;
+    // one October receipt (two items) and one September receipt — the axis
+    // rows derive their top items from the receipts of THAT axis value in
+    // the period
+    insert_receipt_bare(&pool, 101, 1, 1, "2026-10-10").await;
+    insert_priced_item(&pool, 10101, 101, 1, 1, "牛乳", "牛乳", 220, 1.0, None).await;
+    insert_priced_item(&pool, 10102, 101, 1, 2, "洗剤", "せんざい", 498, 1.0, None).await;
+    insert_receipt_bare(&pool, 102, 1, 1, "2026-09-10").await;
+    insert_priced_item(
+        &pool,
+        10201,
+        102,
+        1,
+        1,
+        "風邪薬",
+        "かぜやく",
+        300,
+        1.0,
+        None,
+    )
+    .await;
+    insert_receipt_label(&pool, 101, "red").await;
+
+    // axis=store: the Aマート row's top items come from the October window
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=store&month=2026-10")
+            .await,
+    )
+    .await;
+    let row = v["rows"].as_array().unwrap()[0].clone();
+    assert_eq!(row["label"], "Aマート");
+    let top = row["top_items"].as_array().unwrap();
+    assert_eq!(top.len(), 2);
+    assert_eq!(top[0]["name"], "洗剤");
+    assert_eq!(top[0]["amount"], 498);
+    assert_eq!(top[1]["name"], "牛乳");
+
+    // axis=item: the rows ARE the items — no top_items field at all
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=item&month=2026-10")
+            .await,
+    )
+    .await;
+    for r in v["rows"].as_array().unwrap() {
+        assert!(
+            r.get("top_items").is_none(),
+            "the item axis carries no top_items: {r}"
+        );
+    }
+
+    // axis=label: the derivation rides the postings — the red row's top
+    // items are the labeled receipt's items
+    let v = body_json(
+        c.get(&router, "/api/ledgers/1/analysis?axis=label&month=2026-10")
+            .await,
+    )
+    .await;
+    let red = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "red")
+        .unwrap()
+        .clone();
+    let top = red["top_items"].as_array().unwrap();
+    assert_eq!(top[0]["name"], "洗剤");
+    assert_eq!(top[1]["name"], "牛乳");
 }

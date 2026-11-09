@@ -81,8 +81,8 @@ trust_cf_connecting_ip = true
 
 [auth.oauth]
 default_scopes = "ledger.read ledger.write"
-cimd_allowed_hosts = ["chatgpt.com"]
-redirect_uri_allowlist = ["https://chatgpt.com/connector_platform_oauth_redirect"]
+cimd_allowed_hosts = ["chatgpt.com", "claude.ai"]
+redirect_uri_allowlist = ["https://chatgpt.com/connector_platform_oauth_redirect", "https://claude.ai/api/mcp/auth_callback"]
 # authorization request TTL (seconds).
 authz_request_ttl_secs = 600
 # authorization code lifetime (seconds).

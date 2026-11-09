@@ -1,0 +1,14 @@
+# render正本（TASK-119）: このfileのpath部は deploy_root placeholder で書かれて
+# おり、configs/deploy.toml の deploy_root 値への置換（render）が必要なため
+# 直接scpしないこと。mise run units:install（scripts/deploy/kakeiboot_ops.py
+# install-units）が render済み実体を ~/.config/systemd/user/ へ配布する
+# （docs/ops/ops_deploy.md）。
+[Unit]
+Description=kakeiboot %i backup (SQLite online backup via admin CLI + images rsync)
+
+[Service]
+Type=oneshot
+WorkingDirectory={{deploy_root}}/%i
+ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i
+Nice=10
+IOSchedulingClass=idle

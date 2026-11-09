@@ -1,6 +1,6 @@
 import { createRouter, type RouterHistory, type RouteRecordRaw } from 'vue-router'
 import type { Pinia } from 'pinia'
-import { navKind, pendingRestore, updateDirection } from './composables/navDirection'
+import { advanceRestoreGeneration, navKind, pendingRestore, updateDirection } from './composables/navDirection'
 import { useCatalogStore } from './stores/catalog'
 import { useSessionStore } from './stores/session'
 
@@ -9,10 +9,16 @@ import { useSessionStore } from './stores/session'
 // the browsing routes (unset on manage / public screens — the depth
 // comparisons of the transition direction never match and those navigations
 // stay direction-less), `ledgerScoped` shows the ledger switcher.
+// `browsingSync` (TASK-124 D2-3) marks the routes whose period mode keys and
+// labels= the shell-level URL sync composable keeps in the URL — its own
+// flag, NOT a reuse of `filters`, so the feed (/receipts/:id, filters: true)
+// cannot be swept into the sync: its URL is the CONTEXT_FIELDS context and
+// importing from/to would re-mode the store away from the list's period.
 declare module 'vue-router' {
   interface RouteMeta {
     public?: boolean
     filters?: boolean
+    browsingSync?: boolean
     section?: string
     depth?: number
     ledgerScoped?: boolean
@@ -39,8 +45,8 @@ import RegisterPage from './pages/RegisterPage.vue'
 import SearchPage from './pages/SearchPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import StoresPage from './pages/StoresPage.vue'
-import UsageConnectPage from './pages/UsageConnectPage.vue'
 import UsagePage from './pages/UsagePage.vue'
+import UsageTopicPage from './pages/UsageTopicPage.vue'
 import AuthPanel from './pages/settings/AuthPanel.vue'
 import DataPanel from './pages/settings/DataPanel.vue'
 import GeneralPanel from './pages/settings/GeneralPanel.vue'
@@ -54,7 +60,7 @@ export const routes: RouteRecordRaw[] = [
   // bar (TASK-44 §11-3): set explicitly on the enumerated view routes — not
   // shared with the ledgerScoped notion — so manage-* / apps / usage and the
   // public screens never get it.
-  { path: '/', name: 'home', component: HomePage, meta: { filters: true, section: 'home', depth: 1, ledgerScoped: true } },
+  { path: '/', name: 'home', component: HomePage, meta: { filters: true, browsingSync: true, section: 'home', depth: 1, ledgerScoped: true } },
   // /settings is a nested parent: the horizontal tab strip renders once and
   // the child panel is the route content. Four tabs after the real-device
   // feedback (general / auth / data / others); /settings itself redirects to
@@ -79,12 +85,15 @@ export const routes: RouteRecordRaw[] = [
     ],
   },
   { path: '/apps', name: 'apps', component: AppsPage, meta: { section: 'apps' } },
-  // Usage pages (TASK-37): no meta.public — they sit behind the session
-  // guard like the rest of the app screens.
+  // Usage pages (TASK-37, reworked by TASK-141): /usage lists the topics, one
+  // dynamic route renders every topic from the build-time-ingested docs/usage
+  // corpus — adding a topic is a file, not a route (TASK-135 §2-3). The
+  // existing /usage/connect URL resolves through this route. No meta.public:
+  // they sit behind the session guard like the rest of the app screens.
   { path: '/usage', name: 'usage', component: UsagePage, meta: { section: 'usage' } },
-  { path: '/usage/connect', name: 'usage-connect', component: UsageConnectPage, meta: { section: 'usage' } },
-  { path: '/categories', name: 'categories', component: CategoriesPage, meta: { filters: true, section: 'categories', depth: 1, ledgerScoped: true } },
-  { path: '/stores', name: 'stores', component: StoresPage, meta: { filters: true, section: 'stores', depth: 1, ledgerScoped: true } },
+  { path: '/usage/:topic', name: 'usage-topic', component: UsageTopicPage, meta: { section: 'usage' }, props: (r) => ({ slug: String(r.params.topic) }) },
+  { path: '/categories', name: 'categories', component: CategoriesPage, meta: { filters: true, browsingSync: true, section: 'categories', depth: 1, ledgerScoped: true } },
+  { path: '/stores', name: 'stores', component: StoresPage, meta: { filters: true, browsingSync: true, section: 'stores', depth: 1, ledgerScoped: true } },
   // The axis detail pages (TASK-89 §3): one component serves the five axes —
   // the category hierarchy (static uncategorized first so it never matches
   // :top), the store by id, and the name-keyed item / label / payment axes.
@@ -93,16 +102,16 @@ export const routes: RouteRecordRaw[] = [
   // The legacy /categories/:top and /stores/:id detail URLs are gone (the
   // redirect compatibility was dropped by design) — an unknown path falls
   // through to the catch-all redirect to /.
-  { path: '/axes/category/uncategorized', name: 'axis-category-uncategorized', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
-  { path: '/axes/category/:top(\\d+)', name: 'axis-category', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 2, ledgerScoped: true } },
-  { path: '/axes/category/:top(\\d+)/:sub(\\d+)', name: 'axis-subcategory', component: AxisDetailPage, meta: { filters: true, section: 'categories', depth: 3, ledgerScoped: true } },
-  { path: '/axes/store/:id(\\d+)', name: 'axis-store', component: AxisDetailPage, meta: { filters: true, section: 'stores', depth: 2, ledgerScoped: true } },
+  { path: '/axes/category/uncategorized', name: 'axis-category-uncategorized', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'categories', depth: 2, ledgerScoped: true } },
+  { path: '/axes/category/:top(\\d+)', name: 'axis-category', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'categories', depth: 2, ledgerScoped: true } },
+  { path: '/axes/category/:top(\\d+)/:sub(\\d+)', name: 'axis-subcategory', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'categories', depth: 3, ledgerScoped: true } },
+  { path: '/axes/store/:id(\\d+)', name: 'axis-store', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'stores', depth: 2, ledgerScoped: true } },
   // the name-keyed axes have no list screens of their own — they light the
   // home section
-  { path: '/axes/item/:name', name: 'axis-item', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
-  { path: '/axes/label/:color', name: 'axis-label', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
-  { path: '/axes/payment/:method', name: 'axis-payment', component: AxisDetailPage, meta: { filters: true, section: 'home', depth: 2, ledgerScoped: true } },
-  { path: '/receipts', name: 'receipts', component: ReceiptsPage, meta: { filters: true, section: 'receipts', depth: 1, ledgerScoped: true } },
+  { path: '/axes/item/:name', name: 'axis-item', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'home', depth: 2, ledgerScoped: true } },
+  { path: '/axes/label/:color', name: 'axis-label', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'home', depth: 2, ledgerScoped: true } },
+  { path: '/axes/payment/:method', name: 'axis-payment', component: AxisDetailPage, meta: { filters: true, browsingSync: true, section: 'home', depth: 2, ledgerScoped: true } },
+  { path: '/receipts', name: 'receipts', component: ReceiptsPage, meta: { filters: true, browsingSync: true, section: 'receipts', depth: 1, ledgerScoped: true } },
   {
     path: '/receipts/:id(\\d+)',
     name: 'receipt',
@@ -111,8 +120,10 @@ export const routes: RouteRecordRaw[] = [
     props: (r) => ({ id: Number(r.params.id) }),
   },
   // /search (TASK-41): the URL (q / tab / scope + the shared period and
-  // labels keys) restores the results; the topbar search chip leads here
-  { path: '/search', name: 'search', component: SearchPage, meta: { filters: true, section: 'search', depth: 1, ledgerScoped: true } },
+  // labels keys) restores the results; the topbar search chip leads here.
+  // browsingSync rides too (TASK-124 D2): labels= always, the period keys
+  // only while scope=period (the composable checks the scope itself)
+  { path: '/search', name: 'search', component: SearchPage, meta: { filters: true, browsingSync: true, section: 'search', depth: 1, ledgerScoped: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
@@ -125,16 +136,27 @@ export function createAppRouter(history: RouterHistory, pinia: Pinia) {
     // (TASK-74 §4-3) — restoring here would land before the incoming page
     // has rendered its data and the position would drift. A replace (the
     // history position unchanged: the feed's scrolling id rewrite, a chip ×,
-    // a period change, /search's debounce) and a same-pageKey navigation
-    // (the first path segment — the page stays mounted: /categories/1/5 →
-    // /categories/1, the list → the feed, which self-positions at its anchor
-    // panel) must not touch the scroll at all: scrolling to the top on every
-    // replace yanked the continuous feed back to its start (D28 §4-3 rule 1:
-    // replace → none). navKind lands before this runs — scrollBehavior is
-    // deferred to the next tick, after afterEach has compared the positions.
+    // /search's debounce) and a same-pageKey navigation (the first path
+    // segment — the page stays mounted: /categories/1/5 → /categories/1, the
+    // list → the feed, which self-positions at its anchor panel) must not
+    // touch the scroll at all: scrolling to the top on every replace yanked
+    // the continuous feed back to its start (D28 §4-3 rule 1: replace →
+    // none). navKind lands before this runs — scrollBehavior is deferred to
+    // the next tick, after afterEach has compared the positions.
+    //
+    // TASK-164 §2-2-2: a same-PATH navigation (a period change either way —
+    // the write-back's push rewrites the query only) keeps the scroll both
+    // directions of the round trip: the check runs BEFORE the savedPosition
+    // branch, so a period pop restores nothing (the path, not the pageKey,
+    // decides — /receipts ↔ /receipts/101 and two axes collide on pageKey
+    // but differ in path). Every pass first advances the reservation
+    // generation, so an older navigation's parked restore dies unseen when a
+    // newer one (this same-path branch included) supersedes it.
     scrollBehavior(to, from, savedPosition) {
+      const gen = advanceRestoreGeneration()
+      if (to.path === from.path) return false
       if (savedPosition) {
-        pendingRestore.value = savedPosition.top
+        pendingRestore.value = { top: savedPosition.top, gen }
         return false
       }
       if (navKind.value === 'replace') return false

@@ -2,8 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
-import { formatLabelQuery, parseLabelQuery, type Label, type LabelColor } from '@/shared/labels'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import { formatLabelQuery, type Label, type LabelColor } from '@/shared/labels'
+import { barScale } from '@/shared/lib/stackedBars'
 import {
   useDataApi,
   type AnalysisAxis,
@@ -18,12 +18,14 @@ import PeriodHeader from '../components/PeriodHeader.vue'
 import DashSkeleton from '../components/DashSkeleton.vue'
 import AppIcon from '../components/AppIcon.vue'
 import BrowseToolbar from '../components/BrowseToolbar.vue'
+import ContentSwap from '../components/ContentSwap.vue'
+import DataRow from '../components/DataRow.vue'
 import type { FilterChip } from '../components/FilterChips.vue'
 import PageHead from '../components/PageHead.vue'
 import PageMenu, { type PageMenuItem } from '../components/PageMenu.vue'
 import RankedList from '../components/RankedList.vue'
 import TrendWindow from '../components/TrendWindow.vue'
-import { errorMessage, formatYen } from '../composables/format'
+import { errorMessage, formatYen, topItemsText } from '../composables/format'
 import { useLedger } from '../composables/ledger'
 import { PAYMENT_LABEL, isPaymentMethod } from '../composables/labels'
 import { shortDate } from '../composables/period'
@@ -55,8 +57,9 @@ const router = useRouter()
 const period = usePeriodStore()
 const catalog = useCatalogStore()
 const { markReady } = usePageReady()
-period.fromQuery(route.query)
-if ('labels' in route.query) period.setLabelColors(parseLabelQuery(firstString(route.query.labels)))
+// the deep-linked period / labels keys arrive through the shell-level URL
+// sync (TASK-124 D2) before this page sets up; later store moves re-query
+// through the route.fullPath watch below (the sync keeps labels= in the URL)
 
 type AxisKind = 'category' | 'store' | 'item' | 'label' | 'payment'
 const AXIS_KIND_LABEL: Record<AxisKind, string> = {
@@ -85,13 +88,14 @@ const kind = computed<AxisKind>(() => {
 })
 
 // --- subject resolution --------------------------------------------------------
-/** Resolved view of the route; null until the catalog / stores answered. */
+/** Resolved view of the route; null until the catalog / stores answered. The
+ *  row carries no climb target anymore (TASK-164 §2-4/§2-6): the topbar ‹ is
+ *  the axis back now — a history back that restores the entry's own state,
+ *  carrying nothing. */
 const view = ref<null | {
   title: string
   sub?: string
   parentName?: string
-  parentTo?: RouteLocationRaw
-  backLabel: string
   /** the subject filter of every query */
   subject: AnalysisFilters
   /** the subject's own chip label */
@@ -115,8 +119,6 @@ async function resolveRoute(l: number): Promise<boolean> {
         title: '未分類',
         subject: { category: '未分類' },
         subjectChip: 'カテゴリ: 未分類',
-        backLabel: 'カテゴリ一覧',
-        parentTo: { path: '/categories', query: { ...route.query } },
       }
       return true
     }
@@ -137,8 +139,6 @@ async function resolveRoute(l: number): Promise<boolean> {
         title: node.name,
         subject: { category: catalog.pathOf('item', topId) ?? node.name },
         subjectChip: `カテゴリ: ${node.name}`,
-        backLabel: 'カテゴリ一覧',
-        parentTo: { path: '/categories', query: { ...route.query } },
         topId,
         subId: null,
       }
@@ -166,8 +166,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       subject: { category: catalog.pathOf('item', subId) ?? subNode.name },
       subjectChip: `カテゴリ: ${subNode.name}`,
       parentName: topNode.name,
-      backLabel: 'カテゴリ一覧',
-      parentTo: { path: `/axes/category/${topId}`, query: { ...route.query } },
       topId,
       subId,
     }
@@ -186,8 +184,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       sub: found.category ?? undefined,
       subject: { store_id: id },
       subjectChip: `店: ${found.name}`,
-      backLabel: '店一覧',
-      parentTo: { path: '/stores', query: { ...route.query } },
     }
     return true
   }
@@ -201,8 +197,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       title: name,
       subject: { item_query: name },
       subjectChip: `品目: ${name}`,
-      backLabel: 'ホーム',
-      parentTo: { path: '/', query: { ...route.query } },
     }
     return true
   }
@@ -212,8 +206,6 @@ async function resolveRoute(l: number): Promise<boolean> {
       title: labelTitle(color),
       subject: { label_colors: [color as LabelColor] },
       subjectChip: `ラベル: ${labelTitle(color)}`,
-      backLabel: 'ホーム',
-      parentTo: { path: '/', query: { ...route.query } },
     }
     return true
   }
@@ -223,8 +215,6 @@ async function resolveRoute(l: number): Promise<boolean> {
     title: PAYMENT_LABEL[method],
     subject: { payment_method: method },
     subjectChip: `支払: ${PAYMENT_LABEL[method]}`,
-    backLabel: 'ホーム',
-    parentTo: { path: '/', query: { ...route.query } },
   }
   return true
 }
@@ -307,6 +297,20 @@ const storeNameFor = ref<number | null>(null)
 const error = ref('')
 const loading = ref(false)
 
+// TASK-146 §3: the pane's committed key (bumped at the load commit). TASK-161
+// §2 (web-common.period-move-voice): the key drops the PERIOD range and the
+// route's fullPath (the URL sync rewrites it on every period change) — it
+// keeps the path plus the subject-defining query alone, so a period step
+// never remounts the pane (periodMove is gone)
+const committedKey = ref('')
+
+/** the subject part of the URL query (every key but the period ones) — the
+ *  committed identity the pane keeps across a period change (TASK-161 §2-1) */
+function subjectQuery(): string {
+  const periodKeys = new Set(['month', 'week', 'year', 'from', 'to'])
+  return JSON.stringify(Object.entries(route.query).filter(([k]) => !periodKeys.has(k)))
+}
+
 // the trend's movable window (TASK-104): the composable owns the trend
 // fetch with this screen's stack axis and the resolved subject as filters —
 // while view is unresolved the getter returns undefined and the fetch
@@ -384,6 +388,7 @@ async function load(id?: number): Promise<void> {
     own.value = ownRes
     itemStats.value = itemRes
     recent.value = recentRes.receipts
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${route.path}|${subjectQuery()}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -426,19 +431,24 @@ async function init(id?: number): Promise<void> {
   }
 }
 // same-component param changes (top -> sub, the ‹ climb, an axis move)
-// reload through here — the page never remounts on its own routes
-watch([() => period.range, () => route.fullPath], () => void init())
-// keep labels= in step with the shared store (the topbar chip moves it too)
+// reload through here — the page never remounts on its own routes. The
+// sources are the re-query's real inputs only (TASK-145 D2): the period,
+// the label filter, the path (a params change) and the cross-filter query
+// keys load's extraFilters reads. The shell URL sync's write-back echo
+// (period keys / labels landing on the URL) moves none of them — the store
+// continuation keeps the values — so a keys-less landing no longer
+// double-fires init; missing= and other redirect-only keys are no re-query
+// factor and rightly fire nothing.
 watch(
-  () => period.labelQuery,
-  () => {
-    void router.replace({
-      query: {
-        ...route.query,
-        labels: period.labelColors.length ? formatLabelQuery(period.labelColors) : undefined,
-      },
-    })
-  },
+  [
+    () => period.range,
+    () => period.labelQuery,
+    () => route.path,
+    () => categoryQuery.value,
+    () => storeIdQuery.value,
+    () => storeCategoryQuery.value,
+  ],
+  () => void init(),
 )
 
 // --- derived --------------------------------------------------------------------
@@ -453,6 +463,7 @@ function rankedRows(res: AnalysisResult | null, top = 5): StatsRow[] {
     labels: [r.label],
     value: r.amount,
     share: r.share ?? undefined,
+    top_items: r.top_items,
   }))
   const tail = sorted.slice(top)
   if (tail.length > 0 || res.truncated_rows > 0) {
@@ -470,6 +481,13 @@ function rankedRows(res: AnalysisResult | null, top = 5): StatsRow[] {
 
 const crossRows = computed(() => rankedRows(cross.value))
 const ownRows = computed(() => rankedRows(own.value, 10))
+
+// TASK-129 (web-common.bar-scale): the screen's ONE absolute scale — the max
+// over BOTH rankings' row values (each row bar's outer amount). The trend
+// bars join this aggregation at TASK-126.
+const screenScale = computed(() =>
+  barScale(Math.max(0, ...crossRows.value.map((r) => r.value), ...ownRows.value.map((r) => r.value))),
+)
 
 const trendCurrent = computed(() =>
   currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
@@ -581,11 +599,11 @@ function removeChip(key: string): void {
     return
   }
   if (key.startsWith('label-')) {
-    const rest = period.labelColors.filter((c) => c !== (key.slice(6) as LabelColor))
-    period.setLabelColors(rest)
-    void router.replace({
-      query: { ...route.query, labels: rest.length ? formatLabelQuery(rest) : undefined },
-    })
+    // the store write is the only move — the shell-level URL sync carries it
+    // into labels= (D2-5; the page's own replace here was the leftover that
+    // double-wrote one press)
+    const color = key.slice(6)
+    period.setLabelColors(period.labelColors.filter((c) => c !== color))
   }
 }
 
@@ -618,8 +636,6 @@ const menuItems = computed<PageMenuItem[]>(() => {
         :title="view.title"
         :total="totals ? formatYen(totals.amount) : undefined"
         :sub="view.sub"
-        :parent-to="view.parentTo ?? { path: '/' }"
-        :back-label="view.backLabel"
         :parent="view.parentName"
       >
         <template
@@ -642,217 +658,221 @@ const menuItems = computed<PageMenuItem[]>(() => {
         class="view-stack"
         :class="{ loading }"
       >
-        <PeriodHeader
-          :label="`${period.label}の支出`"
-          :total="totals.amount"
-          data-test="axis-period"
-        />
+        <!-- TASK-146 §3: the content transition fires at the load commit -->
+        <ContentSwap :swap-key="committedKey">
+          <div class="content-pane">
+            <PeriodHeader
+              :label="period.label"
+              :total="totals.amount"
+              data-test="axis-period"
+              :swap-key="committedKey"
+            />
 
-        <div class="dash-cols">
-          <div class="col-main">
-            <section
-              class="zone"
-              :class="{ 'is-loading': win.loading.value }"
-              data-test="trend-card"
-            >
-              <div class="zone-head">
-                <h2 class="zone-title">
-                  支出の推移
-                </h2>
-              </div>
-              <TrendWindow
-                v-if="win.result.value"
-                :stacked="win.stacked.value"
-                :granularity="win.granularity.value"
-                :span="win.window.value"
-                :current="trendCurrent"
-                :nav="win.active.value"
-                :can-prev="win.canPrev.value"
-                :can-next="win.canNext.value"
-                :window-key="win.windowKey.value"
-                :slide="win.slide.value"
-                @prev="win.prev"
-                @next="win.next"
-                @select="onTrendSelect"
-                @finish-slide="win.finishSlide"
-              />
-            </section>
+            <div class="dash-cols">
+              <div class="col-main">
+                <section
+                  class="zone"
+                  :class="{ 'is-loading': win.loading.value }"
+                  data-test="trend-card"
+                >
+                  <div class="zone-head">
+                    <h2 class="zone-title">
+                      支出の推移
+                    </h2>
+                  </div>
+                  <TrendWindow
+                    v-if="win.result.value"
+                    :stacked="win.stacked.value"
+                    :granularity="win.granularity.value"
+                    :span="win.window.value"
+                    :current="trendCurrent"
+                    :nav="win.active.value"
+                    :can-prev="win.canPrev.value"
+                    :can-next="win.canNext.value"
+                    :window-key="win.windowKey.value"
+                    :slide="win.slide.value"
+                    @prev="win.prev"
+                    @next="win.next"
+                    @select="onTrendSelect"
+                    @finish-slide="win.finishSlide"
+                  />
+                </section>
 
-            <!-- the item axis's own extra zone (REVIEW-13 M-4): the price
+                <!-- the item axis's own extra zone (REVIEW-13 M-4): the price
                movement / purchase stores / frequency of this 品名 group -->
-            <section
-              v-if="kind === 'item'"
-              class="zone"
-              data-test="item-stats"
-            >
-              <div class="zone-head">
-                <h2 class="zone-title">
-                  品目の記録
-                </h2>
+                <section
+                  v-if="kind === 'item'"
+                  class="zone"
+                  data-test="item-stats"
+                >
+                  <div class="zone-head">
+                    <h2 class="zone-title">
+                      品目の記録
+                    </h2>
+                  </div>
+                  <template v-if="itemStats && itemStats.summary.count > 0">
+                    <p
+                      class="muted small"
+                      data-test="item-summary"
+                    >
+                      {{ itemStats.summary.count }}件・{{ formatYen(itemStats.summary.amount) }}・平均単価
+                      {{ formatYen(itemStats.summary.avg_unit_price ?? 0) }}・最安
+                      {{ formatYen(itemStats.summary.min_unit_price ?? 0) }}〜最高
+                      {{ formatYen(itemStats.summary.max_unit_price ?? 0) }}・最終購入
+                      {{ itemStats.summary.last_purchased_on ? shortDate(itemStats.summary.last_purchased_on) : '-' }}・{{
+                        itemStats.summary.stores.length
+                      }}店
+                    </p>
+                    <div class="zone-head">
+                      <h3 class="zone-title">
+                        価格履歴
+                      </h3>
+                    </div>
+                    <ul
+                      class="recent-list"
+                      data-test="item-prices"
+                    >
+                      <li
+                        v-for="(p, i) in itemStats.prices"
+                        :key="`${p.date}-${i}`"
+                        data-test="item-price-row"
+                      >
+                        <DataRow
+                          :name="p.store_name ?? '店名なし'"
+                          :amount="formatYen(p.unit_price)"
+                          :sub-figure="shortDate(p.date)"
+                        />
+                      </li>
+                    </ul>
+                    <div class="zone-head">
+                      <h3 class="zone-title">
+                        店別
+                      </h3>
+                    </div>
+                    <ul
+                      class="recent-list"
+                      data-test="item-stores"
+                    >
+                      <li
+                        v-for="s in itemStats.by_store"
+                        :key="s.store_id ?? 'none'"
+                        data-test="item-store-row"
+                      >
+                        <DataRow
+                          :name="s.store_name"
+                          :amount="formatYen(s.amount)"
+                          :sub-figure="`${s.count}件・平均${formatYen(s.avg_unit_price ?? 0)}`"
+                        />
+                      </li>
+                    </ul>
+                  </template>
+                  <p
+                    v-else
+                    class="muted empty"
+                  >
+                    この期間の記録はありません。
+                  </p>
+                </section>
               </div>
-              <template v-if="itemStats && itemStats.summary.count > 0">
-                <p
-                  class="muted small"
-                  data-test="item-summary"
+
+              <div class="col-side">
+                <section
+                  class="zone zone--list"
+                  data-test="cross"
                 >
-                  {{ itemStats.summary.count }}件・{{ formatYen(itemStats.summary.amount) }}・平均単価
-                  {{ formatYen(itemStats.summary.avg_unit_price ?? 0) }}・最安
-                  {{ formatYen(itemStats.summary.min_unit_price ?? 0) }}〜最高
-                  {{ formatYen(itemStats.summary.max_unit_price ?? 0) }}・最終購入
-                  {{ itemStats.summary.last_purchased_on ? shortDate(itemStats.summary.last_purchased_on) : '-' }}・{{
-                    itemStats.summary.stores.length
-                  }}店
-                </p>
-                <div class="zone-head">
-                  <h3 class="zone-title">
-                    価格履歴
-                  </h3>
-                </div>
-                <ul
-                  class="recent-list"
-                  data-test="item-prices"
-                >
-                  <li
-                    v-for="(p, i) in itemStats.prices"
-                    :key="`${p.date}-${i}`"
-                    data-test="item-price-row"
+                  <div class="zone-head">
+                    <h2 class="zone-title">
+                      {{ crossTitle }}
+                    </h2>
+                  </div>
+                  <p
+                    v-if="crossRows.length === 0"
+                    class="muted empty"
                   >
-                    <span class="recent-row">
-                      <span class="recent-date">{{ shortDate(p.date) }}</span>
-                      <span class="recent-store truncate">{{ p.store_name ?? '店名なし' }}</span>
-                      <span class="amount">{{ formatYen(p.unit_price) }}</span>
-                    </span>
-                  </li>
-                </ul>
-                <div class="zone-head">
-                  <h3 class="zone-title">
-                    店別
-                  </h3>
-                </div>
-                <ul
-                  class="recent-list"
-                  data-test="item-stores"
+                    この期間の記録はありません。
+                  </p>
+                  <RankedList
+                    v-else
+                    :rows="crossRows"
+                    :to="crossTo"
+                    :axis="crossAxis"
+                    :scale="screenScale"
+                  />
+                </section>
+
+                <section
+                  v-if="ownAxis"
+                  class="zone zone--list"
+                  data-test="own"
                 >
-                  <li
-                    v-for="s in itemStats.by_store"
-                    :key="s.store_id ?? 'none'"
-                    data-test="item-store-row"
+                  <div class="zone-head">
+                    <h2 class="zone-title">
+                      {{ ownTitle }}
+                    </h2>
+                  </div>
+                  <p
+                    v-if="ownRows.length === 0"
+                    class="muted empty"
                   >
-                    <span class="recent-row">
-                      <span class="recent-store truncate">{{ s.store_name }}</span>
-                      <span class="muted small">{{ s.count }}件・平均{{ formatYen(s.avg_unit_price ?? 0) }}</span>
-                      <span class="amount">{{ formatYen(s.amount) }}</span>
-                    </span>
-                  </li>
-                </ul>
-              </template>
-              <p
-                v-else
-                class="muted empty"
-              >
-                この期間の記録はありません。
-              </p>
-            </section>
+                    この期間の記録はありません。
+                  </p>
+                  <RankedList
+                    v-else
+                    :rows="ownRows"
+                    :to="ownTo"
+                    :axis="ownAxis ?? undefined"
+                    :scale="screenScale"
+                  />
+                </section>
+
+                <section
+                  class="zone zone--list"
+                  data-test="recent"
+                >
+                  <div class="zone-head">
+                    <h2 class="zone-title">
+                      最近のレシート
+                    </h2>
+                    <RouterLink
+                      :to="allReceiptsTo"
+                      class="ibtn"
+                      aria-label="すべて見る"
+                      title="すべて見る"
+                      data-test="all-receipts"
+                    >
+                      <AppIcon name="chevron-right" />
+                    </RouterLink>
+                  </div>
+                  <p
+                    v-if="recent.length === 0"
+                    class="muted empty"
+                  >
+                    この期間の記録はありません。
+                  </p>
+                  <ul
+                    v-else
+                    class="recent-list"
+                  >
+                    <li
+                      v-for="r in recent"
+                      :key="r.receipt_id"
+                    >
+                      <DataRow
+                        :to="{ path: `/receipts/${r.receipt_id}`, query: feedQuery }"
+                        :data-test="`recent-${r.receipt_id}`"
+                        :name="r.store_name ?? '店名なし'"
+                        :amount="formatYen(r.amount)"
+                        :sub-text="topItemsText(r.top_items)"
+                        :sub-figure="shortDate(r.purchased_on)"
+                        :labels="r.labels ?? []"
+                      />
+                    </li>
+                  </ul>
+                </section>
+              </div>
+            </div>
           </div>
-
-          <div class="col-side">
-            <section
-              class="zone zone--list"
-              data-test="cross"
-            >
-              <div class="zone-head">
-                <h2 class="zone-title">
-                  {{ crossTitle }}
-                </h2>
-              </div>
-              <p
-                v-if="crossRows.length === 0"
-                class="muted empty"
-              >
-                この期間の記録はありません。
-              </p>
-              <RankedList
-                v-else
-                :rows="crossRows"
-                :to="crossTo"
-                :axis="crossAxis"
-              />
-            </section>
-
-            <section
-              v-if="ownAxis"
-              class="zone zone--list"
-              data-test="own"
-            >
-              <div class="zone-head">
-                <h2 class="zone-title">
-                  {{ ownTitle }}
-                </h2>
-              </div>
-              <p
-                v-if="ownRows.length === 0"
-                class="muted empty"
-              >
-                この期間の記録はありません。
-              </p>
-              <RankedList
-                v-else
-                :rows="ownRows"
-                :to="ownTo"
-                :axis="ownAxis ?? undefined"
-              />
-            </section>
-
-            <section
-              class="zone zone--list"
-              data-test="recent"
-            >
-              <div class="zone-head">
-                <h2 class="zone-title">
-                  最近のレシート
-                </h2>
-                <RouterLink
-                  :to="allReceiptsTo"
-                  class="ibtn"
-                  aria-label="すべて見る"
-                  title="すべて見る"
-                  data-test="all-receipts"
-                >
-                  <AppIcon name="chevron-right" />
-                </RouterLink>
-              </div>
-              <p
-                v-if="recent.length === 0"
-                class="muted empty"
-              >
-                この期間の記録はありません。
-              </p>
-              <ul
-                v-else
-                class="recent-list"
-              >
-                <li
-                  v-for="r in recent"
-                  :key="r.receipt_id"
-                >
-                  <RouterLink
-                    :to="{ path: `/receipts/${r.receipt_id}`, query: feedQuery }"
-                    class="recent-row"
-                    :data-test="`recent-${r.receipt_id}`"
-                  >
-                    <span class="recent-date">{{ shortDate(r.purchased_on) }}</span>
-                    <span class="recent-store truncate">{{ r.store_name ?? '店名なし' }}</span>
-                    <span class="row-labels"><LabelDots
-                      :labels="r.labels ?? []"
-                      compact
-                    /></span>
-                    <span class="amount">{{ formatYen(r.amount) }}</span>
-                  </RouterLink>
-                </li>
-              </ul>
-            </section>
-          </div>
-        </div>
+        </ContentSwap>
       </div>
       <DashSkeleton v-else-if="loading" />
     </template>

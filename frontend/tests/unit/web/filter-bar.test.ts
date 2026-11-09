@@ -148,7 +148,7 @@ describe('TopbarFilterBar: chips on the browsing routes (TASK-44 1a + TASK-41 1b
 })
 
 describe('topbar period dialog (PeriodPicker)', () => {
-  it('[covers:web-browse.filter-dialogs][covers:web-shell.period-picker-week-tab][covers:web-shell.period-picker-order] 時期dialog: タブ「週｜月｜年｜Custom」の自然昇順（TASK-90/91）・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得）・範囲は「表示」でのみ確定', async () => {
+  it('[covers:web-browse.filter-dialogs][covers:web-shell.period-picker-week-tab][covers:web-shell.period-picker-order][covers:web-shell.period-uncapped-step] 時期dialog: タブ「週｜月｜年｜Custom」の自然昇順（TASK-90/91）・送りとタブ切替は即時（dialog開いたまま・watch(period.range)で再取得・› は未来へも有効〔TASK-146 §1〕）・範囲は「表示」でのみ確定', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const list = vi.spyOn(api, 'listReceipts')
     const { wrapper } = await mountApp('/receipts')
@@ -169,7 +169,8 @@ describe('topbar period dialog (PeriodPicker)', () => {
     expect(tabs[3]!.attributes('data-test')).toBe('mode-range')
 
     // TASK-53: the week tab applies at once like month/year — the current week
-    // (2026-10-12..18) steps in whole weeks, capped at the current week
+    // (2026-10-12..18) steps in whole weeks. TASK-146 §1: the current-week
+    // cap is gone, so › steps into the future (2026-10-19..25) as well
     await wrapper.find('[data-test="mode-week"]').trigger('click')
     await settle()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
@@ -177,7 +178,14 @@ describe('topbar period dialog (PeriodPicker)', () => {
     const weekTexts = leafTexts(wrapper, 'filter-period')
     expect(weekTexts.has('10/12週')).toBe(true)
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-12', to: '2026-10-18' }))
-    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="period-next"]').trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月19日の週')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-19', to: '2026-10-25' }))
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月12日の週')
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await settle()
     expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月5日の週')
@@ -194,13 +202,21 @@ describe('topbar period dialog (PeriodPicker)', () => {
     expect(yearTexts.has('2026年')).toBe(true)
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-01-01', to: '2026-12-31' }))
 
-    // back on months: next is capped at the current month, prev applies at once
+    // back on months: TASK-146 §1 — the current month steps into the future
+    // too (2026-11), then ‹ walks back and › returns through the same steps
     await wrapper.find('[data-test="mode-month"]').trigger('click')
     await settle()
-    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeDefined()
-    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="period-next"]').trigger('click')
     await settle()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年11月')
+    expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-11-01', to: '2026-11-30' }))
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
+    expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年10月')
+    await wrapper.find('[data-test="period-prev"]').trigger('click')
+    await settle()
     expect(chip().attributes('aria-label')).toBe('期間で絞り込み: 2026年9月')
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-09-01', to: '2026-09-30' }))
     expect(wrapper.find('[data-test="period-next"]').attributes('disabled')).toBeUndefined()
@@ -220,6 +236,35 @@ describe('topbar period dialog (PeriodPicker)', () => {
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ from: '2026-10-03', to: '2026-10-15' }))
     // the dialog stays open for further adjustments
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+  })
+
+  // TASK-146 §3 #15 (web-common.overlay-transition): the popover's open is an
+  // appear fade now — the panel root carries the fade vocabulary's enter
+  // classes in the insert patch (jsdom ships no stylesheet, so they are read
+  // right after the click's nextTick, before the rAF clears them) and the
+  // close parks the leave classes on the way out.
+  it('[covers:web-common.overlay-transition] 時期dialogの開閉は appear fade（.popover-dialog に page-enter-*・閉じは page-leave-*）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/receipts', { attach: true, stubs: { transition: false } })
+    const chip = () => wrapper.find('[data-test="filter-period"]')
+
+    await chip().trigger('click')
+    const panel = wrapper.find('.popover-dialog')
+    expect(panel.exists()).toBe(true)
+    expect(panel.classes()).toContain('page-enter-active')
+    expect(panel.classes()).toContain('page-enter-from')
+    await settle()
+    // the open state itself is the existing contract (unchanged)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(chip().attributes('aria-expanded')).toBe('true')
+
+    // the close (a re-press toggles) parks the leave classes before removal
+    await chip().trigger('click')
+    const leaving = wrapper.find('.popover-dialog')
+    expect(leaving.exists()).toBe(true)
+    expect(leaving.classes()).toContain('page-leave-active')
+    await settle()
+    expect(wrapper.find('.popover-dialog').exists()).toBe(false)
   })
 })
 
@@ -342,7 +387,7 @@ describe('topbar search chip (TASK-41 1b)', () => {
     expect(chip().find('.chip-label-q').exists()).toBe(false)
   })
 
-  it('[covers:web-search.topbar-entry] 他ページからの実行: 現在の期間とラベルを引継ぎ /search?q= へ遷移し dialog は閉じる', async () => {
+  it('[covers:web-search.topbar-entry] 他ページからの実行: q のみを渡して /search へ遷移（labels は着地後の shell 同期・期間 keys は載らない）し dialog は閉じる', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] }, 'GET /api/oauth/grants': { body: [] } })
     const { wrapper, router } = await mountApp('/receipts')
     // 2026-10 (the default) + label red selected through the search dialog's
@@ -369,12 +414,16 @@ describe('topbar search chip (TASK-41 1b)', () => {
     expect(submitBtn.attributes('type')).toBe('submit')
     await wrapper.find('form.search-dialog').trigger('submit')
     await settle()
-    // the dialog closed and the app moved to /search carrying the period and labels
+    // the dialog closed and the app moved to /search with q only — the run
+    // carries nothing else (TASK-145 D1-1): the landing is a keys-less entry,
+    // the shell URL sync writes the labels back, and the period keys never
+    // ride while scope=all (the store's period reaches /search through the
+    // store continuation instead)
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(chip().attributes('aria-expanded')).toBe('false')
     expect(push).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.path).toBe('/search')
-    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', month: '2026-10', labels: 'red' })
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', labels: 'red' })
   })
 
   it('[covers:web-search.topbar-entry] /search 内の実行は replace で q のみ差し替え・draft は開くたび現在 q で初期化・空実行で q を外す', async () => {

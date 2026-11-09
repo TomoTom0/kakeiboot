@@ -18,6 +18,9 @@ Subcommands (env is an argument; the stg/prod task prefix maps to --env):
   service        systemctl --user <verb...> kakeiboot-<env>
   backup         systemctl --user start kakeiboot-backup@<env>.service
   backup-status  last_success marker, generation dirs, list-timers, last result
+  install-units  render scripts/systemd/kakeiboot-backup@.service.in with deploy_root
+                 -> rsync service + timer into the user unit dir -> daemon-reload
+                 (no --env: the unit is one %i template shared by both envs)
 
 The healthz port is parsed at startup from configs/<env>/app.toml [server] port
 (no port literals here -- see configs-management rule). Every subcommand takes
@@ -32,6 +35,7 @@ import argparse
 import shlex
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +43,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_CONFIG = REPO_ROOT / "configs" / "deploy.toml"
 DEPLOY_LOCAL_CONFIG = REPO_ROOT / "configs" / "deploy.local.toml"
+UNIT_IN = REPO_ROOT / "scripts" / "systemd" / "kakeiboot-backup@.service.in"
 
 KNOWN_KEYS = frozenset({"deploy_root", "runtime_host", "transport"})
 TRANSPORTS = ("local", "ssh")
@@ -228,6 +233,54 @@ def build_backup_status_commands(cfg: DeployConfig, env: str) -> list[list[str]]
     ]
 
 
+def render_unit(text: str, deploy_root: str) -> str:
+    """Render the .in unit template: {{deploy_root}} -> the resolved deploy_root.
+
+    A template with no {{deploy_root}} at all means the source is no longer the
+    .in contract (hardcoded paths are back); any `{{...}}` left after the
+    substitution is an unknown placeholder (a typo or a future key). Both must
+    surface as ConfigError here instead of becoming a unit file with a broken
+    or unrendered path.
+    """
+    if "{{deploy_root}}" not in text:
+        raise ConfigError("unit template has no {{deploy_root}} placeholder (hardcoded paths?)")
+    rendered = text.replace("{{deploy_root}}", deploy_root)
+    if "{{" in rendered:
+        raise ConfigError("unit template has an unknown placeholder; only {{deploy_root}} is supported")
+    return rendered
+
+
+def build_install_units_commands(cfg: DeployConfig, rendered_src: str) -> list[list[str]]:
+    """install-units plan: mkdir user unit dir, rsync rendered service + timer, reload.
+
+    The destination is the home-expanded absolute path (Path.home()): local
+    rsync does not go through a shell, so a literal `~` would create a real
+    directory named `~` instead of the user config dir. The dir itself may not
+    exist on a fresh runtime host, so mkdir -p leads the plan (remote_exec, so
+    ssh mode creates it on the host). The timer carries no paths and is copied
+    as-is; daemon-reload also goes through remote_exec.
+
+    Path.home() is the OPERATOR's home on this machine, resolved here before
+    any transport handling — with transport="ssh" the same value is reused for
+    the remote side. That silently assumes the ssh alias's login user on the
+    runtime host is the same user as on this machine (the current operation
+    relies on this identity); a differing login user would rsync into a wrong
+    remote path instead of failing.
+    """
+    unit_dir = f"{Path.home()}/.config/systemd/user"
+    return [
+        remote_exec(cfg, ["mkdir", "-p", unit_dir]),
+        rsync_exec(cfg, ["-a"], rendered_src, f"{unit_dir}/kakeiboot-backup@.service"),
+        rsync_exec(
+            cfg,
+            ["-a"],
+            "scripts/systemd/kakeiboot-backup@.timer",
+            f"{unit_dir}/kakeiboot-backup@.timer",
+        ),
+        remote_exec(cfg, ["systemctl", "--user", "daemon-reload"]),
+    ]
+
+
 def run_commands(
     cmds: list[list[str]], dry_run: bool, cwd: Path | None = None
 ) -> tuple[int, int]:
@@ -307,6 +360,45 @@ def cmd_backup_status(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_install_units(args: argparse.Namespace) -> int:
+    """Render the .in source and install both units into the user unit dir.
+
+    The rendered text and the deploy_root it was rendered with go to stdout
+    first (which value produced the installed unit stays traceable). Dry-run
+    prints the rendered unit plus the plan and creates no file. A real run
+    stages the rendered service under the repo tmp/ tree (tempfile, removed on
+    exit) so the staged file keeps the real unit name for the rsync.
+    """
+    cfg = load_config(config_paths())
+    rendered = render_unit(UNIT_IN.read_text(encoding="utf-8"), cfg.deploy_root)
+    print(f"# rendered from {UNIT_IN.relative_to(REPO_ROOT)} (deploy_root={cfg.deploy_root})")
+    print(rendered, end="")
+    if args.dry_run:
+        # Plan-only: the staged path below is a display placeholder; a real run
+        # stages the render in a fresh tmp/units-*/ dir (never this path).
+        staged_src = REPO_ROOT / "tmp" / "units-render" / "kakeiboot-backup@.service"
+        print("# dry-run plan only: a real run stages the rendered unit in a fresh tmp/units-* dir first")
+        run_commands(build_install_units_commands(cfg, str(staged_src)), dry_run=True, cwd=REPO_ROOT)
+        return 0
+    tmp_root = REPO_ROOT / "tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="units-", dir=tmp_root) as stage:
+        staged = Path(stage) / "kakeiboot-backup@.service"
+        staged.write_text(rendered, encoding="utf-8")
+        cmds = build_install_units_commands(cfg, str(staged))
+        executed, rc = run_commands(cmds, dry_run=False, cwd=REPO_ROOT)
+    if rc != 0:
+        # Same recovery report as cmd_deploy: install-units is a multi-step
+        # rsync+reload sequence, so a failure must list which steps already
+        # ran (e.g. the service landed but the timer did not).
+        print("steps executed before failure:", file=sys.stderr)
+        for argv in cmds[:executed]:
+            print(f"  - {shlex.join(argv)}", file=sys.stderr)
+        return rc
+    print(f"units installed to {Path.home()}/.config/systemd/user/ (daemon-reload done)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kakeiboot_ops.py",
@@ -345,6 +437,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("backup-status", help="last_success, generations, timer, last result")
     add_env(p)
     p.set_defaults(func=cmd_backup_status)
+
+    p = sub.add_parser(
+        "install-units",
+        help="render the backup .in unit with deploy_root, rsync service+timer to the user unit dir, daemon-reload",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the rendered unit and the '$ <cmd>' plan without creating or copying anything",
+    )
+    p.set_defaults(func=cmd_install_units)
 
     return parser
 

@@ -8,23 +8,36 @@ on sys.path -- see tmp/tasks/tm-118/design_deploy-scripts.md section 3-2.)
 Standard library only (unittest / shlex / tempfile / unittest.mock), same rule as
 the script under test. Legacy run-array strings (deploy 7 lines / backup-status 4
 lines) are the phase-1 comparison assets: tmp/tasks/tm-118/raw_*.before.txt.
+
+TASK-119 (test-first) adds: backup script relative-path derivation, the unit .in
+template source, render_unit / install-units, and the mise units:install task.
+New kakeiboot_ops names (render_unit, build_install_units_commands) are imported
+inside the test bodies so the pre-implementation red run fails only the new
+tests -- a top-level import would break the existing 36 with an ImportError.
 """
 
 from __future__ import annotations
 
 import io
+import os
 import shlex
+import shutil
+import subprocess
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+import kakeiboot_ops
 from kakeiboot_ops import (
     SSH_OPTIONS,
     SSH_RSYNC_E,
     ConfigError,
     DeployConfig,
+    REPO_ROOT,
     build_backup_status_commands,
     build_deploy_commands,
     build_exec_command,
@@ -458,6 +471,337 @@ class TestHealthz(unittest.TestCase):
         self.assertEqual(joined, STG_DEPLOY_LEGACY[6])
         self.assertIn("1 2 3 4 5", joined)
         self.assertIn("sleep 1", joined)
+
+
+# TASK-119 shared fixtures (design: tmp/tasks/tm-119/design_backup_paths.md v2).
+SYSTEMD_DIR = REPO_ROOT / "scripts" / "systemd"
+UNIT_IN_PATH = SYSTEMD_DIR / "kakeiboot-backup@.service.in"
+UNIT_TIMER_PATH = SYSTEMD_DIR / "kakeiboot-backup@.timer"
+USER_UNIT_DIR = f"{Path.home()}/.config/systemd/user"
+
+# Same shape as the repo .in source (D-2): leading no-direct-scp comment,
+# {{deploy_root}} placeholders, %i template instances the render must preserve.
+UNIT_IN_FIXTURE = (
+    "# render source template: do not scp directly -- use mise run units:install\n"
+    "[Unit]\n"
+    "Description=kakeiboot %i backup (SQLite online backup via admin CLI + images rsync)\n"
+    "\n"
+    "[Service]\n"
+    "Type=oneshot\n"
+    "WorkingDirectory={{deploy_root}}/%i\n"
+    "ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i\n"
+    "Nice=10\n"
+    "IOSchedulingClass=idle\n"
+)
+
+
+# [covers:deploy-ops.backup-script-derives-paths-from-location] SRC/DEST derive
+# from the script location (bin/ two levels up = deploy_root); repo source runs as-is
+class TestBackupScriptRelativePaths(unittest.TestCase):
+    """TASK-119 D-1. A temp deploy layout <root>/<env>/bin/kakeiboot-backup.sh
+    (copy of the repo source) plus a stub budget-book that records its cwd and
+    argv and creates the --dest file (so the stat/rotation steps proceed; the
+    images dir stays absent = the documented skip path). Running the repo source
+    with bash must resolve everything under <root> -- never under /srv/opt."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # realpath basis (review L-6): the stub records its cwd with `pwd -P`
+        # while the script derives paths logically, so a symlinked TMPDIR
+        # (e.g. /tmp -> /private/tmp) would fail the comparison on either
+        # side. Pinning the whole layout to the resolved path keeps the
+        # expected values comparable with the recorded physical cwd.
+        self.root = Path(tmp.name).resolve()
+
+    def make_layout(self, env: str) -> None:
+        env_dir = self.root / env
+        (env_dir / "bin").mkdir(parents=True)
+        shutil.copyfile(
+            REPO_ROOT / "scripts" / "backup" / "kakeiboot-backup.sh",
+            env_dir / "bin" / "kakeiboot-backup.sh",
+        )
+        stub = env_dir / "budget-book"
+        stub.write_text(
+            "#!/bin/sh\n"
+            "{\n"
+            '  echo "cwd:$(pwd -P)"\n'
+            '  for a in "$@"; do echo "arg:$a"; done\n'
+            '} > "$RECORD"\n'
+            "while [ $# -gt 0 ]; do\n"
+            '  if [ "$1" = "--dest" ]; then : > "$2"; shift 2; else shift; fi\n'
+            "done\n",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+
+    def run_backup_script(self, env: str) -> tuple[subprocess.CompletedProcess[str], set[str]]:
+        # stamp candidates before and after: the script stamps with `date -u +%F`,
+        # so a run across UTC midnight still matches one of the two.
+        record = self.root / f"record-{env}"
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        proc = subprocess.run(
+            ["bash", str(self.root / env / "bin" / "kakeiboot-backup.sh"), env],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "RECORD": str(record), "KEEP": "30"},
+        )
+        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return proc, {before, after}
+
+    def assert_derived_under_layout_root(self, env: str) -> None:
+        self.make_layout(env)
+        proc, stamps = self.run_backup_script(env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = (self.root / f"record-{env}").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], f"cwd:{self.root}/{env}")
+        args = [line[len("arg:") :] for line in lines[1:]]
+        self.assertEqual(args[:2], ["admin", "backup"])
+        dest = args[args.index("--dest") + 1]
+        self.assertIn(
+            dest,
+            {f"{self.root}/backups/{env}/{stamp}/db.sqlite" for stamp in stamps},
+        )
+        # markers land under the derived DEST, proving DEST (not just the argument)
+        self.assertTrue((Path(dest).parent / "COMPLETED").exists())
+        self.assertTrue((self.root / "backups" / env / "last_success").exists())
+        self.assertEqual(args[-2:], ["--config-dir", f"configs/{env}"])
+
+    def test_stg_paths_derive_from_script_location(self) -> None:
+        self.assert_derived_under_layout_root("stg")
+
+    def test_prod_paths_derive_from_script_location(self) -> None:
+        self.assert_derived_under_layout_root("prod")
+
+    def test_repo_source_has_no_srv_opt_literal(self) -> None:
+        # the goal is removing the /srv/opt duplication: the repo source must not
+        # carry the absolute path anywhere (the deploy contract carries it instead)
+        text = (REPO_ROOT / "scripts" / "backup" / "kakeiboot-backup.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("/srv/opt", text)
+
+
+# [covers:deploy-ops.backup-unit-in-template] repo source of the unit is the .in
+# placeholder template; the plain (hardcoded) service file is gone; timer stays as-is
+class TestUnitTemplateSource(unittest.TestCase):
+    def test_service_in_has_placeholders_and_leading_comment(self) -> None:
+        text = UNIT_IN_PATH.read_text(encoding="utf-8")
+        self.assertTrue(
+            text.splitlines()[0].startswith("#"),
+            "leading comment (no direct scp, use units:install) required",
+        )
+        self.assertIn("WorkingDirectory={{deploy_root}}/%i", text)
+        self.assertIn("ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i", text)
+
+    def test_plain_service_file_is_gone(self) -> None:
+        # leaving both would reintroduce a second (unrendered) source of truth
+        self.assertFalse((SYSTEMD_DIR / "kakeiboot-backup@.service").exists())
+
+    def test_timer_stays_plain(self) -> None:
+        # the timer has no paths -> not a render target (D-2)
+        self.assertFalse((SYSTEMD_DIR / "kakeiboot-backup@.timer.in").exists())
+        self.assertNotIn("{{", UNIT_TIMER_PATH.read_text(encoding="utf-8"))
+
+    def test_comment_lines_carry_no_placeholder_literal(self) -> None:
+        # review L-1: the render substitutes every placeholder occurrence in the
+        # file, comments included -- mentioning the placeholder syntax inside the
+        # leading comment would leave the installed unit's comment garbled, so
+        # the comment must describe it without the literal braces.
+        comment_lines = [
+            ln
+            for ln in UNIT_IN_PATH.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("#")
+        ]
+        self.assertTrue(comment_lines, "leading comment required")
+        for ln in comment_lines:
+            self.assertNotIn("{{", ln)
+
+
+# [covers:deploy-ops.render-unit-resolves-deploy-root] render_unit substitutes
+# {{deploy_root}} with the load_config-resolved deploy_root; %i and comments stay
+class TestRenderUnit(unittest.TestCase):
+    def test_substitutes_resolved_deploy_root(self) -> None:
+        from kakeiboot_ops import render_unit
+
+        cfg = load_pair('deploy_root = "/custom/root"\ntransport = "local"\n', None)
+        rendered = render_unit(UNIT_IN_FIXTURE, cfg.deploy_root)
+        self.assertNotIn("{{", rendered)
+        self.assertIn("WorkingDirectory=/custom/root/%i\n", rendered)
+        self.assertIn("ExecStart=/custom/root/%i/bin/kakeiboot-backup.sh %i\n", rendered)
+
+    def test_preserves_i_and_comment_lines(self) -> None:
+        from kakeiboot_ops import render_unit
+
+        rendered = render_unit(UNIT_IN_FIXTURE, DEPLOY_ROOT)
+        self.assertIn(f"WorkingDirectory={DEPLOY_ROOT}/%i\n", rendered)
+        self.assertIn("Description=kakeiboot %i backup", rendered)
+        self.assertEqual(rendered.splitlines()[0], UNIT_IN_FIXTURE.splitlines()[0])
+        self.assertTrue(rendered.splitlines()[0].startswith("#"))
+
+    def test_renders_the_repo_in_source(self) -> None:
+        from kakeiboot_ops import render_unit
+
+        rendered = render_unit(UNIT_IN_PATH.read_text(encoding="utf-8"), DEPLOY_ROOT)
+        self.assertNotIn("{{", rendered)
+        self.assertIn(f"WorkingDirectory={DEPLOY_ROOT}/%i\n", rendered)
+        self.assertIn(f"ExecStart={DEPLOY_ROOT}/%i/bin/kakeiboot-backup.sh %i\n", rendered)
+
+    # [covers:deploy-ops.render-unit-rejects-leftover-placeholder]
+    def test_leftover_placeholder_raises_config_error(self) -> None:
+        from kakeiboot_ops import render_unit
+
+        text = UNIT_IN_FIXTURE.replace("Nice=10", "Nice={{unknown}}")
+        with self.assertRaises(ConfigError):
+            render_unit(text, DEPLOY_ROOT)
+
+    # [covers:deploy-ops.render-unit-rejects-leftover-placeholder]
+    # (review L-2 extends the same .in-contract guard: no placeholder at all
+    # means hardcoded paths are back -- reject before anything is distributed.)
+    def test_missing_placeholder_raises_config_error(self) -> None:
+        from kakeiboot_ops import render_unit
+
+        text = UNIT_IN_FIXTURE.replace("{{deploy_root}}", DEPLOY_ROOT)
+        with self.assertRaises(ConfigError):
+            render_unit(text, DEPLOY_ROOT)
+
+
+# [covers:deploy-ops.install-units-plan] mkdir user unit dir -> render ->
+# rsync (service, timer) -> daemon-reload; destination is the home-expanded
+# user unit dir; no --env argument
+class TestInstallUnitsPlan(unittest.TestCase):
+    RENDERED_SRC = "/tmp/kakeiboot-units-render/kakeiboot-backup@.service"
+
+    def test_local_plan_uses_home_expanded_destination(self) -> None:
+        from kakeiboot_ops import build_install_units_commands
+
+        cmds = build_install_units_commands(local_cfg(), self.RENDERED_SRC)
+        self.assertEqual(len(cmds), 4)
+        mkdir, service_rsync, timer_rsync, reload_cmd = cmds
+        # review L-4: rsync does not create the destination dir -- a fresh
+        # runtime host has no ~/.config/systemd/user yet, so mkdir -p leads
+        self.assertEqual(mkdir, ["mkdir", "-p", USER_UNIT_DIR])
+        self.assertEqual(service_rsync[0], "rsync")
+        self.assertEqual(service_rsync[-2], self.RENDERED_SRC)
+        self.assertEqual(service_rsync[-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.service")
+        self.assertEqual(timer_rsync[0], "rsync")
+        self.assertEqual(timer_rsync[-2], "scripts/systemd/kakeiboot-backup@.timer")
+        self.assertEqual(timer_rsync[-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.timer")
+        for cmd in (mkdir, service_rsync, timer_rsync):
+            # local rsync does not go through a shell: a literal `~` would create
+            # a real directory named "~" (D-2 step 3) -- the path must be expanded
+            self.assertNotIn("~", " ".join(cmd))
+        self.assertEqual(reload_cmd, ["systemctl", "--user", "daemon-reload"])
+
+    def test_ssh_plan_prefixes_host_and_wraps_reload(self) -> None:
+        from kakeiboot_ops import build_install_units_commands
+
+        cmds = build_install_units_commands(ssh_cfg(), self.RENDERED_SRC)
+        mkdir, service_rsync, timer_rsync, reload_cmd = cmds
+        self.assertEqual(
+            mkdir,
+            ["ssh", *SSH_OPTIONS, "gt430", "--", f"mkdir -p {USER_UNIT_DIR}"],
+        )
+        self.assertEqual(service_rsync[service_rsync.index("-e") + 1], SSH_RSYNC_E)
+        self.assertEqual(
+            service_rsync[-1], f"gt430:{USER_UNIT_DIR}/kakeiboot-backup@.service"
+        )
+        self.assertEqual(timer_rsync[-1], f"gt430:{USER_UNIT_DIR}/kakeiboot-backup@.timer")
+        self.assertEqual(
+            reload_cmd,
+            ["ssh", *SSH_OPTIONS, "gt430", "--", "systemctl --user daemon-reload"],
+        )
+
+    def test_subcommand_parses_without_env(self) -> None:
+        # the unit is one %i template shared by both envs: no --env argument (D-2)
+        args = build_parser().parse_args(["install-units"])
+        self.assertFalse(args.dry_run)
+        dry = build_parser().parse_args(["install-units", "--dry-run"])
+        self.assertTrue(dry.dry_run)
+
+
+# [covers:deploy-ops.install-units-dry-run] --dry-run prints the rendered unit and
+# executes nothing; a (mocked) real run rsyncs twice, reloads, reports the deploy_root
+class TestInstallUnitsCli(unittest.TestCase):
+    def make_config(self, tmp: str) -> Path:
+        return write(
+            Path(tmp) / "deploy.toml", 'deploy_root = "/custom/root"\ntransport = "local"\n'
+        )
+
+    def test_dry_run_prints_rendered_unit_without_executing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = self.make_config(tmp)
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                with mock.patch.object(kakeiboot_ops.subprocess, "run") as run:
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["install-units", "--dry-run"])
+        run.assert_not_called()
+        self.assertEqual(rc, 0)
+        printed = out.getvalue()
+        self.assertNotIn("{{", printed)
+        self.assertIn("WorkingDirectory=/custom/root/%i", printed)
+        self.assertIn("ExecStart=/custom/root/%i/bin/kakeiboot-backup.sh %i", printed)
+
+    def test_run_rsyncs_then_reloads_and_reports_deploy_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = self.make_config(tmp)
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                with mock.patch.object(
+                    kakeiboot_ops.subprocess,
+                    "run",
+                    mock.Mock(return_value=subprocess.CompletedProcess(args=[], returncode=0)),
+                ) as run:
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["install-units"])
+        self.assertEqual(rc, 0)
+        argvs = [call.args[0] for call in run.call_args_list]
+        self.assertEqual([argv[0] for argv in argvs], ["mkdir", "rsync", "rsync", "systemctl"])
+        self.assertEqual(argvs[0], ["mkdir", "-p", USER_UNIT_DIR])
+        # rsync 1 source is the rendered tempfile carrying the unit file name
+        self.assertEqual(Path(argvs[1][-2]).name, "kakeiboot-backup@.service")
+        self.assertEqual(argvs[1][-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.service")
+        self.assertEqual(argvs[2][-2], "scripts/systemd/kakeiboot-backup@.timer")
+        self.assertEqual(argvs[2][-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.timer")
+        self.assertEqual(argvs[3], ["systemctl", "--user", "daemon-reload"])
+        # D-4: the deploy_root value used for rendering stays in the output
+        self.assertIn("/custom/root", out.getvalue())
+
+    # [covers:deploy-ops.install-units-plan] (review: failure reporting parity
+    # with cmd_deploy -- install-units is a multi-step rsync+reload sequence,
+    # so a mid-plan failure must report which steps already ran)
+    def test_failure_lists_executed_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = self.make_config(tmp)
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                results = [
+                    subprocess.CompletedProcess(args=[], returncode=0),  # mkdir
+                    subprocess.CompletedProcess(args=[], returncode=0),  # rsync service
+                    subprocess.CompletedProcess(args=[], returncode=23),  # rsync timer fails
+                ]
+                with mock.patch.object(kakeiboot_ops.subprocess, "run", side_effect=results):
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["install-units"])
+        self.assertEqual(rc, 23)
+        err_text = err.getvalue()
+        self.assertIn("steps executed before failure:", err_text)
+        # the two steps that ran before the failure are listed
+        self.assertIn(f"mkdir -p {USER_UNIT_DIR}", err_text)
+        self.assertIn(f"{USER_UNIT_DIR}/kakeiboot-backup@.service", err_text)
+        # the failed timer rsync and the never-reached daemon-reload are not
+        self.assertNotIn("daemon-reload", err_text)
+
+
+# [covers:deploy-ops.units-install-task] mise task units:install wraps install-units
+class TestUnitsInstallTask(unittest.TestCase):
+    def test_task_runs_install_units_subcommand(self) -> None:
+        data = tomllib.loads((REPO_ROOT / "mise.toml").read_text(encoding="utf-8"))
+        run = data["tasks"]["units:install"]["run"]
+        run_text = run if isinstance(run, str) else " ".join(run)
+        self.assertIn("kakeiboot_ops.py", run_text)
+        self.assertIn("install-units", run_text)
 
 
 if __name__ == "__main__":

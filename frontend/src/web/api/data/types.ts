@@ -1,5 +1,5 @@
 // Web-side DTOs for the auxiliary data screens (categories, stores,
-// receipts). They mirror docs/spec_mcp-tools.md 7-9 to 7-14; once the
+// receipts). They mirror docs/spec/spec_mcp-tools.md 7-9 to 7-14; once the
 // backend generates TS types with ts-rs into src/shared/types/ (spec 12),
 // replace these with the generated ones.
 
@@ -91,6 +91,15 @@ export interface ReceiptListQuery {
   cursor?: string
 }
 
+/** TASK-167 D-3: a derived representative item (amount desc, k = 2,
+ * tie-break line_no) — the receipt rows' and the analysis axis rows' sub
+ * line. Item-less receipts carry an empty array; the item axis rows carry
+ * no field at all (the rows ARE the items). */
+export interface TopItem {
+  name: string
+  amount: number
+}
+
 export interface ReceiptSummary {
   receipt_id: number
   purchased_on: string | null
@@ -102,6 +111,8 @@ export interface ReceiptSummary {
   deleted_at: string | null
   /** labels assigned to the receipt (TASK-17; empty when none) */
   labels?: Label[]
+  /** the derived representative items (TASK-167 D-3; empty when no items) */
+  top_items?: TopItem[]
 }
 
 export interface ReceiptListResult {
@@ -252,6 +263,9 @@ export interface StatsRow {
   labels: string[]
   value: number
   share?: number
+  /** the derived representative items riding the row's sub line
+   *  (TASK-167 D-3; the client-built rest rows carry none) */
+  top_items?: TopItem[]
 }
 
 // --- analysis API (TASK-89): GET /analysis, /analysis/trend, /analysis/item
@@ -315,6 +329,9 @@ export interface AnalysisRow {
    *  denominator; null on metric=unit). No folded "other" row — the client
    *  builds the rest row from truncated_rows and totals. */
   share: number | null
+  /** TASK-167 D-3: the axis value's derived representative items (amount
+   *  desc, k = 2). Absent on the item axis (the rows ARE the items). */
+  top_items?: TopItem[]
 }
 
 /** GET /api/ledgers/{l}/analysis: the period totals and the axis breakdown

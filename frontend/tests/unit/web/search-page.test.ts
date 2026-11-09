@@ -20,6 +20,7 @@ import {
   type ReceiptSummary,
 } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
+import ContentSwap from '@/web/components/ContentSwap.vue'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
 
 let api: DataApi
@@ -215,7 +216,7 @@ describe('search page: receipts tab', () => {
     })
   })
 
-  it('[covers:web-search.receipts] さらに表示: next_cursor があれば続きを page へ append（cursor pagination）', async () => {
+  it('[covers:web-search.receipts][covers:web-common.appear-fade] さらに表示: next_cursor があれば続きを page へ append（cursor pagination）・追加行のみ出現fade', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const list = vi.spyOn(api, 'listReceipts').mockImplementation(
       async (_l: number, q: ReceiptListQuery): Promise<ReceiptListResult> => ({
@@ -229,9 +230,24 @@ describe('search page: receipts tab', () => {
     expect(wrapper.findAll('[data-test="search-row"]')).toHaveLength(1)
 
     await wrapper.find('[data-test="search-more"]').trigger('click')
-    await settle()
+    await flushPromises()
+    await nextTick()
     expect(list).toHaveBeenLastCalledWith(1, expect.objectContaining({ q: '牛乳', cursor: 'c1' }))
-    expect(wrapper.findAll('[data-test="search-row"]')).toHaveLength(2)
+    const rows = wrapper.findAll('[data-test="search-row"]')
+    expect(rows).toHaveLength(2)
+    // TASK-146 §3 #18 (web-common.appear-fade): only the APPENDED row earns
+    // the shared appear-fade grammar; the existing row stays put. The row's
+    // grammar class rides the <li> the TransitionGroup keys — the
+    // [data-test="search-row"] link sits inside it, so the row element is
+    // reached through closest (the link's own class or a descendant stays
+    // the other accepted carriers)
+    const hasAppear = (el: Element): boolean =>
+      el.className.includes('bb-appear') ||
+      el.querySelector('[class*="bb-appear"]') !== null ||
+      el.closest('li[class*="bb-appear"]') !== null
+    expect(hasAppear(rows[0]!.element), 'the existing row never moves').toBe(false)
+    expect(hasAppear(rows[1]!.element), 'the appended row appears through the fade').toBe(true)
+    await settle()
     expect(wrapper.find('[data-test="search-more"]').exists()).toBe(false)
   })
 
@@ -248,7 +264,7 @@ describe('search page: receipts tab', () => {
 })
 
 describe('search page: items tab', () => {
-  it('[covers:web-search.items] q は品目名のみで searchItems を呼ぶ・2行構成の行・カテゴリは /categories への別リンク', async () => {
+  it('[covers:web-search.items] q は品目名のみで searchItems を呼ぶ・行は共通2行文法（.data-row）・カテゴリは副行の非押下text', async () => {
     const itemCalls = stubSearchItems(api)
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper, router } = await mountApp('/search?q=牛乳&tab=items')
@@ -265,25 +281,25 @@ describe('search page: items tab', () => {
     expect(meta.text()).toMatch(/1件/)
     expect(meta.text()).toMatch(/220/)
 
-    // the row itself leads to the feed with the q context
-    const feedLink = row.find(`a[href*="/receipts/101"]`)
-    expect(feedLink.exists()).toBe(true)
-    const fu = new URL(feedLink.attributes('href')!, 'http://localhost')
+    // the row itself (the shared .data-row root — REVIEW-15 中1 moved the
+    // item tab onto DataRow, so the whole row is the one press to the feed)
+    // carries the q context on its own href
+    expect(row.element?.tagName).toBe('A')
+    const fu = new URL(row.attributes('href')!, 'http://localhost')
+    expect(fu.pathname).toBe('/receipts/101')
     expect(Object.fromEntries(fu.searchParams)).toEqual({ q: '牛乳' })
 
-    // the category is a separate link inside the row: it does not trigger the
-    // row navigation. TASK-74: the catalog resolves the path into the
-    // hierarchy route ids (/categories/<top>[/<sub>]); with the scope at all
-    // (the default) no period keys ride the link — the term searched the
-    // whole history, so there is no period to carry
+    // the category rides the SUB line as plain muted text (REVIEW-15 裁断
+    // 2026-11-07: the row keeps its single action, D-4 — no in-row link; the
+    // category route rides the feed's own cat-link)
     const cat = wrapper.find('[data-test="search-item-category"]')
     expect(cat.exists()).toBe(true)
-    const cu = new URL(cat.attributes('href')!, 'http://localhost')
-    expect(cu.pathname).toBe('/axes/category/1/2')
-    expect(Object.fromEntries(cu.searchParams)).toEqual({})
+    expect(cat.element?.tagName).toBe('SPAN')
+    expect(cat.attributes('href')).toBeUndefined()
+    expect(cat.classes()).not.toContain('hover-ink')
+    expect(cat.text()).toBe('食費/食料品')
 
-    // the scope chip narrows the item query the same way — and the category
-    // link starts carrying the period in its URL form
+    // the scope chip narrows the item query the same way
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query).toEqual({
@@ -291,41 +307,38 @@ describe('search page: items tab', () => {
       tab: 'items',
       scope: 'period',
       month: '2026-10',
-      
+
     })
     expect(itemCalls.at(-1)).toEqual([
       1,
       expect.objectContaining({ q: '牛乳', from: '2026-10-01', to: '2026-10-31' }),
     ])
-    const cu2 = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(cu2.pathname).toBe('/axes/category/1/2')
-    expect(Object.fromEntries(cu2.searchParams)).toEqual({ month: '2026-10' })
   })
 
-  it('[covers:web-search.items] カテゴリリンクは labels を引き継ぎ・catalog に解けない path は /categories の一覧のまま', async () => {
+  it('[covers:web-search.items] 副行のカテゴリは非押下のmuted text（catalog に解けない path も同一の表示・linkでない）', async () => {
     stubSearchItems(api)
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const { wrapper } = await mountApp('/search?q=牛乳&tab=items&scope=period&month=2026-10')
-    // a label selection rides the category link like the period does
-    // (picked through the search dialog's lower half, TASK-101)
-    await wrapper.find('[data-test="filter-search"]').trigger('click')
-    await settle()
-    await wrapper.find('[data-test="label-filter-red"]').trigger('click')
-    await settle()
-    const withLabel = new URL(wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(withLabel.pathname).toBe('/axes/category/1/2')
-    expect(Object.fromEntries(withLabel.searchParams)).toEqual({ month: '2026-10', labels: 'red' })
+    // REVIEW-15 裁断 2026-11-07: the category never renders as a link — the
+    // row keeps its single action (D-4) and the category route rides the
+    // feed's own cat-link, so neither labels nor period ride an in-row href
+    const cat = wrapper.find('[data-test="search-item-category"]')
+    expect(cat.element?.tagName).toBe('SPAN')
+    expect(cat.attributes('href')).toBeUndefined()
+    expect(cat.classes()).not.toContain('hover-ink')
+    expect(cat.text()).toBe('食費/食料品')
 
     // a category path the catalog cannot resolve (a deleted / foreign tree)
-    // keeps the list destination with the legacy category query
+    // renders the same plain text — no /categories fallback destination
     stubSearchItems(api, [{ ...MILK, category: '存在しない分類' }])
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const unresolved = await mountApp('/search?q=牛乳&tab=items&scope=period&month=2026-10')
     await settle()
-    const cu = new URL(unresolved.wrapper.find('[data-test="search-item-category"]').attributes('href')!, 'http://localhost')
-    expect(cu.pathname).toBe('/categories')
-    expect(Object.fromEntries(cu.searchParams)).toEqual({ category: '存在しない分類', month: '2026-10' })
+    const cu = unresolved.wrapper.find('[data-test="search-item-category"]')
+    expect(cu.element?.tagName).toBe('SPAN')
+    expect(cu.attributes('href')).toBeUndefined()
+    expect(cu.text()).toBe('存在しない分類')
   })
 
   it('[covers:web-search.items] catalog 取得失敗は msg-error に出す（unhandled rejection なし・結果行はそのまま）', async () => {
@@ -408,20 +421,43 @@ describe('search page: URL restore', () => {
     await settle()
     expect(router.currentRoute.value.query).toEqual({ q: '牛乳' })
 
-    // scope=period fills in the store's current period keys; back to all
-    // removes only the scope key
+    // scope=period fills in the store's current period keys (the ONLY
+    // direction that seats them — TASK-145 D1-3); back to all drops the
+    // period keys too (next=all keeps dropPeriodQuery's result: no
+    // seat-then-strip round trip on our own transition)
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.query).toEqual({ q: '牛乳', scope: 'period', month: '2026-10' })
     await wrapper.find('[data-test="search-scope"]').trigger('click')
     await settle()
-    expect(router.currentRoute.value.query).toEqual({ q: '牛乳', month: '2026-10' })
+    expect(router.currentRoute.value.query).toEqual({ q: '牛乳' })
 
     // an empty commit clears q and keeps the rest
     await wrapper.find('[data-test="search-input"]').setValue('')
     await wrapper.find('[data-test="search-input"]').trigger('keydown', { key: 'Enter' })
     await settle()
-    expect(router.currentRoute.value.query).toEqual({ month: '2026-10' })
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  // PR#4 #5: the scope toggle's ONLY query change is from/to — exactly the
+  // keys committedKey drops — so the scope rides the key explicitly and a
+  // period⇄all toggle lands as a content swap (the pane's fade), matching
+  // the template comment "a term / tab / scope / label change is a swap".
+  it('[covers:web-common.content-swap] scope切替（period⇄all）はcommittedKeyがbumpしpaneの内容swapになる（期間成分の除外だけで成立しない）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳&scope=period&month=2026-10')
+    await settle()
+    /** the committed key's scope field (l | tab | SCOPE | queryJSON) */
+    const scopePart = () => String(wrapper.findComponent(ContentSwap).props('swapKey')).split('|')[2]
+    expect(scopePart()).toBe('period')
+    // period → all: the key bumps even though from/to alone changed
+    await wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(scopePart()).toBe('all')
+    // all → period bumps the key back the same way
+    await wrapper.find('[data-test="search-scope"]').trigger('click')
+    await settle()
+    expect(scopePart()).toBe('period')
   })
 })
 
@@ -516,5 +552,42 @@ describe('search page: input commit', () => {
     // the stale timer never fires: 300ms later the URL still holds the new term
     await vi.advanceTimersByTimeAsync(600)
     expect(router.currentRoute.value.query['q']).toBe('牛乳 1L')
+  })
+})
+
+
+// TASK-167 A系: the search tab's receipt rows join the shared two-line
+// grammar (the 1-line shape that page had been left with). REVIEW-15 中1
+// moves the ITEM tab onto the same component (D-13: both tabs of /search are
+// the shared grammar — the per-surface .search-item-* composition is gone).
+describe('search rows two-line hierarchy (TASK-167)', () => {
+  it('[covers:web-common.data-row-grammar] 検索レシートtabの行も共通2行文法（主行+副行・取り残された1行構成の廃止）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳')
+    await settle()
+    const rows = wrapper.findAll('.data-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0]!.find('.row-main').exists()).toBe(true)
+    expect(rows[0]!.find('.row-main .amount').exists()).toBe(true)
+    expect(rows[0]!.find('.row-sub').exists()).toBe(true)
+  })
+
+  it('[covers:web-common.data-row-grammar] 検索品物tabの行も共通2行文法（副行のカテゴリは inline when-link）', async () => {
+    stubSearchItems(api)
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/search?q=牛乳&tab=items')
+    await settle()
+    const row = wrapper.find('[data-test="search-item-row"]')
+    expect(row.exists()).toBe(true)
+    expect(row.classes()).toContain('data-row')
+    expect(row.find('.row-main').exists()).toBe(true)
+    expect(row.find('.row-main .amount').exists()).toBe(true)
+    expect(row.find('.row-sub').exists()).toBe(true)
+    // the category rides the sub line as plain muted text (REVIEW-15 裁断
+    // 2026-11-07: single row action — no in-row link)
+    const cat = row.find('[data-test="search-item-category"]')
+    expect(cat.exists()).toBe(true)
+    expect(cat.element?.tagName).toBe('SPAN')
+    expect(cat.classes()).not.toContain('hover-ink')
   })
 })

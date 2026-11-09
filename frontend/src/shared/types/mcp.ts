@@ -1,6 +1,6 @@
 // MCP tool I/O types shared by the widget and the web SPA.
 //
-// Hand-written from docs/spec_mcp-tools.md §3-2 / §7 / §10 / §11. The backend
+// Hand-written from docs/spec/spec_mcp-tools.md §3-2 / §7 / §10 / §11. The backend
 // generates the same shapes from `backend/src/domain/dto.rs` with ts-rs into
 // this directory (spec §12); when that lands, replace this file with the
 // generated output and keep `index.ts` re-exporting the same names.

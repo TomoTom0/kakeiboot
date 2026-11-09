@@ -13,7 +13,7 @@ use super::catalog::{self, CatKind};
 use super::dto::{
     AnalysisResult, AnalysisRow, AnalysisTotals, ItemMonthly, ItemPrice, ItemRef, ItemStatsResult,
     ItemStatsSummary, ItemStoreAgg, PeriodResolved, StatsResult, StatsRow, StatsSection,
-    StatsTotals, TrendResult, TrendSeries,
+    StatsTotals, TopItem, TrendResult, TrendSeries,
 };
 use super::labels::LabelColor;
 use super::util::{
@@ -1069,6 +1069,7 @@ async fn analysis_row(
     key: Option<&str>,
     cur: (i64, i64),
     share_v: Option<f64>,
+    top_items: Option<Vec<TopItem>>,
 ) -> sqlx::Result<AnalysisRow> {
     let (a, c) = cur;
     let label = labels_for(conn, ledger_id, axis.dim(), key).await?;
@@ -1085,7 +1086,77 @@ async fn analysis_row(
         count: c,
         unit: Metric::Unit.value(a, c),
         share: share_v,
+        top_items,
     })
+}
+
+/// TASK-167 D-3: every axis value's derived representative items — the two
+/// most expensive lines of the period's receipts under that axis value
+/// (amount desc, line_no tie-break: the same selection rule as the receipt
+/// rows) — in ONE grouped query over the fact view. Only `line_kind = 'item'`
+/// lines count (REVIEW-15 低3 — the other aggregates' convention), so a
+/// discount line never surfaces as a representative item. The label axis
+/// rides the postings (a labeled receipt's items count toward each of its
+/// labels; the unlabeled bucket is key None). The item axis never calls this:
+/// the rows ARE the items, so their `top_items` stays None (field absent).
+async fn axis_top_items(
+    conn: &mut SqliteConnection,
+    ledger_id: i64,
+    r: &Range,
+    axis: Axis,
+    filters: &Filters,
+    filt: &(String, Vec<Bind>),
+) -> sqlx::Result<HashMap<Option<String>, Vec<TopItem>>> {
+    let mut map: HashMap<Option<String>, Vec<TopItem>> = HashMap::new();
+    let key = axis.key_expr(filters);
+    // v_item_facts carries no line_no: the self-join brings the tie-break key
+    let from = if axis == Axis::Label {
+        "FROM v_item_facts f JOIN receipt_labels rl ON rl.receipt_id = f.receipt_id"
+    } else {
+        "FROM v_item_facts f"
+    };
+    let sql = format!(
+        "SELECT k, name, amount FROM (
+            SELECT CAST({key} AS TEXT) AS k, f.name AS name, f.amount_incl AS amount,
+                   ROW_NUMBER() OVER (PARTITION BY {key}
+                                      ORDER BY f.amount_incl DESC, i.line_no, f.item_id) AS rn
+            {from} JOIN receipt_items i ON i.id = f.item_id
+            WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ? AND f.line_kind = 'item'{}
+        ) WHERE rn <= 2 ORDER BY k, rn",
+        filt.0
+    );
+    let q = sqlx::query_as::<_, (Option<String>, String, i64)>(sqlx::AssertSqlSafe(sql))
+        .bind(ledger_id)
+        .bind(fmt_date(r.from))
+        .bind(fmt_date(r.to));
+    for (k, name, amount) in bind_all(q, &filt.1).fetch_all(&mut *conn).await? {
+        map.entry(k).or_default().push(TopItem { name, amount });
+    }
+    if axis == Axis::Label {
+        // the unlabeled bucket (the axis row with key None): the label-less
+        // receipts' items under the same top-2 rule
+        let sql = format!(
+            "SELECT f.name, f.amount_incl FROM v_item_facts f JOIN receipt_items i ON i.id = f.item_id
+             WHERE f.ledger_id = ? AND f.purchased_on BETWEEN ? AND ? AND f.line_kind = 'item'{}
+               AND NOT EXISTS (SELECT 1 FROM receipt_labels rl WHERE rl.receipt_id = f.receipt_id)
+             ORDER BY f.amount_incl DESC, i.line_no, f.item_id LIMIT 2",
+            filt.0
+        );
+        let q = sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql))
+            .bind(ledger_id)
+            .bind(fmt_date(r.from))
+            .bind(fmt_date(r.to));
+        let unlabeled: Vec<TopItem> = bind_all(q, &filt.1)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .map(|(name, amount)| TopItem { name, amount })
+            .collect();
+        if !unlabeled.is_empty() {
+            map.insert(None, unlabeled);
+        }
+    }
+    Ok(map)
 }
 
 /// The breakdown endpoint aggregate: the period's totals and the axis values
@@ -1126,6 +1197,13 @@ pub async fn analysis(
     });
 
     let mut rows = Vec::new();
+    // TASK-167 D-3: the axis values' derived top items in one grouped query
+    // (the item axis keeps None — its rows ARE the items, field absent)
+    let top_map = if axis == Axis::Item {
+        None
+    } else {
+        Some(axis_top_items(conn, ledger_id, range, axis, &filters, &filt).await?)
+    };
     for e in ents.iter().take(limit) {
         rows.push(
             analysis_row(
@@ -1135,6 +1213,9 @@ pub async fn analysis(
                 e.0.as_deref(),
                 (e.1, e.2),
                 share_of(e),
+                top_map
+                    .as_ref()
+                    .map(|m| m.get(&e.0).cloned().unwrap_or_default()),
             )
             .await?,
         );

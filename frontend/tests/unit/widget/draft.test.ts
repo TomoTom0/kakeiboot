@@ -113,8 +113,15 @@ describe('draft screen', () => {
     expect(wrapper.findAll('img').filter((i) => i.attributes('onerror') !== undefined)).toHaveLength(0)
 
     const stats: StatsEnvelope = statsEnvelope('by_store')
-    const chart = mount(BarHChart, { props: { data: [{ label: SCRIPT, value: 1 }], labelChars: 100 } })
-    expect(chart.find('text.bb-chart__label').element.textContent).toBe(SCRIPT)
+    // TASK-161 §6-2 (web-browse.trend-axis-minimal): the fixed labelChars
+    // prop is gone — the truncation is width-based (the label column's
+    // viewBox units by the estimated glyph width). The 26-char label cannot
+    // fit the column: it truncates in JS with a trailing … and still renders
+    // as a text node (the XSS purpose of this assertion keeps)
+    const chart = mount(BarHChart, { props: { data: [{ label: SCRIPT, value: 1 }] } })
+    const label = chart.find('text.bb-chart__label').element.textContent ?? ''
+    expect(label.endsWith('…')).toBe(true)
+    expect(label.length).toBeLessThan(SCRIPT.length)
     expect(chart.find('script').exists()).toBe(false)
     const s = await mountWidget(fakeHost({ toolOutput: { ...stats, sections: [{ ...stats.sections[0]!, rows: [{ keys: [1], labels: [IMG], value: 5 }] }] } }))
     expect(s.wrapper.findAll('img')).toHaveLength(0)

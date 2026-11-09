@@ -91,7 +91,18 @@ export async function mountApp(
   await router.push(path)
   await router.isReady()
   const attachTo = options.attach ? document.body.appendChild(document.createElement('div')) : undefined
-  const wrapper = mount(App, { attachTo, global: { plugins: [pinia, router], stubs: options.stubs } })
+  // TASK-146: the transition machinery is real by default (a stubbed
+  // Transition wraps its child in a <transition-stub> element, which both
+  // breaks the DOM structure the tests read and never applies the motion
+  // classes the appear-fade / content-swap expectations observe); a test
+  // can still opt out through its own stubs
+  const wrapper = mount(App, {
+    attachTo,
+    global: {
+      plugins: [pinia, router],
+      stubs: { transition: false, 'transition-group': false, ...options.stubs },
+    },
+  })
   mounted.push(wrapper)
   await settle()
   return { wrapper, router, pinia }
@@ -103,6 +114,41 @@ export function cleanup(): void {
   delete (navigator as { clipboard?: unknown }).clipboard
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+}
+
+// ---------------------------------------------------------------------------
+// Track-width patch (TASK-129): the row bars measure their track at mount
+// (clientWidth / getBoundingClientRect, the WeekRows pattern) — jsdom reports
+// 0 for both. This pins EVERY element's width to `px` so the bar-length math
+// (value / scale × track) becomes assertable in jsdom without pinning WHICH
+// element the surface measures. Returns the restore fn. (clientWidth is an
+// own property of Element.prototype in jsdom 30 — patch/restore BOTH accessors
+// there; HTMLElement.prototype never owns it, so the old read left restore
+// with undefined.)
+
+/** narrows a property descriptor's value to the getBoundingClientRect shape
+ * (a type guard instead of a cast — REVIEW-6 指摘2) */
+function isRectFn(v: unknown): v is (this: Element) => DOMRect {
+  return typeof v === 'function'
+}
+
+export function patchTrackWidth(px: number): () => void {
+  const cw = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+  const rect = Object.getOwnPropertyDescriptor(Element.prototype, 'getBoundingClientRect')
+  const origRect = rect?.value
+  Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => px })
+  Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value(this: Element): DOMRect {
+      if (!isRectFn(origRect)) throw new Error('getBoundingClientRect descriptor is not a function')
+      const r = origRect.call(this)
+      return { ...r, x: r.left, width: px, right: r.left + px }
+    },
+  })
+  return () => {
+    Object.defineProperty(Element.prototype, 'clientWidth', cw!)
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', rect!)
+  }
 }
 
 // ---------------------------------------------------------------------------
