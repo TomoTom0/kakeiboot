@@ -198,7 +198,7 @@ test.describe('popover shift (390x780)', () => {
     logPageIssues(page, 'popover-shift')
     await installApiStub(page)
     await page.goto('/receipts/101')
-    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-title')).toBeVisible()
     await page.locator('[data-test="account-button"]').click()
     await expect(page.locator('[data-test="account-menu"]')).toBeVisible()
     const m = await page.evaluate(() => {
@@ -313,7 +313,7 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
     logPageIssues(page, 'drawer-modal')
     await installApiStub(page)
     await page.goto('/receipts/101')
-    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-title')).toBeVisible()
 
     const sidebarRect = () => page.evaluate(() => document.querySelector('.sidebar')!.getBoundingClientRect())
     const mainX = () => page.evaluate(() => document.querySelector('.app-main')!.getBoundingClientRect().x)
@@ -337,7 +337,12 @@ test.describe('drawer overlay (390x780, reduced motion)', () => {
         return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
       }
       const hitAt = (p: { x: number; y: number }) => document.elementFromPoint(p.x, p.y)
-      const hitFeed = hitAt(center('[data-test="feed-prev"]'))
+      // TASK-175 H-6 centres the prev/next trio: at 390px its centre sits
+      // under the open sidebar (z 30), so probe the nav's right side — the
+      // part the drawer never covers — where the scrim (z 25) must still
+      // sit over the nav (z 10)
+      const navBox = document.querySelector('.feed-nav')!.getBoundingClientRect()
+      const hitFeed = hitAt({ x: navBox.right - navBox.width / 10, y: navBox.top + navBox.height / 2 })
       const hitMenu = hitAt(center('[data-test="menu-button"]'))
       return {
         lock: document.documentElement.classList.contains('drawer-lock'),
@@ -408,7 +413,7 @@ test.describe('drawer overlay (900x800, reduced motion)', () => {
     logPageIssues(page, 'drawer-desktop')
     await installApiStub(page)
     await page.goto('/receipts/101')
-    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-title')).toBeVisible()
 
     const sidebarRect = () => page.evaluate(() => document.querySelector('.sidebar')!.getBoundingClientRect())
     const mainX = () => page.evaluate(() => document.querySelector('.app-main')!.getBoundingClientRect().x)

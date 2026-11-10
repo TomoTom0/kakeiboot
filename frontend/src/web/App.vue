@@ -16,6 +16,7 @@ import {
   recordHistoryBoundary,
   setHistoryBoundaryToCurrent,
 } from './composables/navDirection'
+import { browsingNavigation } from './composables/browsingNavigation'
 import { useBrowsingUrlSync } from './composables/useBrowsingUrlSync'
 import {
   markReady,
@@ -158,16 +159,16 @@ const topbarBack = computed<TopbarBackTarget | null>(() => {
 // the browsing press: one press = one entry. The in-flight guard swallows a
 // second press until the press's navigation lands, so a burst of presses
 // never walks several entries at one boundary reading — for the back it
-// releases on afterEach, for the fallback climb on the push's own settle.
+// releases on its own unambiguous pop completion; the fallback uses its promise.
 const backInFlight = ref(false)
+const browsingHistory = browsingNavigation(router)
 function goTopbarBack(): void {
   const back = topbarBack.value
   if (!back) return
   if (back.browsing) {
-    if (backInFlight.value) return
+    if (backInFlight.value || browsingHistory.historyLocked.value) return
     if (isWithinAppHistory()) {
-      backInFlight.value = true
-      router.back()
+      browsingHistory.topbarBack()
       return
     }
     const parent = browsingFallbackParent(route.path)
@@ -192,12 +193,6 @@ function goTopbarBack(): void {
   }
   if (back.to !== undefined) void pushToParent(router, back.to)
 }
-// the back's own navigation landed — release the guard (the fallback climb
-// releases on its push's settle instead; the boundary move is NOT handled
-// here: it belongs to the climb's landing alone)
-const removeBackAfterEach = router.afterEach(() => {
-  backInFlight.value = false
-})
 // The topbar center filter bar (TASK-44 §11-3/11-6): only on the browsing
 // routes that opted in via route.meta.filters, and only while the user can
 // actually view a ledger (no membership -> no shared filters to show).
@@ -282,7 +277,6 @@ onMounted(() => desktopQuery.addEventListener('change', onDesktopCross))
 onUnmounted(() => {
   desktopQuery.removeEventListener('change', onDesktopCross)
   document.documentElement.classList.remove('drawer-lock')
-  removeBackAfterEach()
 })
 
 // --- account menu (top-right) --------------------------------------------------

@@ -1,193 +1,268 @@
-// Shell-level URL sync of the browsing state (TASK-124 design D2): the
-// period mode keys (month= / week= / year= / from&to — the mode key is the
-// truth, from/to a derived value, D2-4) and labels= ride the URL on the
-// routes marked `meta.browsingSync` (the browsing five + /search), in both
-// directions, from one place in App.vue so the pages keep only their
-// re-query watches.
-//
-// Import (URL -> store, D2-1/D2-2): fires on EVERY navigation (route watch,
-// pops included — a browser back lands on the entry's final URL and the
-// store follows it), but ONLY while the URL actually carries the keys: a
-// keys-less entry (tabbar, first paint, a bare deep link, the ‹ push) keeps
-// the store's current value — the shared "画面間で共有" behavior — and the
-// write-back below puts it on the URL at once instead of resetting it.
-//
-// Write-back (store -> URL, D2-6 + TASK-164 §2-2-1): every write lands
-// behind a diff guard — the keys the composable owns are only written when
-// the URL's current values differ from the store, so an import that agrees
-// with the store and the echo of our own write never issue another
-// navigation. Only a USER period change (the store's one-shot nextWrite
-// flag, raised by step / setMonth / setWeek / setMode / setRange) rides a
-// router.push — one history entry per operation, so the ‹ back and the
-// device back walk back through the period changes too; every system write
-// (a keys-less completion, an import normalization, the reset, a
-// labels-only change, the /search strip) stays the history-free
-// router.replace (navKind 'replace' → no slide, no scroll).
-// /search writes the period keys only while scope=period (D1 — with
-// scope=all the period never affects the results) and drops a stray
-// inflow's period keys on the first write-back (TASK-145 D1-2 — the rule
-// holds on both write sides: never written, never kept).
-//
-// The feed (/receipts/:id) is outside both directions by construction: its
-// routes carry no `browsingSync` (D2-3 — reusing meta.filters would sweep it
-// in), so its CONTEXT_FIELDS URL stays the truth and the store keeps the
-// list's period. /receipts' filter sync writes only the filter keys and
-// from/to (D2-5), never the mode keys or labels — those belong here.
-import { nextTick, watch } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import { formatLabelQuery, parseLabelQuery } from '@/shared/labels'
+import { onScopeDispose, watch } from 'vue'
+import { useRouter, type LocationQueryRaw, type Router } from 'vue-router'
+import { formatLabelQuery, parseLabelQuery, type LabelColor } from '@/shared/labels'
+import { browsingNavigation, type WriteOwner } from './browsingNavigation'
 import { firstString } from './receiptContext'
-import { usePeriodStore } from '../stores/period'
+import { monthEnd, shiftDate } from './period'
+import { usePeriodStore, type PeriodOperation } from '../stores/period'
+import { useSessionStore } from '../stores/session'
 
-/** The period keys this composable owns. */
-const PERIOD_KEYS = ['month', 'week', 'year', 'from', 'to'] as const
+const PERIOD_KEYS = ['month', 'week', 'year', 'from', 'to']
+export type BrowsingPatch = Record<string, string | undefined>
+interface Snapshot {
+  keys: Record<string, string>
+  labels: LabelColor[]
+}
+interface Entry extends WriteOwner {
+  kind: 'push' | 'replace'
+  ownedPatch: BrowsingPatch
+  deriveRange: boolean
+  snapshot?: Snapshot
+}
+interface Coordinator {
+  patch(patch: BrowsingPatch, deriveRange?: boolean): void
+  logicalValue(key: string): string | undefined
+  onBoundary(fn: () => void): () => void
+}
+const coordinators = new WeakMap<Router, Coordinator>()
 
-/** A query value as the URL comparison form: the first string, null when the
- *  key is absent (arrays keep their head — the write side never emits one). */
-function queryText(v: unknown): string | null {
-  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : null
-  return typeof v === 'string' ? v : null
+function apply(query: LocationQueryRaw, patch: BrowsingPatch): LocationQueryRaw {
+  const next = { ...query }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete next[key]
+    else next[key] = value
+  }
+  return next
+}
+function equal(a: LocationQueryRaw, b: LocationQueryRaw): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]))
+}
+function derivedRange(query: LocationQueryRaw): BrowsingPatch {
+  const month = firstString(query.month)
+  const week = firstString(query.week)
+  const year = firstString(query.year)
+  if (month) return { from: `${month}-01`, to: monthEnd(month) }
+  if (week) return { from: week, to: shiftDate(week, 6) }
+  if (year) return { from: `${year}-01-01`, to: `${year}-12-31` }
+  return { from: firstString(query.from) ?? undefined, to: firstString(query.to) ?? undefined }
 }
 
-/** True when every owned key of `next` already matches `current` (the diff
- *  guard of D2-6 — comparing only the keys this composable writes, so an
- *  unrelated key change never reads as a diff). */
-function ownedKeysMatch(next: LocationQueryRaw, current: LocationQueryRaw, keys: readonly string[]): boolean {
-  return keys.every((k) => queryText(next[k]) === queryText(current[k]))
-}
-
-export function useBrowsingUrlSync(): void {
-  const route = useRoute()
+/** Page writers submit only owned keys; undefined is an explicit deletion.
+ * The logical query includes accepted, not yet committed FIFO elements. */
+export function useBrowsingQuery(): Coordinator {
   const router = useRouter()
+  function coordinator(): Coordinator {
+    const value = coordinators.get(router)
+    if (!value) throw new Error('Mount the browsing URL coordinator in the shell first')
+    return value
+  }
+  return {
+    patch: (patch, deriveRange) => coordinator().patch(patch, deriveRange),
+    logicalValue: (key) => coordinator().logicalValue(key),
+    onBoundary(fn) {
+      const off = coordinator().onBoundary(fn)
+      onScopeDispose(off)
+      return off
+    },
+  }
+}
+
+/** One synchronous operation subscription and one FIFO consumer per shell.
+ * Route imports happen only after the adapter has classified completion. */
+export function useBrowsingUrlSync(): void {
+  const router = useRouter()
+  const navigation = browsingNavigation(router)
   const period = usePeriodStore()
+  const session = useSessionStore()
+  const queue: Entry[] = []
+  const boundaryListeners = new Set<() => void>()
+  let generation = 0
+  let alive = true
+  let importing = false
+  let draining = false
+  let scheduled = false
+  let completeBaseline = true
+  let boundaryPending = navigation.pending
+  let ledger = session.selectedLedgerId
+  let ledgerBaseline: Snapshot | undefined
+  let logical: LocationQueryRaw = { ...router.currentRoute.value.query }
+  const snapshot = (): Snapshot => ({ keys: { ...period.urlQuery }, labels: [...period.labelColors] })
+  let committed = snapshot()
 
-  /** The sync target (D2-3): routes opted in via meta.browsingSync — the
-   *  feed and every non-browsing screen answer false structurally. */
-  function isTarget(): boolean {
-    return route.meta.browsingSync === true
+  function context(): string {
+    return JSON.stringify([router.currentRoute.value.path, firstString(logical.scope), ledger])
   }
-
-  /** /search carries the period keys only while scope=period (D1). */
-  function writesPeriod(): boolean {
-    return route.name !== 'search' || firstString(route.query.scope) === 'period'
+  function periodPatch(value: Snapshot, scope = firstString(logical.scope)): BrowsingPatch {
+    const patch: BrowsingPatch = {}
+    for (const key of PERIOD_KEYS) patch[key] = undefined
+    if (router.currentRoute.value.name !== 'search' || scope === 'period') Object.assign(patch, value.keys)
+    patch.labels = value.labels.length ? formatLabelQuery(value.labels) : undefined
+    return patch
   }
-
-  function writeBack(): void {
-    if (!isTarget()) {
-      // residue rule 3, store-watch side (review REVIEW-12 #4): the store
-      // moved while OFF a sync target — this change will never be written,
-      // so the one-shot flag must not stand for the NEXT arrival's
-      // keys-less completion to misread as a user change (the feed and the
-      // other off-target screens carry real period filters, so the user can
-      // genuinely change the period there)
-      period.nextWrite = 'system'
+  function restore(value: Snapshot): void {
+    importing = true
+    try {
+      period.fromQuery(value.keys)
+      if (period.labelColors.join(',') !== value.labels.join(',')) period.setLabelColors(value.labels)
+    } finally { importing = false }
+  }
+  function schedule(): void {
+    if (scheduled || draining || !alive) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
+      void drain()
+    })
+  }
+  function enqueue(entry: Entry): void {
+    let next = apply(logical, entry.ownedPatch)
+    if (entry.deriveRange) next = apply(next, derivedRange(next))
+    if (equal(next, logical)) return
+    logical = next
+    queue.push(entry)
+    schedule()
+  }
+  function baseline(rollback: boolean, complete = true): void {
+    if (!alive || navigation.pending) return
+    const route = router.currentRoute.value
+    if (rollback) restore(committed)
+    logical = { ...route.query }
+    if (route.meta.browsingSync) {
+      importing = true
+      try {
+        if (PERIOD_KEYS.some((key) => key in route.query)) period.fromQuery(route.query)
+        if ('labels' in route.query) {
+          const labels = parseLabelQuery(firstString(route.query.labels) ?? '')
+          if (period.labelColors.join(',') !== labels.join(',')) period.setLabelColors(labels)
+        }
+      } finally { importing = false }
+    }
+    committed = snapshot()
+    boundaryPending = false
+    if (!complete || !route.meta.browsingSync || navigation.historyLocked.value) return
+    enqueue({ operationId: 0, generation, context: context(), kind: 'replace',
+      ownedPatch: periodPatch(committed), snapshot: committed, deriveRange: false })
+  }
+  function boundary(reason: string): void {
+    // Reconcile stores after failure without recreating the rejected repair.
+    // A subsequent explicit operation can still enqueue a fresh write.
+    completeBaseline = !['failure', 'exception', 'write-failed', 'write-exception'].includes(reason)
+    generation++
+    queue.length = 0
+    boundaryPending = true
+    if (reason !== 'ledger') ledgerBaseline = undefined
+    for (const listener of boundaryListeners) listener()
+  }
+  function settleBoundary(): void {
+    if (!alive || navigation.pending) return
+    if (ledgerBaseline) {
+      const value = ledgerBaseline
+      ledgerBaseline = undefined
+      restore(value)
+      committed = value
+      logical = { ...router.currentRoute.value.query }
+      boundaryPending = false
+      if (!navigation.historyLocked.value && router.currentRoute.value.meta.browsingSync) {
+        enqueue({ operationId: 0, generation, context: context(), kind: 'replace',
+          ownedPatch: periodPatch(value), snapshot: value, deriveRange: false })
+      }
+    } else if (boundaryPending || navigation.classification(router.currentRoute.value) === 'boundary') {
+      baseline(true, completeBaseline)
+    }
+  }
+  async function drain(): Promise<void> {
+    if (draining || !alive || navigation.pending || navigation.historyLocked.value || boundaryPending) return
+    draining = true
+    try {
+      while (alive && queue.length && !boundaryPending && !navigation.historyLocked.value) {
+        const entry = queue.shift()!
+        if (entry.generation !== generation) continue
+        const current = router.currentRoute.value
+        let query = apply(current.query, entry.ownedPatch)
+        if (entry.deriveRange) query = apply(query, derivedRange(query))
+        if (entry.kind === 'replace' && equal(query, current.query)) continue
+        const result = await navigation.write(entry.kind, { path: current.path, hash: current.hash, query }, entry)
+        if (!alive) return
+        if (entry.generation !== generation) break
+        if (result.kind === 'owned-ack' || (result.kind === 'duplicate' && entry.kind === 'replace')) {
+          if (entry.snapshot) committed = entry.snapshot
+        } else {
+          boundary('write-failed')
+          settleBoundary()
+          break
+        }
+      }
+    } catch {
+      // The adapter/router onError owns error reporting. Stop this generation;
+      // a rejected chain must not poison later, independently accepted work.
+      if (alive) {
+        boundary('write-exception')
+        settleBoundary()
+      }
+    } finally {
+      draining = false
+      if (alive && queue.length && !boundaryPending && !navigation.pending && !navigation.historyLocked.value) schedule()
+    }
+  }
+  function checkLedger(): void {
+    if (ledger === session.selectedLedgerId) return
+    ledger = session.selectedLedgerId
+    if (ledger === null) return
+    const value = snapshot()
+    navigation.invalidate('ledger')
+    ledgerBaseline = value
+    settleBoundary()
+  }
+  const offNavigation = navigation.subscribe({ boundary, settled: settleBoundary })
+  const offOperations = period.subscribeOperations((operation: PeriodOperation) => {
+    if (importing || !alive || operation.cause === 'import') return
+    checkLedger()
+    if (navigation.historyLocked.value || boundaryPending) {
+      // While a ledger switch waits for its old in-flight settle, the saved
+      // new-ledger baseline — not the pre-switch committed snapshot — is the
+      // integration target (D3-2): the labels reset that announced the switch
+      // is part of that baseline, and the settle restores it.
+      if (!ledgerBaseline) restore(committed)
       return
     }
-    // consume the one-shot flag whatever the diff turns out to be
-    // (TASK-164 §2-2-1): the marking belongs to THIS write alone
-    const who = period.nextWrite
-    period.nextWrite = 'system'
-    const next: LocationQueryRaw = { ...route.query }
-    const owned: string[] = ['labels']
-    const writes = writesPeriod()
-    if (writes) {
-      // swap the whole mode-key set on every target route alike: the new
-      // mode's key only, every other mode's key dropped (month= never
-      // lingers next to year=, and a from/to pair the /receipts filter sync
-      // wrote for an earlier period does not survive a period change — the
-      // URL stays self-consistent, the mode key is the truth, D2-4)
-      for (const k of PERIOD_KEYS) delete next[k]
-      Object.assign(next, period.urlQuery)
-      owned.push(...PERIOD_KEYS)
-    } else {
-      // /search with scope=all never writes the period keys — and never
-      // keeps them either (TASK-145 D1-2): a stray inflow that carries them
-      // (an old bookmark, a shared /search?month= link) is stripped at the
-      // first write-back, so the rule holds on both write sides
-      for (const k of PERIOD_KEYS) delete next[k]
+    if (!router.currentRoute.value.meta.browsingSync) {
+      committed = snapshot()
+      return
     }
-    delete next.labels
-    if (period.labelColors.length > 0) next.labels = formatLabelQuery(period.labelColors)
-    // diff guard: an import that agrees with the URL, or the echo of our own
-    // write, stops here — no navigation is issued. The guard compares the
-    // owned keys only, and on the strip side above the period keys are not
-    // owned — so a PERIOD_KEY the current URL still holds counts as a diff
-    // on its own: with no labels diff the deletion alone would read as "no
-    // diff" and the stale bookmark shape would survive (review MED1)
-    const strayPeriodKeys = !writes && PERIOD_KEYS.some((k) => k in route.query)
-    if (ownedKeysMatch(next, route.query, owned) && !strayPeriodKeys) return
-    // TASK-164 §2-2-1: only a USER period change stacks a history entry —
-    // one push per operation, carrying a simultaneous labels diff on the
-    // same entry. Every system write (a keys-less completion, an import
-    // normalization, the reset, a labels-only change, the /search strip)
-    // stays the history-free replace.
-    const userPeriodChange =
-      writes && who === 'user' && !ownedKeysMatch(next, route.query, [...PERIOD_KEYS])
-    void (userPeriodChange ? router.push({ query: next }) : router.replace({ query: next }))
+    if (operation.cause === 'user' && router.currentRoute.value.name === 'search' && firstString(logical.scope) !== 'period') {
+      committed = snapshot()
+      return
+    }
+    const value: Snapshot = { keys: { ...operation.keys }, labels: [...operation.labels] }
+    enqueue({ operationId: operation.operationId, generation, context: context(),
+      kind: operation.cause === 'user' ? 'push' : 'replace',
+      ownedPatch: periodPatch(value), snapshot: value, deriveRange: false })
+  })
+  const offLedger = watch(() => session.selectedLedgerId, checkLedger, { flush: 'sync' })
+  const coordinator: Coordinator = {
+    logicalValue: (key) => firstString(logical[key]) ?? undefined,
+    onBoundary(fn) {
+      boundaryListeners.add(fn)
+      return () => { boundaryListeners.delete(fn) }
+    },
+    patch(patch, deriveRange = false) {
+      if (!alive || navigation.historyLocked.value || boundaryPending || !router.currentRoute.value.meta.browsingSync) return
+      const ownedPatch = { ...patch }
+      if ('scope' in ownedPatch) Object.assign(ownedPatch, periodPatch(snapshot(), ownedPatch.scope ?? ''))
+      enqueue({ operationId: 0, generation, context: context(), kind: 'replace', ownedPatch, deriveRange })
+    },
   }
-
-  // Import on every navigation of a target route (immediate: the initial
-  // mount lands here too — the pages set up after this, so the store is
-  // already in the URL's shape when they read it)
-  watch(
-    () => route.fullPath,
-    () => {
-      if (!isTarget()) {
-        // an off-target navigation: nothing to import, nothing to write —
-        // writeBack's guard discards a standing one-shot flag here (residue
-        // rule 3, the navigation side: a later arrival's completion must
-        // never mistake a stale marking for a user change)
-        writeBack()
-        return
-      }
-      if (PERIOD_KEYS.some((k) => k in route.query)) period.fromQuery(route.query)
-      if ('labels' in route.query) {
-        const url = parseLabelQuery(firstString(route.query.labels) ?? '')
-        // an identical selection is not re-imported: setLabelColors always
-        // assigns a fresh array, which would flip labelQuery's identity and
-        // re-run the pages' load() on our own write-back's echo (a keys-less
-        // entry write-back doubles the fetch of every screen otherwise)
-        if (url.join(',') !== period.labelColors.join(',')) period.setLabelColors(url)
-      }
-      // a keys-less entry keeps the store and rides the URL at once (D2-1);
-      // an entry that imported agrees and the guard skips the write
-      writeBack()
-    },
-    { immediate: true },
-  )
-
-  // The store moved (the period chip, a trend bar press, the label dialog):
-  // put the owned keys on the URL. A USER period change rides a push — one
-  // history entry per operation, so the ‹ back (a router.back, TASK-164
-  // §2-4) and the device back return through the period changes too — while
-  // every system write stays the history-free replace (§2-2-1)
-  watch(
-    [
-      () => period.mode,
-      () => period.month,
-      () => period.week,
-      () => period.year,
-      () => period.from,
-      () => period.to,
-      () => period.labelColors,
-    ],
-    () => writeBack(),
-  )
-
-  // residue rule 1, same-tick round trip (review REVIEW-12 #3): step(-1)
-  // then step(1) within one tick ends where it started — the value watch
-  // above never fires (nothing changed), and the 'user' marking the first
-  // step legitimately raised would stand for a later keys-less completion
-  // to misread as a user change. Sweep it at the end of the tick: a real
-  // value change has been consumed through writeBack by then, so only a
-  // marking with no write behind it resets here.
-  watch(
-    () => period.nextWrite,
-    (w) => {
-      if (w !== 'user') return
-      void nextTick(() => {
-        if (period.nextWrite === 'user') period.nextWrite = 'system'
-      })
-    },
-  )
+  coordinators.set(router, coordinator)
+  baseline(false)
+  onScopeDispose(() => {
+    alive = false
+    offOperations()
+    offLedger()
+    offNavigation()
+    navigation.invalidate('dispose')
+    queue.length = 0
+    boundaryListeners.clear()
+    if (coordinators.get(router) === coordinator) coordinators.delete(router)
+  })
 }

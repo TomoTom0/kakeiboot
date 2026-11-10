@@ -2,7 +2,7 @@
 // mount with memory history (no real browser navigation).
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
-import { createMemoryHistory, type Router } from 'vue-router'
+import { createMemoryHistory, type HistoryState, type Router, type RouterHistory } from 'vue-router'
 import { vi } from 'vitest'
 import App from '@/web/App.vue'
 import type { Me } from '@/web/api/auth'
@@ -77,6 +77,10 @@ export interface MountOptions {
   attach?: boolean
   /** pass through to mount() (e.g. { transition: false } for real Transitions) */
   stubs?: Record<string, boolean>
+  /** an explicit RouterHistory instead of the default memory history — the
+   * manual history of TASK-174's unit tests (pop notification control) goes
+   * through here */
+  history?: RouterHistory
 }
 
 export async function mountApp(
@@ -86,7 +90,7 @@ export async function mountApp(
   installScrollMocks()
   const pinia = createPinia()
   setActivePinia(pinia)
-  const router = createAppRouter(createMemoryHistory(), pinia)
+  const router = createAppRouter(options.history ?? createMemoryHistory(), pinia)
   installHttpHooks(router, pinia)
   await router.push(path)
   await router.isReady()
@@ -333,4 +337,175 @@ export const ATTESTATION = {
 export const RCR = { publicKey: { challenge: 'AQID', allowCredentials: [] } }
 export const CCR = {
   publicKey: { challenge: 'AQID', user: { id: 'BAUG', name: 'n', displayName: 'd' }, excludeCredentials: [] },
+}
+
+// ---------------------------------------------------------------------------
+// The manual history (TASK-174, design tmp/tasks/tm-174/design_url-history-
+// entries.md v4 影響「テストと実装範囲」): a RouterHistory with the same shape
+// as vue-router's memory history whose go() splits the POSITION move from the
+// POP NOTIFICATION. The plain memory history notifies its listener
+// synchronously inside go(), so a test cannot build the design's
+// awaiting-pop window ("an issued back whose pop has not arrived yet") —
+// holdPops() keeps go() moving the position (and recording the request) while
+// the listener notification waits for releasePops(), which then delivers
+// every withheld notification in order. go(delta, false) — the router's own
+// restoration call after a rejected pop — moves the position without a
+// notification by contract; the goCalls log keeps the two kinds apart for
+// assertions.
+
+/** One pop notification's listener payload (the manual history's record). */
+export interface ManualPop {
+  to: string
+  from: string
+  direction: 'back' | 'forward'
+  delta: number
+}
+
+/**
+ * A history listener — the exact NavigationCallback derived from
+ * RouterHistory['listen']. vue-router 5 shapes the pop payload with string
+ * enums (NavigationType / NavigationDirection) that it does not export, so a
+ * hand-written literal { direction, delta, type: 'pop' } type would not be
+ * assignable to the real NavigationInformation.
+ */
+type HistoryListener = Parameters<RouterHistory['listen']>[0]
+/** The listener's pop payload (vue-router's NavigationInformation). */
+type PopInformation = Parameters<HistoryListener>[2]
+
+/**
+ * The enum member values are not exported either, so borrow the genuine
+ * payload from the library's own memory history: fire one pop for the
+ * requested direction and keep what its listener received. Notifications
+ * then only override the per-call delta on top of the captured payload.
+ */
+function genuinePopInformation(direction: ManualPop['direction']): PopInformation {
+  const memory = createMemoryHistory()
+  const fired: PopInformation[] = []
+  const stop = memory.listen((_to, _from, info) => fired.push(info))
+  memory.push('/pop-information')
+  memory.push('/pop-information')
+  memory.go(direction === 'back' ? -1 : 1)
+  stop()
+  const [info] = fired
+  if (info === undefined) throw new Error(`createMemoryHistory fired no ${direction} pop to capture`)
+  return info
+}
+
+/** the genuine { type: 'pop' } payload per direction (the delta is per notification) */
+const POP_INFORMATION: Record<ManualPop['direction'], PopInformation> = {
+  back: genuinePopInformation('back'),
+  forward: genuinePopInformation('forward'),
+}
+
+export interface ManualHistory extends RouterHistory {
+  /** every go() request so far: the delta and whether it asked for a notification */
+  readonly goCalls: ReadonlyArray<{ delta: number; trigger: boolean }>
+  /** Hold silent go(..., false) before it changes the physical position. */
+  holdRestorations(): void
+  /** Apply held silent moves without notifying RouterHistory listeners. */
+  releaseRestorations(): void
+  readonly pendingRestorations: number
+  /** Inject a competing notification independently of the held request. */
+  notifyPop(pop: ManualPop): void
+  /** Move the position but withhold the pop notifications. */
+  holdPops(): void
+  /** deliver every withheld pop notification, in order */
+  releasePops(): void
+  /** the withheld notifications so far (assertions on the awaiting window) */
+  readonly heldPops: ReadonlyArray<ManualPop>
+}
+
+export function createManualHistory(base = ''): ManualHistory {
+  const listeners: HistoryListener[] = []
+  let queue: Array<[string, HistoryState]> = [['', {}]]
+  let position = 0
+  let holding = false
+  let holdingRestorations = false
+  const restorations: number[] = []
+  const held: ManualPop[] = []
+  const goCalls: Array<{ delta: number; trigger: boolean }> = []
+
+  function setLocation(to: string, state: HistoryState): void {
+    position++
+    if (position !== queue.length) queue = queue.slice(0, position)
+    queue.push([to, state])
+  }
+
+  function deliver(pop: ManualPop): void {
+    if (holding) {
+      held.push(pop)
+      return
+    }
+    const info = { ...POP_INFORMATION[pop.direction], delta: pop.delta }
+    for (const cb of listeners) cb(pop.to, pop.from, info)
+  }
+
+  const history: ManualHistory = {
+    base,
+    createHref: (location: string): string => base + location,
+    push: (to: string, state?: HistoryState): void => setLocation(to, state ?? {}),
+    replace(to: string, state?: HistoryState): void {
+      queue.splice(position--, 1)
+      setLocation(to, state ?? {})
+    },
+    go(delta: number, trigger = true): void {
+      const from = this.location
+      const direction: 'back' | 'forward' = delta < 0 ? 'back' : 'forward'
+      goCalls.push({ delta, trigger })
+      if (!trigger && holdingRestorations) {
+        restorations.push(delta)
+        return
+      }
+      position = Math.max(0, Math.min(position + delta, queue.length - 1))
+      if (trigger) deliver({ to: this.location, from, direction, delta })
+    },
+    listen(cb: HistoryListener): () => void {
+      listeners.push(cb)
+      return () => {
+        const i = listeners.indexOf(cb)
+        if (i > -1) listeners.splice(i, 1)
+      }
+    },
+    destroy(): void {
+      listeners.length = 0
+      queue = [['', {}]]
+      position = 0
+    },
+    holdRestorations(): void { holdingRestorations = true },
+    releaseRestorations(): void {
+      holdingRestorations = false
+      for (const delta of restorations.splice(0)) {
+        position = Math.max(0, Math.min(position + delta, queue.length - 1))
+      }
+    },
+    get pendingRestorations(): number { return restorations.length },
+    notifyPop(pop: ManualPop): void {
+      const info = { ...POP_INFORMATION[pop.direction], delta: pop.delta }
+      for (const cb of listeners) cb(pop.to, pop.from, info)
+    },
+    holdPops(): void {
+      holding = true
+    },
+    releasePops(): void {
+      holding = false
+      const pending = held.splice(0)
+      for (const pop of pending) {
+        const info = { ...POP_INFORMATION[pop.direction], delta: pop.delta }
+        for (const cb of listeners) cb(pop.to, pop.from, info)
+      }
+    },
+    get goCalls(): ReadonlyArray<{ delta: number; trigger: boolean }> {
+      return [...goCalls]
+    },
+    get heldPops(): ReadonlyArray<ManualPop> {
+      return [...held]
+    },
+    get location(): string {
+      return queue[position]![0]
+    },
+    get state(): HistoryState {
+      return queue[position]![1]
+    },
+  }
+  return history
 }

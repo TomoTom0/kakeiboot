@@ -95,7 +95,7 @@ test.describe('label UI (390x780)', () => {
 
     // (1) the picker popover (anchored) stays inside the viewport
     await page.goto('/receipts/101')
-    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-title')).toBeVisible()
     // the feed renders the whole window's panels, each with its own picker
     // button — scope to panel 101's own trigger
     await page.locator('[data-test="receipt-panel-101"] [data-test="label-add"]').click()
@@ -270,7 +270,7 @@ test.describe('label picker close on select (390x780)', () => {
     logPageIssues(page, 'picker-close')
     await installApiStub(page)
     await page.goto('/receipts/101')
-    await expect(page.locator('[data-test="receipt-panel-101"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-title')).toBeVisible()
     const picker = page.locator('[data-test="receipt-panel-101"] [data-test="label-picker"]')
     await expect(picker.locator('[data-test="label-add"]')).toBeVisible()
     await picker.locator('[data-test="label-add"]').click()

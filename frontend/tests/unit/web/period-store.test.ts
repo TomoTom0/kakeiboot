@@ -13,7 +13,7 @@
 // rules). Test-first: the TASK-164 block stays red until it lands.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { usePeriodStore } from '@/web/stores/period'
+import { usePeriodStore, type PeriodOperation } from '@/web/stores/period'
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -155,64 +155,126 @@ describe('period store reset + user/internal API split (TASK-164)', () => {
     expect(p.to).toBe('2026-11-30')
     expect(p.week).toBe('2026-11-02')
   })
+})
 
-  it('[covers:web-shell.period-next-write-flag] 利用者API（step/setMonth/setWeek/setMode/setRange）は値変化時のみ nextWrite=user・内部API（fromQuery/resetToDefault）は立てず既存フラグをクリア', () => {
+// TASK-174 (design: tmp/tasks/tm-174/design_url-history-entries.md v4 D1):
+// the one-shot nextWrite flag is replaced by a typed completion notification
+// — every VALID public user API (step / setMonth / setWeek / setMode /
+// setRange) fires ONE synchronous notification after its whole field update
+// completes (never mid-apply), carrying a monotonically increasing
+// operationId, the cause (user / import / system), the normalized period
+// keys and a labels copy. A same-value re-selection, an invalid range, a
+// step in range mode and a year-boundary step that changes nothing are ZERO
+// operations. The shell subscribes synchronously and keeps every payload in
+// its FIFO — same-tick sequences are NOT collapsed (that withdrawal is the
+// heart of TASK-174). Written test-first: these stay red until it lands.
+describe('period store operation notifications (TASK-174 D1)', () => {
+  /** Collect the store's operation notifications into a sink. */
+  function collect(p: ReturnType<typeof usePeriodStore>): { ops: PeriodOperation[]; off: () => void } {
+    const ops: PeriodOperation[] = []
+    const off = p.subscribeOperations((op: PeriodOperation) => ops.push(op))
+    return { ops, off }
+  }
+
+  it('[covers:web-shell.period-next-write-flag] 有効な利用者APIごとに1件の完了通知（cause=user・operationId単調増加）・同値/無効range/rangeモードstep/年境界step は0件・import/reset/labels は user でない', () => {
     const p = usePeriodStore()
-    expect(p.nextWrite).toBe('system')
-    // the user APIs raise the one-shot flag on a real value change
+    const { ops, off } = collect(p)
+    // every VALID user API notifies exactly once with cause='user' and a
+    // monotonically increasing operationId (D1-2: the notification fires
+    // once AFTER the API's whole field update completes)
     p.step(-1)
-    expect(p.nextWrite).toBe('user')
     p.setWeek('2026-10-05')
-    expect(p.nextWrite).toBe('user')
     p.setMonth('2026-05')
-    expect(p.nextWrite).toBe('user')
-    // the new user APIs (the PeriodPicker's mode tab / range form ride
-    // these instead of the direct writes)
     p.setMode('year')
-    expect(p.nextWrite).toBe('user')
-    expect(p.mode).toBe('year')
     p.setRange('2026-01-01', '2026-03-31')
-    expect(p.mode).toBe('range')
-    expect(p.from).toBe('2026-01-01')
-    expect(p.to).toBe('2026-03-31')
-    expect(p.nextWrite).toBe('user')
+    expect(ops).toHaveLength(5)
+    expect(ops.every((o) => o.cause === 'user')).toBe(true)
+    for (let i = 1; i < ops.length; i++) expect(ops[i]!.operationId).toBeGreaterThan(ops[i - 1]!.operationId)
 
-    // residue rule 1 — a same-value re-selection does NOT raise the flag (a
-    // re-selection the period watch will not fire on leaves nothing standing
-    // for a later system write to consume). The no-op guards are PER-MODE
-    // (REVIEW-12 #2): the no-op is the value already selected IN that mode —
-    // a same-MONTH setMonth from another mode still re-modes and counts as a
-    // user change (a monthly bar pressed while the range view is up must not
-    // silently swallow the mode switch)
-    p.nextWrite = 'system'
-    p.setMonth(p.month) // '2026-05' while in range mode: a user change
-    expect(p.mode).toBe('month')
-    expect(p.nextWrite).toBe('user')
-    p.nextWrite = 'system'
-    p.setMonth(p.month) // month mode, same month: the true no-op
-    expect(p.nextWrite).toBe('system')
-    p.setMode('month') // already month: no-op
-    expect(p.nextWrite).toBe('system')
-    p.setRange('2026-01-01', '2026-03-31') // a real range change: user
-    expect(p.nextWrite).toBe('user')
-    p.nextWrite = 'system'
-    p.setRange('2026-01-01', '2026-03-31') // same range in range mode: no-op
-    expect(p.nextWrite).toBe('system')
-    p.step(1) // range mode: step touches no value — no change, no flag
-    expect(p.nextWrite).toBe('system')
+    // the ZERO-operation sides of the same APIs notify nothing: the same
+    // range re-committed IN range mode, an empty/reversed range, a step in
+    // range mode
+    ops.length = 0
+    p.setRange('2026-01-01', '2026-03-31')
+    p.setRange('', '2026-03-31')
+    p.setRange('2026-03-31', '2026-01-01')
+    p.step(1)
+    expect(ops).toHaveLength(0)
+    // a re-mode is real (one notification) ... then its own no-ops: the
+    // same mode again and the same month IN month mode
+    p.setMode('month')
+    expect(ops).toHaveLength(1)
+    ops.length = 0
+    p.setMode('month')
+    p.setMonth(p.month)
+    expect(ops).toHaveLength(0)
+    // the year-boundary step that changes nothing (9999 cap) is zero too
+    p.setMode('year')
+    p.year = 9999
+    ops.length = 0
+    p.step(1)
+    expect(ops).toHaveLength(0)
 
-    // residue rule 2 — the internal side clears a standing flag instead of
-    // inheriting it: fromQuery (the URL import) ...
-    p.nextWrite = 'user'
+    // import / reset / labels are NOT user causes (D1-2: fromQuery notifies
+    // as 'import', resetToDefault and label changes as 'system')
+    ops.length = 0
     p.fromQuery({ month: '2026-09' })
-    expect(p.month).toBe('2026-09')
-    expect(p.nextWrite).toBe('system')
-    // ... and resetToDefault neither raises nor inherits (§1-3: the reset's
-    // write-back is a replace)
-    p.setMonth('2026-05')
-    expect(p.nextWrite).toBe('user')
+    expect(ops).toHaveLength(1)
+    expect(ops[0]!.cause).toBe('import')
+    expect(ops[0]!.keys).toEqual({ month: '2026-09' })
+    ops.length = 0
     p.resetToDefault()
-    expect(p.month).toBe('2026-10')
-    expect(p.nextWrite).toBe('system')
+    expect(ops).toHaveLength(1)
+    expect(ops[0]!.cause).toBe('system')
+    expect(ops[0]!.keys).toEqual({ month: '2026-10' })
+    ops.length = 0
+    p.setLabelColors(['red'])
+    expect(ops).toHaveLength(1)
+    expect(ops[0]!.cause).toBe('system')
+    expect(ops[0]!.labels).toEqual(['red'])
+    // an import that changes nothing notifies nothing
+    ops.length = 0
+    p.fromQuery({ month: '2026-10' })
+    expect(ops).toHaveLength(0)
+    off()
+  })
+
+  it('[covers:web-browse.url-operation-capture] 同tickのA→B→C・A→B→Aは各2操作として保存（watchバッチングで消さない）・mode/rangeの複数field更新は1操作・payloadは通知時点のsnapshot', () => {
+    const p = usePeriodStore()
+    const { ops, off } = collect(p)
+    // A→B→C in one tick: TWO saved operations — the intermediate B must not
+    // vanish into watch batching (the old value watch observed only C)
+    p.setMonth('2026-05')
+    p.setMonth('2026-04')
+    expect(ops).toHaveLength(2)
+    expect(ops[0]!.keys).toEqual({ month: '2026-05' })
+    expect(ops[1]!.keys).toEqual({ month: '2026-04' })
+    // the payload is a snapshot: a later operation never rewrites it
+    p.setMonth('2026-03')
+    expect(ops[0]!.keys).toEqual({ month: '2026-05' })
+
+    // A→B→A in one tick is two operations too — the value returns, but both
+    // round-trip legs stand as history demands
+    ops.length = 0
+    p.setMonth('2026-02')
+    p.setMonth('2026-03')
+    expect(ops).toHaveLength(2)
+    expect(ops[0]!.keys).toEqual({ month: '2026-02' })
+    expect(ops[1]!.keys).toEqual({ month: '2026-03' })
+
+    // an API touching MANY fields at once is ONE operation: setRange writes
+    // mode/from/to together, and the labels copy rides the payload
+    ops.length = 0
+    p.setRange('2026-01-01', '2026-03-31')
+    expect(ops).toHaveLength(1)
+    expect(ops[0]!.keys).toEqual({ from: '2026-01-01', to: '2026-03-31' })
+    expect(ops[0]!.labels).toEqual([])
+    p.setLabelColors(['blue'])
+    expect(ops[ops.length - 1]!.labels).toEqual(['blue'])
+    // the same-value re-selection is zero
+    ops.length = 0
+    p.setRange('2026-01-01', '2026-03-31')
+    expect(ops).toHaveLength(0)
+    off()
   })
 })

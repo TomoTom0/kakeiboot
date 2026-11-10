@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useDataApi, type ItemSummary, type ReceiptListQuery, type ReceiptSummary } from '../api/data'
 import AppearList from '../components/AppearList.vue'
 import ContentSwap from '../components/ContentSwap.vue'
@@ -23,7 +24,7 @@ import { usePeriodStore } from '../stores/period'
 // shared store like on the other browsing screens.
 const api = useDataApi()
 const route = useRoute()
-const router = useRouter()
+const browsing = useBrowsingQuery()
 const period = usePeriodStore()
 const catalog = useCatalogStore()
 const { markReady } = usePageReady()
@@ -40,17 +41,6 @@ function qOf(query: Record<string, unknown>): string | undefined {
   return firstString(query.q)?.trim() || undefined
 }
 
-/** Query without the period keys (scope=all never carries them, D1). */
-function dropPeriodQuery(query: LocationQueryRaw): LocationQueryRaw {
-  const rest: Record<string, LocationQueryRaw[string]> = { ...query }
-  delete rest.month
-  delete rest.week
-  delete rest.year
-  delete rest.from
-  delete rest.to
-  return rest
-}
-
 // --- input draft: Enter at once + a 300ms debounce, IME-safe ----------------
 const draft = ref(firstString(route.query.q) ?? '')
 const composing = ref(false)
@@ -62,7 +52,7 @@ function commit(): void {
     timer = null
   }
   const term = draft.value.trim()
-  void router.replace({ query: { ...route.query, q: term || undefined } })
+  browsing.patch({ q: term || undefined })
 }
 
 function commitSoon(): void {
@@ -95,6 +85,12 @@ function onCompositionEnd(): void {
 onBeforeUnmount(() => {
   if (timer !== null) clearTimeout(timer)
   timer = null
+})
+
+browsing.onBoundary(() => {
+  if (timer !== null) clearTimeout(timer)
+  timer = null
+  draft.value = firstString(route.query.q) ?? ''
 })
 
 // --- the shared filters ride the URL both ways ------------------------------
@@ -134,22 +130,11 @@ watch(
 )
 
 function setTab(next: 'receipts' | 'items'): void {
-  if (tab.value === next) return
-  void router.replace({ query: { ...route.query, tab: next === 'items' ? 'items' : undefined } })
+  browsing.patch({ tab: next === 'items' ? 'items' : undefined })
 }
 
 function toggleScope(): void {
-  const next = scope.value === 'period' ? 'all' : 'period'
-  // the toggle seats the store's current period keys ONLY on the narrowing
-  // direction (TASK-145 D1-3): back to all, dropPeriodQuery's result stands
-  // — no seat-then-strip round trip on our own transition (a stray old-URL
-  // shape is the shell write-back's to correct, not this replace's);
-  // keeping the seated keys current from then on is the URL sync's, which
-  // writes them only while scope=period (TASK-124 D1)
-  const rest = dropPeriodQuery({ ...route.query, scope: undefined })
-  void router.replace({
-    query: { ...rest, ...(next === 'period' ? { scope: 'period', ...period.urlQuery } : {}) },
-  })
+  browsing.patch({ scope: browsing.logicalValue('scope') === 'period' ? undefined : 'period' })
 }
 
 // --- results -----------------------------------------------------------------

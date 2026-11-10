@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
@@ -29,6 +30,7 @@ const session = useSessionStore()
 const labelsStore = useLabelsStore()
 const route = useRoute()
 const router = useRouter()
+const browsing = useBrowsingQuery()
 const periodOpen = ref(false)
 const searchOpen = ref(false)
 const draft = ref('')
@@ -87,6 +89,11 @@ watch(searchOpen, (open) => {
   if (open) draft.value = route.name === 'search' ? (firstString(route.query.q) ?? '') : ''
 })
 
+browsing.onBoundary(() => {
+  searchOpen.value = false
+  draft.value = ''
+})
+
 /** Submit (検索 / Enter): close and move to /search with the current term. */
 function run(): void {
   const q = draft.value.trim()
@@ -94,7 +101,7 @@ function run(): void {
   if (route.name === 'search') {
     // refresh the page's results in place: replace keeps the history clean,
     // the period / labels / tab keys of the URL stand
-    void router.replace({ query: { ...route.query, q: q || undefined } })
+    browsing.patch({ q: q || undefined })
   } else {
     // from any other page: q only (TASK-145 D1-1 — the run carries nothing
     // else over the URL). The landing is a keys-less entry: the store

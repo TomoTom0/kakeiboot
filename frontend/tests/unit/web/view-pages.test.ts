@@ -663,20 +663,18 @@ describe('ReceiptsPage (dashboard)', () => {
     await wrapper.find('[data-test="item"]').setValue('牛乳')
     await wrapper.find('[data-test="filters"]').trigger('submit')
     await settle()
-    // TASK-57 A16 + TASK-124 (review MEDIUM-3): the period key survives the
-    // URL rewrite, and the URL sync's swap settles the query self-consistent
-    // — the month mode's key only; the from/to pair the filter sync writes
-    // for the feed round trip is dropped right after (the mode key is the
-    // truth, D2-4; a reload restores the month mode off month= alone)
+    // TASK-174 D2: filter patches keep the mode key and derive from/to
+    // from the applied period. An ACK must not trigger a second stripping write.
     expect(router.currentRoute.value.query.month).toBe('2026-09')
-    expect(router.currentRoute.value.query.from).toBeUndefined()
-    expect(router.currentRoute.value.query.to).toBeUndefined()
+    expect(router.currentRoute.value.query.from).toBe('2026-09-01')
+    expect(router.currentRoute.value.query.to).toBe('2026-09-30')
+    const savedUrl = router.currentRoute.value.fullPath
     cleanup()
     setDataApi(api)
     mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: [] } })
     // a fresh mount of that URL (the literal form of the asserted query)
     // restores the month mode
-    const again = await mountApp('/receipts?item=%E7%89%9B%E4%B9%B3&month=2026-09')
+    const again = await mountApp(savedUrl)
     expect(again.wrapper.find('[data-test="summary"] .label').text()).toBe('2026年9月')
   })
 

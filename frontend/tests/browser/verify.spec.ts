@@ -9,13 +9,18 @@
 //   pnpm exec playwright test tests/browser/verify.spec.ts).
 
 import { expect, test, type Page } from '@playwright/test'
+import type { App } from 'vue'
 import { installApiStub } from './stub'
 import { createMockDataApi } from '@/web/api/data/mock'
 
 // The period-pop scroll test counts the programmatic scrolls of one pop
 // (the same-path pop must issue none); the counter rides on the window.
 declare global {
+  interface HTMLElement {
+    __vue_app__?: App
+  }
   interface Window {
+    __historyRace?: { pops: number; travels: number[]; failures: number; failurePosition?: number; writes: number; replaceBeforePop?: boolean }
     __periodPopScrolls?: unknown[][]
   }
 }
@@ -2607,6 +2612,218 @@ test.describe('back + home re-press (TASK-164, 390x780)', () => {
     await expect
       .poll(async () => page.evaluate(() => Math.round(window.scrollY)), { timeout: 3_000 })
       .toBe(240)
+  })
+})
+
+// TASK-174 (design: tmp/tasks/tm-174/design_url-history-entries.md v4): the
+// one-operation-one-entry contract against the REAL web history — the parts a
+// memory history cannot reach. The same-tick double step (two synchronous
+// step presses in ONE JS task, both saved before the FIFO's first microtask)
+// stacks two real entries whose intermediate month keeps its own entry; the ‹
+// burst in one task walks exactly one entry; a period change landing inside
+// the back's awaiting-pop window (popstate cannot interleave the issuing task
+// — a deterministic window, not a sleep) writes nothing; and the explicit
+// document reload (D3-3's recovery) founds a new baseline at the current
+// position that the old queue never replays. Entries are counted through
+// history.state.position (history.length is unreliable — forward branches),
+// and the refused-pop and external-replace races exercise native traversal.
+// Arbitrarily reordered notifications and independently held silent restoration
+// remain deterministic unit cases in createManualHistory.
+test.describe('one operation, one entry — real history (TASK-174, 390x780)', () => {
+  test.use({ viewport: { width: 390, height: 780 } })
+
+  const position = (page: Page): Promise<number> => page.evaluate(() => history.state?.position)
+
+  /** Press the given buttons in ONE JS task (element.click() runs each handler
+   * inline), so every operation lands before any microtask — and before the
+   * popstate a back press issues can arrive: the deterministic same-tick
+   * window the unit suites build with a manual history. */
+  const press = (page: Page, ...selectors: string[]): Promise<void> =>
+    page.evaluate((sels) => {
+      for (const sel of sels) document.querySelector<HTMLElement>(sel)!.click()
+    }, selectors)
+
+  async function openPicker(page: Page): Promise<void> {
+    await page.locator('[data-test="filter-period"]').click()
+    await page.locator('[data-test="period-prev"]').waitFor()
+  }
+
+  test('[covers:web-browse.url-serialized-history] 同tickの連続期間変更（同期的2回step）はhistoryに2 entryを積み 中間期間がentryとして残る（position +2・back/forwardで再現）', async ({ page }) => {
+    logPageIssues(page, 'task174-same-tick')
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await openPicker(page)
+    const base = await position(page)
+    // TWO steps in ONE JS task (both operations are saved before the FIFO's
+    // first microtask runs): the withdrawn watch-batching compression would
+    // have collapsed this to one
+    await press(page, '[data-test="period-prev"]', '[data-test="period-prev"]')
+    // the screen shows the LATEST operation at once; the URL settles after
+    // the queue drains
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute(
+      'aria-label',
+      '期間で絞り込み: 2026年8月',
+    )
+    await expect(page).toHaveURL(/month=2026-08/)
+    expect(await position(page)).toBe(base + 2) // one entry per operation
+    await page.keyboard.press('Escape')
+    // the intermediate month kept its OWN entry (a latest-store overwrite at
+    // write time would have collapsed it): browser back lands on 2026-09
+    await page.goBack()
+    await expect(page).toHaveURL(/\/categories\?month=2026-09/)
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute(
+      'aria-label',
+      '期間で絞り込み: 2026年9月',
+    )
+    expect(await position(page)).toBe(base + 1)
+    await page.goBack()
+    await expect(page).toHaveURL(/\/categories\?month=2026-10/)
+    expect(await position(page)).toBe(base)
+    // and forward walks the same entries back up
+    await page.goForward()
+    await expect(page).toHaveURL(/\/categories\?month=2026-09/)
+    expect(await position(page)).toBe(base + 1)
+  })
+
+  test('[covers:web-shell.browsing-back][covers:web-browse.url-queue-boundary] ‹ の同tick連打は1回ぶんのみ戻り back待機窓内の期間変更はwriteされずentry数不変', async ({ page }) => {
+    logPageIssues(page, 'task174-back-lock')
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    // two settled steps: the stack is [2026-10, 2026-09, 2026-08]
+    await openPicker(page)
+    await page.locator('[data-test="period-prev"]').click()
+    await expect(page).toHaveURL(/month=2026-09/)
+    await page.locator('[data-test="period-prev"]').click()
+    await expect(page).toHaveURL(/month=2026-08/)
+    await page.keyboard.press('Escape')
+    const base = await position(page)
+    // a ‹ BURST in one JS task: the first press locks (awaiting-pop), the
+    // second press is swallowed — exactly ONE entry is walked
+    await press(page, '[data-test="topbar-back"]', '[data-test="topbar-back"]')
+    await expect(page).toHaveURL(/\/categories\?month=2026-09/)
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute(
+      'aria-label',
+      '期間で絞り込み: 2026年9月',
+    )
+    expect(await position(page)).toBe(base - 1) // one back, not two
+    // a period change inside the back's awaiting-pop window: the ‹ press and
+    // the step share ONE JS task (popstate cannot interleave it) — the
+    // operation is not accepted as a history write (D3-3)
+    await openPicker(page)
+    await press(page, '[data-test="topbar-back"]', '[data-test="period-prev"]')
+    await expect(page).toHaveURL(/\/categories\?month=2026-10/)
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute(
+      'aria-label',
+      '期間で絞り込み: 2026年10月',
+    )
+    // ... so the stack is untouched: exactly the pop's one step back, and no
+    // fresh 2026-09 entry was written behind it
+    expect(await position(page)).toBe(base - 2)
+    await page.keyboard.press('Escape')
+    // the whole stack survives intact: forward walks 09 then 08 back up
+    await page.goForward()
+    await expect(page).toHaveURL(/\/categories\?month=2026-09/)
+    await page.goForward()
+    await expect(page).toHaveURL(/\/categories\?month=2026-08/)
+    expect(await position(page)).toBe(base)
+  })
+
+  test('[covers:web-browse.url-queue-boundary][covers:web-shell.browsing-back] awaiting-pop内の外部replace完了と再押下でも履歴待機を解除しない', async ({ page }) => {
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await openPicker(page)
+    await press(page, '[data-test="period-prev"]', '[data-test="period-prev"]')
+    await expect(page).toHaveURL(/month=2026-08/)
+    const base = await position(page)
+    await page.evaluate(async () => {
+      const router = document.querySelector<HTMLElement>('#app')?.__vue_app__?.config.globalProperties.$router
+      if (!router) throw new Error('Mounted router missing')
+      const race: NonNullable<Window['__historyRace']> = { pops: 0, travels: [], failures: 0, writes: 0, replaceBeforePop: false }
+      window.__historyRace = race
+      const go = history.go.bind(history)
+      history.go = (delta = 0) => { race.travels.push(delta); go(delta) }
+      window.addEventListener('popstate', () => { race.pops++ })
+      const click = (selector: string) => document.querySelector<HTMLElement>(selector)!.click()
+      click('[data-test="topbar-back"]')
+      // Await only microtasks: native traversal cannot notify within this task.
+      await router.replace({ query: { month: '2026-07', keep: 'external' } })
+      race.replaceBeforePop = race.pops === 0
+      const push = history.pushState.bind(history)
+      const replace = history.replaceState.bind(history)
+      history.pushState = (...args) => { race.writes++; push(...args) }
+      history.replaceState = (...args) => { race.writes++; replace(...args) }
+      click('[data-test="topbar-back"]')
+      click('[data-test="period-prev"]')
+    })
+    await expect.poll(() => page.evaluate(() => window.__historyRace?.pops)).toBe(1)
+    await expect(page).toHaveURL(/month=2026-09/)
+    expect(await position(page)).toBe(base - 1)
+    await press(page, '[data-test="topbar-back"]', '[data-test="period-prev"]')
+    expect(await page.evaluate(() => window.__historyRace)).toMatchObject({
+      replaceBeforePop: true, travels: [-1], pops: 1, writes: 0,
+    })
+    await expect(page.locator('[data-test="filter-period"]')).toHaveAttribute('aria-label', '期間で絞り込み: 2026年9月')
+  })
+
+  test('[covers:web-browse.url-queue-failure] pop拒否のfailure後も待機し 文書再読込で新baselineから新規操作だけ再開する', async ({ page }) => {
+    logPageIssues(page, 'task174-reload')
+    await installApiStub(page)
+    await page.goto('/categories?month=2026-10')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await openPicker(page)
+    await press(page, '[data-test="period-prev"]', '[data-test="period-prev"]')
+    await expect(page).toHaveURL(/month=2026-08/)
+    const base = await position(page)
+    await page.evaluate(() => {
+      const router = document.querySelector<HTMLElement>('#app')?.__vue_app__?.config.globalProperties.$router
+      if (!router) throw new Error('Mounted router missing')
+      const race: NonNullable<Window['__historyRace']> = { pops: 0, travels: [], failures: 0, writes: 0, failurePosition: undefined }
+      window.__historyRace = race
+      const go = history.go.bind(history)
+      history.go = (delta = 0) => { race.travels.push(delta); go(delta) }
+      const push = history.pushState.bind(history)
+      const replace = history.replaceState.bind(history)
+      history.pushState = (...args) => { race.writes++; push(...args) }
+      history.replaceState = (...args) => { race.writes++; replace(...args) }
+      window.addEventListener('popstate', () => { race.pops++ })
+      router.beforeEach(() => false)
+      router.afterEach((_to, _from, failure) => {
+        if (!failure) return
+        race.failures++
+        race.failurePosition = history.state.position
+        // The silent restoration was requested, but cannot finish during
+        // this failure callback. Exercise the real asynchronous window.
+        document.querySelector<HTMLElement>('[data-test="topbar-back"]')!.click()
+        document.querySelector<HTMLElement>('[data-test="period-prev"]')!.click()
+      })
+      document.querySelector<HTMLElement>('[data-test="topbar-back"]')!.click()
+    })
+    await expect.poll(() => page.evaluate(() => window.__historyRace?.pops)).toBe(2)
+    await expect(page).toHaveURL(/month=2026-08/)
+    expect(await position(page)).toBe(base)
+    expect(await page.evaluate(() => window.__historyRace)).toEqual({
+      pops: 2, travels: [-1, 1], failures: 1, writes: 0, failurePosition: base - 1,
+    })
+    // Even after silent restoration the adapter cannot certify completion.
+    await press(page, '[data-test="topbar-back"]', '[data-test="period-prev"]')
+    expect(await page.evaluate(() => window.__historyRace?.travels)).toEqual([-1, 1])
+    expect(await page.evaluate(() => window.__historyRace?.writes)).toBe(0)
+    await page.reload()
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await expect(page).toHaveURL(/month=2026-08/)
+    expect(await position(page)).toBe(base)
+    expect(await page.locator('[data-test="topbar-back"]').count()).toBe(0)
+    await openPicker(page)
+    await press(page, '[data-test="period-prev"]')
+    await expect(page).toHaveURL(/month=2026-07/)
+    expect(await position(page)).toBe(base + 1)
+    await page.keyboard.press('Escape')
+    await press(page, '[data-test="topbar-back"]')
+    await expect(page).toHaveURL(/month=2026-08/)
+    expect(await position(page)).toBe(base)
   })
 })
 
