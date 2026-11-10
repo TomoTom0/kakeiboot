@@ -1,6 +1,14 @@
 <script setup lang="ts">
-// Mobile line list: "name / amount" on the first row, category on the second
-// (spec §11-7). Shows at most `limit` rows with a "show more" button (spec §11-3).
+// The widget's item list (spec §11-7), riding the SHARED .items token — the
+// same classes the web's table.items reference (TASK-170 W-3: one definition
+// point in shared/styles/row-grammar.css; the structure implementations
+// stay two, table and list). One line per item: the name with the category
+// INLINE after it (muted 0.78rem; unknown keeps the warning color; the
+// history note and the quantity ride the same line) and the .num amount at
+// the right. The 明細合計 block sits ABOVE the folding list and carries the
+// envelope's FULL total — the folded rows count in too (never the visible
+// partial sum). Shows at most `limit` rows with a "show more" button (spec
+// §11-3); the rows enter through the bb-appear grammar (TASK-170 W-9).
 import { computed, ref } from 'vue'
 import MoneyAmount from './MoneyAmount.vue'
 
@@ -16,10 +24,16 @@ export type ItemRow = {
   detail?: string | null
 }
 
-const props = withDefaults(defineProps<{ rows: ItemRow[]; limit?: number; selected?: number | null }>(), {
-  limit: 8,
-  selected: null,
-})
+const props = withDefaults(
+  defineProps<{
+    rows: ItemRow[]
+    limit?: number
+    selected?: number | null
+    /** the envelope's items_total — the FULL sum of every line, folded or not */
+    itemsTotal?: number | null
+  }>(),
+  { limit: 8, selected: null, itemsTotal: null },
+)
 const emit = defineEmits<{ (e: 'select', key: number): void }>()
 
 const expanded = ref(false)
@@ -34,30 +48,39 @@ function categoryText(r: ItemRow) {
 </script>
 
 <template>
-  <ul class="bb-items">
-    <li
-      v-for="r in visible"
-      :key="r.key"
-      class="bb-items__row"
-      :class="{ 'bb-items__row--selected': selected === r.key, 'bb-items__row--discount': r.discount }"
-      :data-line="r.key"
-    >
-      <button
-        type="button"
-        class="bb-items__btn"
-        :disabled="!r.selectable"
-        @click="emit('select', r.key)"
+  <p
+    v-if="itemsTotal !== null"
+    class="items-total"
+    data-test="items-total"
+  >
+    <span class="items-total-label">明細合計</span>
+    <span class="num"><MoneyAmount :value="itemsTotal" /></span>
+  </p>
+  <ul class="items">
+    <TransitionGroup name="bb-appear">
+      <li
+        v-for="r in visible"
+        :key="r.key"
+        :class="{ 'item--selected': selected === r.key }"
+        :data-line="r.key"
       >
-        <span class="bb-items__main">
-          <span class="bb-items__name">{{ r.name }}</span>
-          <MoneyAmount :value="r.amount" />
-        </span>
-        <span
-          class="bb-items__cat"
-          :class="{ 'bb-items__cat--unknown': r.categoryStatus === 'unknown' }"
-        >{{ categoryText(r) }}<template v-if="r.detail"> ・ {{ r.detail }}</template></span>
-      </button>
-    </li>
+        <button
+          type="button"
+          class="item-btn"
+          :disabled="!r.selectable"
+          @click="emit('select', r.key)"
+        >
+          <span class="item-line">
+            <span class="item-name">{{ r.name }}</span>
+            <span
+              class="item-cat"
+              :class="{ 'item-cat--unknown': r.categoryStatus === 'unknown' }"
+            >{{ categoryText(r) }}<template v-if="r.detail"> ・ {{ r.detail }}</template></span>
+          </span>
+          <span class="num"><MoneyAmount :value="r.amount" /></span>
+        </button>
+      </li>
+    </TransitionGroup>
   </ul>
   <button
     v-if="hidden > 0"
@@ -68,52 +91,3 @@ function categoryText(r: ItemRow) {
     さらに表示（{{ hidden }}行）
   </button>
 </template>
-
-<style scoped>
-.bb-items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.bb-items__row {
-  border-bottom: 1px solid var(--bb-border);
-}
-.bb-items__row--selected {
-  background: var(--bb-accent-soft);
-}
-.bb-items__btn {
-  all: unset;
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  padding: 6px 4px;
-  cursor: pointer;
-}
-.bb-items__btn:disabled {
-  cursor: default;
-}
-.bb-items__btn:focus-visible {
-  outline: 2px solid var(--bb-accent);
-}
-.bb-items__main {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-.bb-items__name {
-  overflow-wrap: anywhere;
-}
-.bb-items__row--discount .bb-items__name {
-  padding-left: 1em;
-}
-.bb-items__cat {
-  display: block;
-  font-size: 0.8rem;
-  color: var(--bb-muted);
-}
-.bb-items__cat--unknown {
-  color: var(--bb-warn);
-  font-weight: 600;
-}
-</style>

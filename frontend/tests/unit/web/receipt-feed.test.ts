@@ -507,6 +507,27 @@ describe('Feed controls', () => {
     expect(s.intoView.at(-1)!.arg).toEqual(expect.objectContaining({ block: 'start', behavior: 'auto' }))
   })
 
+  it('[covers:web-receipts.feed-nav-flanked-position] feed-nav は feed-back 左端 + .feed-move 中央group（‹ 位置 › のDOM順）で .feed-nav-buttons 不在', async () => {
+    vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([[101, 102, 103]], 7))
+    const { wrapper } = await mountApp(`/receipts/102?${CTX_QS}`)
+    const nav = wrapper.find('nav.feed-nav')
+    expect(nav.exists()).toBe(true)
+    // TASK-175 H-6: two grid areas — the back link at the LEFT edge and the
+    // flanked-position group in the middle (the old right-edge button-pair
+    // wrapper vocabulary is gone)
+    const kids = nav.element.children
+    expect(kids.length).toBe(2)
+    expect(kids[0]?.classList.contains('feed-back')).toBe(true)
+    expect(kids[1]?.classList.contains('feed-move')).toBe(true)
+    // inside the group the DOM order flanks the number: prev ‹ → position → › next
+    const seq = nav.element.querySelector('.feed-move')?.children ?? []
+    expect(seq.length).toBe(3)
+    expect(seq[0]?.getAttribute('data-test')).toBe('feed-prev')
+    expect(seq[1]?.getAttribute('data-test')).toBe('feed-position')
+    expect(seq[2]?.getAttribute('data-test')).toBe('feed-next')
+    expect(wrapper.find('.feed-nav-buttons').exists()).toBe(false)
+  })
+
   it('[covers:web-receipts.feed-prev-next] drawer 開放中は矢印キーで Feed が動かない', async () => {
     vi.spyOn(api, 'listReceipts').mockImplementation(pagedList([[101, 102, 103]]))
     const { wrapper, router } = await mountApp(`/receipts/102?${CTX_QS}`, { attach: true })

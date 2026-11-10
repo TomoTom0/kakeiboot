@@ -61,7 +61,8 @@ describe('approve button (spec 11-3)', () => {
     await wrapper.find(button).trigger('click')
     await flushPromises()
     expect(host.callTool).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('rev 3')
+    // TASK-170 W-4: the head's revision readout is gone — the redraw is
+    // proven by the latest payload's item and the next press's revision
     expect(wrapper.text()).toContain('豆乳')
     expect(wrapper.find(message).text()).toContain('内容が更新されています')
     const b = wrapper.find(button)
@@ -92,7 +93,12 @@ describe('approve button (spec 11-3)', () => {
     await flushPromises()
     expect(wrapper.find(message).text()).toBe('承認の検証に失敗しました: purchased_on')
     expect(wrapper.find(button).attributes('disabled')).toBeUndefined()
-    expect(wrapper.text()).toContain('rev 2')
+    // TASK-170 W-4: the revision readout is gone — the screen keeps the draft
+    expect(wrapper.text()).toContain('スーパーみどり')
+    // review: the kept revision is proven by the next press's sent value too
+    await wrapper.find(button).trigger('click')
+    await flushPromises()
+    expect(host.callTool).toHaveBeenLastCalledWith('approve_receipt_draft', { draft_id: 12, revision: 2 })
 
     const throwing = fakeHost({
       toolOutput: draftEnvelope(),

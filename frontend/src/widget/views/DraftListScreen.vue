@@ -1,7 +1,12 @@
 <script setup lang="ts">
 // view=draft_list (spec §11-2): pending drafts across ledgers with the ledger
 // name, image state text and a duplicate mark. Tap opens the detail via callTool.
+// TASK-170 W-2: the rows ride the shared DataRow two-line grammar — the main
+// line (store name + the w700 items total) over the sub line (date + image
+// state + the ledger chip and the duplicate chip inline); the item count no
+// longer shows.
 import type { DraftListEnvelope } from '@/shared/types'
+import DataRow from '@/shared/components/DataRow.vue'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import { useWidgetStore } from '../stores/widget'
 
@@ -23,33 +28,34 @@ const store = useWidgetStore()
     >
       下書きはありません
     </p>
-    <ul class="bb-list">
-      <li
-        v-for="row in envelope.drafts"
-        :key="row.draft_id"
-      >
-        <button
-          type="button"
-          class="bb-list__btn"
-          :disabled="store.loading"
-          :data-draft="row.draft_id"
-          @click="store.openDraft(row.draft_id)"
+    <ul class="bb-rows">
+      <TransitionGroup name="bb-appear">
+        <li
+          v-for="row in envelope.drafts"
+          :key="row.draft_id"
         >
-          <span class="bb-list__main">
-            <span>{{ row.store_name ?? '店名未設定' }}</span>
-            <MoneyAmount :value="row.items_total" />
-          </span>
-          <span class="bb-list__sub">
-            <span class="bb-chip">{{ row.ledger.name }}</span>
-            {{ row.purchased_on ?? '日付未設定' }} ・ {{ row.item_count }}行 ・ {{ row.image_display }}
-            <span
-              v-if="row.possible_duplicates.length > 0"
-              class="bb-chip bb-chip--warn"
-              data-test="dup-mark"
-            >重複の可能性</span>
-          </span>
-        </button>
-      </li>
+          <DataRow
+            :on-select="() => store.openDraft(row.draft_id)"
+            :disabled="store.loading"
+            :data-draft="row.draft_id"
+            :name="row.store_name ?? '店名未設定'"
+            :name-title="row.store_name ?? '店名未設定'"
+          >
+            <template #amount>
+              <span class="amount"><MoneyAmount :value="row.items_total" /></span>
+            </template>
+            <template #sub>
+              <span class="row-items">{{ row.purchased_on ?? '日付未設定' }} ・ {{ row.image_display }}</span>
+              <span class="bb-chip">{{ row.ledger.name }}</span>
+              <span
+                v-if="row.possible_duplicates.length > 0"
+                class="bb-chip bb-chip--warn"
+                data-test="dup-mark"
+              >重複の可能性</span>
+            </template>
+          </DataRow>
+        </li>
+      </TransitionGroup>
     </ul>
   </article>
 </template>

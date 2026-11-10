@@ -151,17 +151,30 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
  * all five on receipt 102 (TASK-60 §5); `bareTags` strips receipt 101 (no
  * payment/category, no assigned labels — the seed of TASK-60 §9-1 alt-2,
  * unused by the specs since TASK-167's head rework, kept as the minimal-host
- * variation); `grants` replaces the
+ * variation); `longDeletedHead` seeds the deleted long-store-name big-total
+ * receipt 113 (TASK-175 review #2, reached by direct URL); `grants` replaces the
  * /api/oauth/grants answer (default stays the empty list — TASK-20 §7-1 /
  * §10-3: the grant-row chip check feeds its own fixture rows). The default
  * mock data is unchanged, and the options combine freely.
  */
 export async function installApiStub(
   page: Page,
-  opts: { loggedIn?: boolean; feed?: number; richLabels?: boolean; bareTags?: boolean; grants?: Grant[] } = {},
+  opts: {
+    loggedIn?: boolean
+    feed?: number
+    richLabels?: boolean
+    bareTags?: boolean
+    longDeletedHead?: boolean
+    grants?: Grant[]
+  } = {},
 ): Promise<void> {
   const loggedIn = opts.loggedIn ?? true
-  const api = createMockDataApi({ feed: opts.feed, richLabels: opts.richLabels, bareTags: opts.bareTags })
+  const api = createMockDataApi({
+    feed: opts.feed,
+    richLabels: opts.richLabels,
+    bareTags: opts.bareTags,
+    longDeletedHead: opts.longDeletedHead,
+  })
 
   // The mock data's era, pinned (TASK-162's browser-suite audit): the mock's
   // records live in 2026-10 and the app anchors its initial trend window /

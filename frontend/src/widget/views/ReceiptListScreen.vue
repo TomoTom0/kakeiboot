@@ -2,12 +2,18 @@
 // view=receipt_list / item_list (spec §11-2): count, sum, thumbnails; tap opens
 // the receipt via get_receipt (callTool) and the header shows a back button.
 // Rows carry display-only label dots (TASK-17); labeling happens in the
-// conversation (label_receipts).
+// conversation (label_receipts). TASK-170 W-2: the rows ride the shared
+// DataRow two-line grammar — the main line (thumb + store name + the w700
+// amount) over the sub line (the top_items representative items + the
+// datetime figure + the label dots at the right end); the item rows swap
+// the name for the item and the sub line for date / store / category
+// (muted text, the row itself stays pressable). The search matches and the
+// item count no longer show (the representative items carry the line).
 import { computed } from 'vue'
 import type { ItemListEnvelope, ReceiptListEnvelope } from '@/shared/types'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import DataRow from '@/shared/components/DataRow.vue'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
-import { isSafeImageUrl } from '@/shared/format'
+import { isSafeImageUrl, topItemsText } from '@/shared/format'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import { useWidgetStore } from '../stores/widget'
 import { MEDIA_ORIGIN } from '../config'
@@ -22,6 +28,16 @@ function thumb(receiptId: number): string | null {
 }
 const receipts = computed(() => (props.envelope.view === 'receipt_list' ? props.envelope.receipts : []))
 const items = computed(() => (props.envelope.view === 'item_list' ? props.envelope.items : []))
+
+/** the sub line's secondary figure: the date and, when present, the time */
+function figureOf(date: string, time: string | null): string {
+  return time ? `${date} ${time}` : date
+}
+
+/** the item rows' sub line: date / store / category as one muted text */
+function itemSubText(storeName: string | null, date: string, category: string | null): string {
+  return `${date} ・ ${storeName ?? '店名未設定'} ・ ${category ?? '未分類'}`
+}
 </script>
 
 <template>
@@ -40,63 +56,60 @@ const items = computed(() => (props.envelope.view === 'item_list' ? props.envelo
         </template>{{ envelope.total_count }}件 ・ 合計 <MoneyAmount :value="envelope.sum_amount" />
       </p>
     </header>
-    <ul class="bb-list">
-      <li
-        v-for="r in receipts"
-        :key="r.receipt_id"
-      >
-        <button
-          type="button"
-          class="bb-list__btn bb-list__btn--thumb"
-          :disabled="store.loading"
-          :data-receipt="r.receipt_id"
-          @click="store.openReceipt(r.receipt_id)"
+    <ul class="bb-rows">
+      <TransitionGroup name="bb-appear">
+        <li
+          v-for="r in receipts"
+          :key="r.receipt_id"
         >
-          <img
-            v-if="r.has_image && thumb(r.receipt_id)"
-            class="bb-thumb"
-            :src="thumb(r.receipt_id) ?? undefined"
-            alt=""
-            loading="lazy"
-            referrerpolicy="no-referrer"
+          <DataRow
+            :on-select="() => store.openReceipt(r.receipt_id)"
+            :disabled="store.loading"
+            :data-receipt="r.receipt_id"
+            :name="r.store_name ?? '店名未設定'"
+            :name-title="r.store_name ?? '店名未設定'"
+            :sub-text="topItemsText(r.top_items)"
+            :sub-figure="figureOf(r.purchased_on, r.purchased_time)"
+            :labels="r.labels ?? []"
           >
-          <span class="bb-list__body">
-            <span class="bb-list__main">
-              <span>{{ r.store_name ?? '店名未設定' }}</span>
-              <MoneyAmount :value="r.amount" />
-            </span>
-            <span class="bb-list__sub">
-              {{ r.purchased_on }}<template v-if="r.purchased_time"> {{ r.purchased_time }}</template> ・ {{ r.item_count }}行
-              <template v-if="r.matched_items && r.matched_items.length > 0">
-                ・ {{ r.matched_items.map((m) => m.name).join('、') }}
-              </template>
-              <LabelDots
-                :labels="r.labels ?? []"
-                compact
-                class="bb-list__labels"
-              />
-            </span>
-          </span>
-        </button>
-      </li>
-      <li
-        v-for="it in items"
-        :key="it.item_id"
-      >
-        <button
-          type="button"
-          class="bb-list__btn"
-          :disabled="store.loading"
-          :data-receipt="it.receipt_id"
-          @click="store.openReceipt(it.receipt_id)"
+            <template #main>
+              <img
+                v-if="r.has_image && thumb(r.receipt_id)"
+                class="bb-thumb"
+                :src="thumb(r.receipt_id) ?? undefined"
+                alt=""
+                loading="lazy"
+                referrerpolicy="no-referrer"
+              >
+              <span
+                class="row-name"
+                :title="r.store_name ?? '店名未設定'"
+              >{{ r.store_name ?? '店名未設定' }}</span>
+            </template>
+            <!-- review: MoneyAmount keeps the negative (値引) coloring spec §11-7 -->
+            <template #amount>
+              <span class="amount"><MoneyAmount :value="r.amount" /></span>
+            </template>
+          </DataRow>
+        </li>
+        <li
+          v-for="it in items"
+          :key="it.item_id"
         >
-          <span class="bb-list__main">
-            <span>{{ it.name }}</span>
-            <MoneyAmount :value="it.amount_incl" />
-          </span>
-          <span class="bb-list__sub">{{ it.purchased_on }} ・ {{ it.store_name ?? '店名未設定' }} ・ {{ it.category ?? '未分類' }}</span>
-        </button>
-      </li>
+          <DataRow
+            :on-select="() => store.openReceipt(it.receipt_id)"
+            :disabled="store.loading"
+            :data-receipt="it.receipt_id"
+            :name="it.name"
+            :name-title="it.name"
+            :sub-text="itemSubText(it.store_name, it.purchased_on, it.category)"
+          >
+            <template #amount>
+              <span class="amount"><MoneyAmount :value="it.amount_incl" /></span>
+            </template>
+          </DataRow>
+        </li>
+      </TransitionGroup>
     </ul>
     <p
       v-if="envelope.next_cursor"

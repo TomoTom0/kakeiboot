@@ -506,7 +506,7 @@ async function goTo(id: number): Promise<void> {
   // lands in the same frames as the smooth scrollIntoView above and overrides
   // it — the move read as an animation-less jump on the real device. The
   // move's motion is the smooth scroll alone
-  const heading = panelEl(id)?.querySelector<HTMLElement>('.detail-title')
+  const heading = panelEl(id)?.querySelector<HTMLElement>('.receipt-title')
   heading?.focus({ preventScroll: true })
 }
 
@@ -567,11 +567,9 @@ function goBack(): void {
           :size="16"
         />一覧
       </RouterLink>
-      <span
-        class="feed-position muted small"
-        data-test="feed-position"
-      >{{ positionText }}</span>
-      <span class="feed-nav-buttons">
+      <!-- TASK-175 H-6: the prev / position / next trio is ONE centred group
+           — the arrows flank the position number (the group never wraps) -->
+      <div class="feed-move">
         <button
           type="button"
           class="icon-btn"
@@ -582,6 +580,10 @@ function goBack(): void {
         >
           <AppIcon name="chevron-left" />
         </button>
+        <span
+          class="feed-position muted small"
+          data-test="feed-position"
+        >{{ positionText }}</span>
         <button
           type="button"
           class="icon-btn"
@@ -592,7 +594,7 @@ function goBack(): void {
         >
           <AppIcon name="chevron-right" />
         </button>
-      </span>
+      </div>
     </nav>
     <p
       v-if="fallbackNote"

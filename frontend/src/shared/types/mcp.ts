@@ -184,6 +184,9 @@ export type DraftListRow = {
 
 export type PeriodResolved = { from: string; to: string; label: string }
 
+/** TASK-167 D-3 (backend contract, spec §7-8): the row's representative items (amount desc, k = 2). */
+export type TopItem = { name: string; amount: Integer }
+
 export type ReceiptListRow = {
   receipt_id: Integer
   purchased_on: string
@@ -193,6 +196,8 @@ export type ReceiptListRow = {
   item_count: Integer
   has_image: boolean
   matched_items?: { name: string; amount: Integer }[]
+  /** the derived representative items — the sub line's text (TASK-170 W-8) */
+  top_items?: TopItem[]
   /** labels assigned to the receipt (TASK-17; empty when none) */
   labels?: Label[]
 }

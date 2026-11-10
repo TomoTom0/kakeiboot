@@ -4,8 +4,13 @@
 // with a per-row state, an approve-all button and an in-envelope detail. The
 // row detail comes from structuredContent without callTool; rejected entries
 // and unreferenced images are conversation-side information and never rows.
+// TASK-170 W-2: the rows ride the shared DataRow two-line grammar — the main
+// line (store name + the w700 items total) ALONE, the per-row state chip at
+// the sub line's right end (the results are sub-line information, the main
+// line keeps the data-name + amount grammar).
 import { computed } from 'vue'
 import type { ApproveBatchResult, DraftBatchEnvelope, DraftView } from '@/shared/types'
+import DataRow from '@/shared/components/DataRow.vue'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import { useWidgetStore } from '../stores/widget'
@@ -97,37 +102,44 @@ const hasStale = computed(() => (props.envelope.results ?? []).some((r) => r.out
     >
       下書きはありません
     </p>
-    <ul class="bb-list">
-      <li
-        v-for="row in rows"
-        :key="row.draft.draft_id"
-      >
-        <button
-          type="button"
-          class="bb-list__btn"
-          :disabled="store.loading || store.batchApproving"
-          :data-draft="row.draft.draft_id"
-          @click="store.openBatchDraft(row.draft)"
+    <ul class="bb-rows">
+      <TransitionGroup name="bb-appear">
+        <li
+          v-for="row in rows"
+          :key="row.draft.draft_id"
         >
-          <span class="bb-list__main">
-            <span>{{ row.storeName }}</span>
-            <MoneyAmount :value="row.draft.resolution.items_total" />
-            <span
-              class="bb-batch-state"
-              :class="`bb-batch-state--${row.state.kind}`"
-              data-test="row-state"
-            >{{ row.state.text }}</span>
-          </span>
-          <span class="bb-list__sub">
-            {{ row.purchasedOn }} ・ {{ row.draft.payload.items.length }}行 ・ {{ row.draft.image.display }}
-            <span
-              v-if="row.draft.possible_duplicates?.length"
-              class="bb-chip bb-chip--warn"
-              data-test="dup-mark"
-            >重複の可能性</span>
-          </span>
-        </button>
-      </li>
+          <DataRow
+            :on-select="() => store.openBatchDraft(row.draft)"
+            :disabled="store.loading || store.batchApproving"
+            :data-draft="row.draft.draft_id"
+            :name="row.storeName"
+            :name-title="row.storeName"
+          >
+            <template #amount>
+              <span class="amount"><MoneyAmount :value="row.draft.resolution.items_total" /></span>
+            </template>
+            <template #sub>
+              <span class="row-items">{{ row.purchasedOn }} ・ {{ row.draft.image.display }}</span>
+              <span
+                v-if="envelope.ledger"
+                class="bb-chip"
+              >{{ envelope.ledger.name }}</span>
+              <span
+                v-if="row.draft.possible_duplicates?.length"
+                class="bb-chip bb-chip--warn"
+                data-test="dup-mark"
+              >重複の可能性</span>
+            </template>
+            <template #sub-end>
+              <span
+                class="bb-batch-state"
+                :class="`bb-batch-state--${row.state.kind}`"
+                data-test="row-state"
+              >{{ row.state.text }}</span>
+            </template>
+          </DataRow>
+        </li>
+      </TransitionGroup>
     </ul>
   </article>
 </template>

@@ -81,14 +81,14 @@
 | `backend/tests/common/auth.rs` | 補助 | 認証テスト用 router・cookie 保持クライアント（SoftPasskey）・フローヘルパ・test hook 付き file DB setup（`auth_setup_file_with_hooks` [TASK-147]） |
 | `frontend/tests/unit/widget/helpers.ts` | 補助 | widget テスト用 fake host・Pinia 初期化 + mount・callTool 結果生成 |
 | `frontend/tests/unit/widget/approve.test.ts` | 単体 | 承認ボタンの状態遷移と widgetState |
-| `frontend/tests/unit/widget/draft.test.ts` | 単体 | draft / receipt 画面（重複帯・画像・bbox・XSS・明細・削除済み）・TASK-161 で BarHChart の labelChars 固定字数を幅budget切り詰めへ改訂（XSS 検証目的は維持） |
-| `frontend/tests/unit/widget/draftBatch.test.ts` | 単体 | draft_batch 画面（行状態・すべて登録・承認済み map） [TASK-18] |
-| `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示 [TASK-26] |
-| `frontend/tests/unit/widget/navigation.test.ts` | 単体 | view ルーティング・一覧→詳細・widgetState stack |
-| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（SVG グラフ・軸ラベル両端 [TASK-67] [TASK-68]・期間切替・bar_v 積み上げと `_meta.trend_matrix`・bar_h/bar_v 同key同色・matrix 無し/不一致 fallback・_meta 載せ替わり [TASK-116]・bar_v 幾何の TASK-123 改訂〔上位3+ほか・viewBox unit stroke 縁取り・最上段上端角丸 path・clipPath 廃止〕・TASK-129〔報告単位 scale 集約・bar_h 幾何〔stroke・データ端 cap・rx=2 廃止〕・ShareBar 絶対scale/composition モード/凡例合算追従・共通 renderer BarSegs 直接 mount〕） |
+| `frontend/tests/unit/widget/draft.test.ts` | 単体 | draft / receipt 画面（重複帯・画像・bbox・XSS・明細・削除済み）・TASK-161 で BarHChart の labelChars 固定字数を幅budget切り詰めへ改訂（XSS 検証目的は維持）・TASK-170（明細3層+明細合計行〔折りたたみ中も全品目合計〕・inline カテゴリ・頭部の再構成〔日時行 inline・.receipt-total・運用meta行廃止〕・note .receipt-note） |
+| `frontend/tests/unit/widget/draftBatch.test.ts` | 単体 | draft_batch 画面（行状態・すべて登録・承認済み map） [TASK-18]・TASK-170（.data-row 2行文法・状態 chip 副行右端） |
+| `frontend/tests/unit/widget/labels.test.ts` | 単体 | widget のラベル表示 [TASK-26]・TASK-170（詳細頭部の LabelChip は日時行末尾へ inline） |
+| `frontend/tests/unit/widget/navigation.test.ts` | 単体 | view ルーティング・一覧→詳細・widgetState stack・TASK-170（一覧行 .data-row 2行・top_items 副行・item_count/matched_items 表示廃止） |
+| `frontend/tests/unit/widget/stats.test.ts` | 単体 | 集計ダッシュボード（SVG グラフ・軸ラベル両端 [TASK-67] [TASK-68]・期間切替・bar_v 積み上げと `_meta.trend_matrix`・bar_h/bar_v 同key同色・matrix 無し/不一致 fallback・_meta 載せ替わり [TASK-116]・bar_v 幾何の TASK-123 改訂〔上位3+ほか・viewBox unit stroke 縁取り・最上段上端角丸 path・clipPath 廃止〕・TASK-129〔報告単位 scale 集約・bar_h 幾何〔stroke・データ端 cap・rx=2 廃止〕・ShareBar 絶対scale/composition モード/凡例合算追従・共通 renderer BarSegs 直接 mount〕・TASK-170〔合計カード 1.9rem・table fallback の金額 w700 tabular〕） |
 | `frontend/tests/unit/widget/host.test.ts` | 単体 | host adapter 選択・dark mode（系列 palette --series-1..7/--series-rest の light/dark と --bb-series-* 廃止 [TASK-116]・palette 実値が web と同値の TASK-123 候補値と --seg-outline 定義） |
 | `frontend/tests/unit/widget/format.test.ts` | 単体 | 金額表記・画像 URL 検証・ISO 日付ラベル [TASK-68] |
-| `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget/shared の直接通信・不使用 API・HTML 挿入・絵文字の不在 |
+| `frontend/tests/unit/widget/source-guard.test.ts` | 単体 | widget/shared の直接通信・不使用 API・HTML 挿入・絵文字の不在・TASK-170（行文法 wiring の静的検査: row-grammar.css/motion.css 実体+両 main.ts import・hover guard・bb-appear 参照・旧語彙〔bb-list 等〕削除） |
 | `frontend/tests/unit/web/helpers.ts` | 補助 | fetch スタブ・memory history での mount・フィード用スクロール test double |
 | `frontend/tests/unit/web/http.test.ts` | 単体 | fetch ラッパ（401・403・204・reauth_required の step-up 再送・requestBlob の blob 化と error 共有 [TASK-58]） |
 | `frontend/tests/unit/web/webauthn.test.ts` | 単体 | webauthn-rs JSON と navigator.credentials の変換 |
@@ -123,7 +123,7 @@
 | `frontend/tests/unit/web/url-sync.test.ts` | 単体 | 閲覧系 URL 双方向同期と topbar ‹ [TASK-124]（shell composable: 期間 mode keys・labels= の5画面+/search 同期・keys 無し流入の store 継続と直ちの書戻し・pop での entry 復元・feed 除外・/search scope=all は期間 keys 非載せ・差分ガード。tabbar 外11画面の ‹ は brand 直後・表題直前の icon-only 44px で親マップの親へ up 语义で戻る・閲覧系/Axis/feed には置かない）・未来月への送りの URL 書戻し [TASK-146]・/search 期間 keys は書き両面で scope=period 時のみ（carry 廃止・stray 流入の strip・scope toggle）と AxisDetail の echo 非再取得・‹ の現在値追従 [TASK-145] |
 | `frontend/tests/unit/web/label-dots.test.ts` | 単体 | LabelDots と読み上げ名ヘルパ [TASK-17] [TASK-26] |
 | `frontend/tests/unit/web/label-chip.test.ts` | 単体 | 管理ラベル UI 部品（LabelChip・LabelToggleGroup・LabelFilter） [TASK-26] |
-| `frontend/tests/unit/web/label-picker.test.ts` | 単体 | LabelPicker（tags 行末ボタン + popover・差分・rollback） [TASK-17] [TASK-26] |
+| `frontend/tests/unit/web/label-picker.test.ts` | 単体 | LabelPicker（レシート詳細副行右端ボタン + popover・差分・rollback） [TASK-17] [TASK-26] |
 | `frontend/tests/unit/web/popover-panel.test.ts` | 単体 | PopoverPanel（role=dialog・フォーカス・sheet-narrow） [TASK-27] |
 | `frontend/tests/unit/stores.test.ts` | 単体 | web / widget の Pinia store が独立していること |
 | `frontend/tests/unit/inline-widget-html.test.ts` | 単体 | widget 単一 HTML 化 build plugin（TASK-50: 偽 bundle で script/stylesheet の inline・modulepreload 除去・`</script` エスケープ・chunk の非放出・postcondition の error〔bundle に無い asset・CSS の url()/@import・残存 src/href〕・package.json build script と vite.widget.config.ts〔単一 entry + codeSplitting: false + emptyOutDir: false + inline plugin〕・web pass が web.html のみを input に持つことの文本検証） |

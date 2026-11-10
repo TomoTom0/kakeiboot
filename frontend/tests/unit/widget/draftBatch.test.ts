@@ -19,7 +19,9 @@ function batchEnvelope(over: {
   rejected?: unknown[]
   images?: unknown[]
 } = {}) {
-  const drafts = (over.drafts ?? [pending(12, 2), pending(15, 1), pending(18, 1)]) as DraftView[]
+  // TASK-170: the first default row carries a duplicate (the grammar test's
+  // dup chip rides its sub line) — the same shape as the draft list fixture
+  const drafts = (over.drafts ?? [sampleDraft({}), pending(15, 1), pending(18, 1)]) as DraftView[]
   return {
     view: 'draft_batch',
     ledger: { id: 1, name: '我が家', source: 'draft' as const },
@@ -334,6 +336,32 @@ describe('draft_batch view', () => {
       'approve_receipt_drafts',
       { items: [{ draft_id: 12, revision: 4 }, { draft_id: 15, revision: 3 }] },
     ])
+  })
+
+  it('[covers:widget.draft-rows-grammar] 行は .data-row 2行文法（状態 chip は副行右端・主行は店名+合計のみ・「N 行」なし）', async () => {
+    const { wrapper } = await mountWidget(fakeHost({ toolOutput: batchEnvelope() }))
+    const r12 = wrapper.find(row(12))
+    expect(r12.element.tagName).toBe('BUTTON')
+    expect(r12.classes()).toContain('data-row')
+    // the main line keeps the data-name + amount grammar alone
+    const main = r12.find('.row-main')
+    expect(main.exists()).toBe(true)
+    expect(main.text()).toContain('スーパーみどり')
+    expect(r12.find('.amount').text()).toContain('1,280円')
+    // the row state moved OUT of the main line to the sub line's right end
+    const state = wrapper.find(rowState(12))
+    expect(state.exists()).toBe(true)
+    expect(state.element.closest('.row-sub')).not.toBeNull()
+    expect(state.element.closest('.row-main')).toBeNull()
+    const sub = r12.find('.row-sub')
+    expect(sub.exists()).toBe(true)
+    expect(sub.text()).toContain('2026-10-12')
+    expect(sub.text()).toContain('画像あり')
+    // review指摘5: the ledger chip rides the sub line too (W-2 — the same
+    // composition as the draft list rows)
+    expect(sub.find('.bb-chip:not(.bb-chip--warn)').text()).toBe('我が家')
+    expect(sub.find('[data-test="dup-mark"]').exists()).toBe(true)
+    for (const id of [12, 15, 18]) expect(wrapper.find(row(id)).text()).not.toMatch(/\d行/)
   })
 
   it('[covers:widget.batch-approve-all] rows cannot open the detail while approve-all is in flight', async () => {

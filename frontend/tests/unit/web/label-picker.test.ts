@@ -306,18 +306,22 @@ describe('LabelPicker (Feed)', () => {
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('[covers:web-receipts.label-picker-compact] ボタンは .receipt-when 内末尾・押下で PopoverPanel・Escape・外側押下で閉じトリガへ・editing で disabled', async () => {
+  it('[covers:web-receipts.label-picker-compact] ボタンは副行右端 .receipt-sub-end 内・押下で PopoverPanel・Escape・外側押下で閉じトリガへ・editing で disabled', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     await withLabels([])
     injectSetLabels(async (_l, r) => ({ receipt_id: r, labels: [] }))
     const { wrapper } = await mountApp(DETAIL, { attach: true })
     const p = wrapper.find('[data-test="receipt-panel-101"]')
 
-    // the button rides at the end of the when line (no dedicated label row)
+    // TASK-175 H-5: the button rides inside the head sub-row's RIGHT-EDGE
+    // host (.receipt-sub-end → .label-picker) — no dedicated label row, and
+    // not inline in the context text line
     const btn = addBtn(wrapper)
-    expect(btn.element.closest('.receipt-when')).not.toBeNull()
-    const when = p.find('.receipt-head .receipt-when').element
-    expect(when.lastElementChild?.contains?.(btn.element)).toBe(true)
+    expect(btn.element.closest('.receipt-sub-end')).not.toBeNull()
+    expect(btn.element.closest('.label-picker')).not.toBeNull()
+    const subEnd = p.find('.receipt-header .receipt-sub-end').element
+    expect(subEnd.contains(btn.element)).toBe(true)
+    expect(btn.element.closest('.receipt-sub-context')).toBeNull()
     expect(btn.attributes('aria-label')).toBe('ラベルを付ける・外す')
 
     // pressing it opens the PopoverPanel dialog with the toggle group

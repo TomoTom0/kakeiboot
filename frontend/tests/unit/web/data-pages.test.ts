@@ -812,7 +812,7 @@ describe('Receipts', () => {
     expect(empty.text()).toContain('Claude')
   })
 
-  it('[covers:web-receipts.update-with-revision] 表示中の revision 付きで保存し版が進む', async () => {
+  it('[covers:web-receipts.update-with-revision][covers:web-receipts.note-display] 表示中の revision 付きで保存し版が進む', async () => {
     const update = vi.spyOn(api, 'updateReceipt')
     const { wrapper } = await mountApp('/receipts/101')
     const p = panel(wrapper, 101)
@@ -826,11 +826,13 @@ describe('Receipts', () => {
       set: { note: '特売' },
       upsert_items: [{ item_id: 1001, amount: 250 }],
     })
-    // TASK-167 D-8: the panel carries no revision/note readouts — the
-    // progressed revision is proven by the next save riding revision 2
+    // TASK-167 D-8: the panel carries no revision readout — the progressed
+    // revision is proven by the next save riding revision 2. TASK-170: the
+    // note box is BACK on the read view (.receipt-note) — the saved note shows
     const after = panel(wrapper, 101)
     expect(after.find('[data-test="revision"]').exists()).toBe(false)
-    expect(after.find('[data-test="note"]').exists()).toBe(false)
+    expect(after.find('[data-test="note"]').exists()).toBe(true)
+    expect(after.find('[data-test="note"]').text()).toContain('特売')
     await after.find('[data-test="edit"]').trigger('click')
     await after.find('[data-test="f-note"]').setValue('再修正')
     await after.find('[data-test="edit-form"]').trigger('submit')

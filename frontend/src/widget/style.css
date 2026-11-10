@@ -1,5 +1,8 @@
 /* Widget theme (spec §11-7). Light / dark via html[data-theme] set from
-   window.openai.theme, falling back to prefers-color-scheme (host.ts applyTheme). */
+   window.openai.theme, falling back to prefers-color-scheme (host.ts applyTheme).
+   TASK-170 W-1: the row grammar (.data-row family), the item tokens (.items)
+   and the motion vocabulary (bb-appear) live in shared/styles/ and are
+   imported by main.ts ahead of this sheet. */
 :root,
 :root[data-theme='light'] {
   --bb-bg: #ffffff;
@@ -14,6 +17,8 @@
   --bb-warn-bg: #fff4dc;
   --bb-danger: #c0362c;
   --bb-danger-bg: #fdecea;
+  /* TASK-170 W-6: the pressable-row wash (the shared row grammar reads it) */
+  --bb-hover: #eef1f5;
   /* TASK-116 series palette: the SAME tokens and values as the web app
      (frontend/src/web/styles.css) so the shared seriesColor mapping paints
      one key one color on both surfaces. The old widget-only palette (six
@@ -61,6 +66,8 @@
   --bb-warn-bg: #3a2f17;
   --bb-danger: #f2786d;
   --bb-danger-bg: #3d1f1d;
+  /* TASK-170 W-6: the pressable-row wash (the shared row grammar reads it) */
+  --bb-hover: #22282f;
   /* TASK-116 series palette: the web app's dark values, same tokens */
   --series-1: #934149;
   --series-2: #C6824C;
@@ -111,34 +118,15 @@ body {
   flex-direction: column;
   gap: 10px;
 }
-.bb-title {
-  margin: 0;
-  font-size: 1.1rem;
-  overflow-wrap: anywhere;
-}
 .bb-subtitle {
   margin: 0 0 4px;
   font-size: 0.95rem;
-}
-.bb-head p {
-  margin: 2px 0;
-}
-.bb-total {
-  display: flex;
-  justify-content: space-between;
-  font-size: 1.15rem;
-  font-weight: 600;
 }
 .bb-muted {
   color: var(--bb-muted);
 }
 .bb-small {
   font-size: 0.8rem;
-}
-.bb-note {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--bb-muted);
 }
 .bb-badge {
   display: flex;
@@ -227,51 +215,22 @@ body {
 .bb-message--error {
   color: var(--bb-danger);
 }
-.bb-list {
+/* TASK-170 W-2: the list rows ride the shared DataRow grammar
+   (shared/styles/row-grammar.css); this is the list carrier alone */
+.bb-rows {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.bb-list li {
+.bb-rows li {
   border-bottom: 1px solid var(--bb-border);
 }
-.bb-list__btn {
-  all: unset;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  min-height: 44px;
-  padding: 8px 4px;
-  cursor: pointer;
-}
-.bb-list__btn--thumb {
-  flex-direction: row;
-  gap: 8px;
-  align-items: center;
-}
-.bb-list__btn:focus-visible {
-  outline: 2px solid var(--bb-accent);
-}
-.bb-list__body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-.bb-list__main {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  overflow-wrap: anywhere;
-}
-.bb-list__sub {
-  font-size: 0.8rem;
-  color: var(--bb-muted);
-}
-/* draft_batch rows (TASK-18): per-row state chip (未登録 / 登録済み #id / 要確認) */
+/* draft_batch rows (TASK-18): per-row state chip (未登録 / 登録済み #id / 要確認)
+   at the sub line's right end (TASK-170 W-2) */
 .bb-batch-state {
   flex: none;
   align-self: center;
+  margin-left: auto;
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--bb-border);
@@ -322,8 +281,10 @@ body {
 .bb-card p {
   margin: 0;
 }
+/* TASK-170 W-5: the totals card's value climbs to the web total's strongest
+   tier (1.9rem w700) */
 .bb-card__value {
-  font-size: 1.5rem;
+  font-size: 1.9rem;
   font-weight: 700;
 }
 .bb-chart {
@@ -371,17 +332,23 @@ body {
   border-collapse: collapse;
   font-size: 0.9rem;
 }
+/* TASK-170 W-5: the fallback table's amounts align like the strongest
+   figure (w700 tabular right); the th side returns to its label weight */
 .bb-table th,
 .bb-table td {
   padding: 6px 4px;
   border-bottom: 1px solid var(--bb-border);
   text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .bb-table th {
   text-align: left;
-  font-weight: normal;
+  font-weight: 400;
 }
-.bb-notes {
+/* TASK-170: the stats notes list (renamed — the note vocabulary itself is
+   the shared .receipt-note now) */
+.bb-stat-notes {
   margin: 0;
   padding-left: 1.2em;
   font-size: 0.8rem;
@@ -435,6 +402,4 @@ body {
 .label-green { background: var(--label-green); }
 .label-blue { background: var(--label-blue); }
 .label-purple { background: var(--label-purple); }
-.bb-labels { margin: 2px 0; }
-.bb-list__labels { margin-left: 4px; vertical-align: middle; }
 .bb-chip .label-chip { margin-left: 4px; }

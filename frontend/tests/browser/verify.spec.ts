@@ -70,7 +70,7 @@ test.describe('feed (390x780, reduced motion)', () => {
     // /receipts/112 is the mock's newest (idx 0): the direct-link scroll
     // quirk (§2-8) does not apply — the walk below only uses the buttons.
     await page.goto('/receipts/112')
-    await expect(page.locator('[data-test="receipt-panel-112"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-112"] .receipt-title')).toBeVisible()
 
     // 8 presses down: 112 -> 111 -> ... -> 104 (9th of 12), every landing verified
     for (let id = 111; id >= 104; id--) await nextAndAssertLanding(page, id)
@@ -87,13 +87,20 @@ test.describe('feed (390x780, reduced motion)', () => {
       expect(box!.width, name).toBeCloseTo(44, 1)
       expect(box!.height, name).toBeCloseTo(44, 1)
     }
+
+    // TASK-175: the sticky nav must not COVER the landed panel's top edge
+    // (real coordinates — the scroll-margin match alone wouldn't prove it)
+    const navBox = await page.locator('nav.feed-nav').boundingBox()
+    const panelBox = await page.locator('[data-test="receipt-panel-105"]').boundingBox()
+    expect(navBox && panelBox).toBeTruthy()
+    expect(navBox!.y + navBox!.height).toBeLessThanOrEqual(panelBox!.y + 2)
   })
 
   test('[covers:web-receipts.feed-scroll-compensation-real] 上方向展開でも表示中パネルの top を維持', async ({ page }) => {
     logPageIssues(page, 'compensation')
     await installApiStub(page, { feed: 9 })
     await page.goto('/receipts/112')
-    await expect(page.locator('[data-test="receipt-panel-112"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-112"] .receipt-title')).toBeVisible()
     // same walk as the landing test: end on 104 (idx 8, window [6,10];
     // everything above is an 18rem placeholder)
     for (let id = 111; id >= 104; id--) await nextAndAssertLanding(page, id)
@@ -106,7 +113,7 @@ test.describe('feed (390x780, reduced motion)', () => {
     await page.evaluate(() => {
       document.querySelector('[data-test="receipt-panel-107"]')!.scrollIntoView({ block: 'start', behavior: 'auto' })
     })
-    await expect(page.locator('[data-test="receipt-panel-107"] .detail-title')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('[data-test="receipt-panel-107"] .receipt-title')).toBeVisible({ timeout: 5_000 })
     // barrier: wait for 108 to grow past the 288px placeholder before
     // measuring — otherwise a pre-growth sample would green the poll at once
     await expect
@@ -121,6 +128,24 @@ test.describe('feed (390x780, reduced motion)', () => {
     expect(grown.height).toBeGreaterThan(320)
   })
 
+  test('[covers:web-receipts.feed-nav-flanked-position] ‹ 位置 › group は nav の中央（実座標）・先頭で prev disabled', async ({ page }) => {
+    logPageIssues(page, 'task175-feed-move')
+    await installApiStub(page, { feed: 9 })
+    await page.goto('/receipts/112')
+    await expect(page.locator('[data-test="receipt-panel-112"] .receipt-title')).toBeVisible()
+    // TASK-175 H-6: the flanked group sits at the nav's exact centre — the
+    // minmax(0,1fr) sides kill the auto-minimum drift space-between had
+    const c = await page.evaluate(() => {
+      const nav = document.querySelector('nav.feed-nav')!.getBoundingClientRect()
+      const move = document.querySelector('.feed-move')!.getBoundingClientRect()
+      return { navCx: nav.left + nav.width / 2, moveCx: move.left + move.width / 2 }
+    })
+    expect(Math.abs(c.navCx - c.moveCx)).toBeLessThanOrEqual(3)
+    // 112 is the feed's newest: prev is disabled at the start edge
+    await expect(page.locator('[data-test="feed-prev"]')).toBeDisabled()
+    await expect(page.locator('[data-test="feed-next"]')).toBeEnabled()
+  })
+
   // TASK-49 direct-link initial scroll (tmp/tasks/tm-49/design_direct-link.md
   // §3-1): a deep direct link must land on the anchor itself with the URL
   // unchanged. Before the fix the initial viewport is the top-of-document
@@ -131,7 +156,7 @@ test.describe('feed (390x780, reduced motion)', () => {
     await installApiStub(page, { feed: 9 })
     // 104 is idx 8 of 12: window [6,10], six placeholders above it
     await page.goto('/receipts/104')
-    await expect(page.locator('[data-test="receipt-panel-104"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-104"] .receipt-title')).toBeVisible()
     await expect
       .poll(() => panelTop(page, 104).then((r) => Math.abs(r.top - r.expected)), { timeout: 3_000 })
       .toBeLessThanOrEqual(2)
@@ -142,7 +167,7 @@ test.describe('feed (390x780, reduced motion)', () => {
     // the window is anchored at 104: 106 (in window) is a real panel,
     // 112 (above the window) stays a placeholder — the top-of-document
     // panels were not re-currented
-    await expect(page.locator('[data-test="receipt-panel-106"] .detail-title')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('[data-test="receipt-panel-106"] .receipt-title')).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('[data-test="receipt-panel-112"] .receipt-panel-placeholder')).toBeVisible()
     await expect(page.locator('[data-test="feed-position"]')).toContainText('9 / 12')
   })
@@ -151,7 +176,7 @@ test.describe('feed (390x780, reduced motion)', () => {
     logPageIssues(page, 'direct-link-shallow')
     await installApiStub(page, { feed: 9 })
     await page.goto('/receipts/112') // idx 0
-    await expect(page.locator('[data-test="receipt-panel-112"] .detail-title')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-112"] .receipt-title')).toBeVisible()
     await expect
       .poll(() => panelTop(page, 112).then((r) => Math.abs(r.top - r.expected)), { timeout: 3_000 })
       .toBeLessThanOrEqual(2)
@@ -3289,7 +3314,7 @@ test.describe('row hierarchy + receipt detail (TASK-167, 390x780)', () => {
     await expect(row.locator('.row-bar')).toBeVisible()
   })
 
-  test('[covers:web-receipts.items-typography][covers:web-receipts.meta-footer-removed][covers:web-receipts.head-tags-inline][covers:web-receipts.edit-pencil-icon] レシート詳細: 明細3層の実測と除去要素の不在・pencil icon-only 修正', async ({ page }) => {
+  test('[covers:web-receipts.items-typography][covers:web-receipts.meta-footer-removed][covers:web-receipts.head-tags-inline][covers:web-receipts.edit-pencil-icon][covers:web-receipts.note-display][covers:web-receipts.head-row-grammar] レシート詳細: 明細3層の実測と除去要素の不在・pencil icon-only 修正・note 表示・頭部主行の実座標', async ({ page }) => {
     logPageIssues(page, 'task167-detail')
     await installApiStub(page)
     await page.goto('/receipts/101')
@@ -3313,13 +3338,15 @@ test.describe('row hierarchy + receipt detail (TASK-167, 390x780)', () => {
     expect(m.foot).toBe('700')
     expect(parseFloat(m.totalSize)).toBeGreaterThanOrEqual(30)
     // the leftover chrome is gone: the zone headings, the operating-meta
-    // footer, the note box, the chip tags row, the 画像あり chip and the
-    // wordy 修正 button
+    // footer, the chip tags row, the 画像あり chip and the wordy 修正
+    // button. TASK-170: the note box is BACK — .receipt-note right under the
+    // items table (the mock's 101 carries the note 近所の特売)
     await expect(page.locator('[data-test="items-card"] h2')).toHaveCount(0)
     await expect(page.locator('.receipt-foot')).toHaveCount(0)
-    await expect(page.locator('[data-test="note"]')).toHaveCount(0)
-    await expect(page.locator('.receipt-head .tags')).toHaveCount(0)
-    expect((await page.locator('[data-test="receipt-panel-101"] .receipt-head').innerText()).includes('画像あり')).toBe(false)
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-note')).toBeVisible()
+    await expect(page.locator('[data-test="receipt-panel-101"] .receipt-note')).toHaveText('近所の特売')
+    await expect(page.locator('.receipt-header .tags')).toHaveCount(0)
+    expect((await page.locator('[data-test="receipt-panel-101"] .receipt-header').innerText()).includes('画像あり')).toBe(false)
     // 修正 is the pencil icon-only ibtn at the head (its name lives in the
     // aria-label alone)
     const edit = page.locator('[data-test="receipt-panel-101"] [data-test="edit"]')
@@ -3327,6 +3354,138 @@ test.describe('row hierarchy + receipt detail (TASK-167, 390x780)', () => {
     await expect(edit).toHaveAttribute('aria-label', '修正')
     await expect(edit.locator('svg')).toBeVisible()
     expect((await edit.innerText()).trim()).toBe('')
-    expect(await edit.evaluate((el) => el.closest('.receipt-head') !== null)).toBe(true)
+    expect(await edit.evaluate((el) => el.closest('.receipt-mainrow') !== null)).toBe(true)
+    // TASK-175: the head's MAIN row in real coordinates — the total and the
+    // edit share ONE row (their boxes overlap vertically; baseline align +
+    // align-self:center deliberately differ in TOPS, so top equality is NOT
+    // the expectation), the total sits LEFT of the edit, and both the edit
+    // and the sub row's picker host hug the head card's content right edge
+    const headGeom = await page.evaluate(() => {
+      const panel = document.querySelector('[data-test="receipt-panel-101"]')!
+      const card = panel.querySelector('.receipt-header')!.closest('.card')!
+      const pad = parseFloat(getComputedStyle(card).paddingRight) || 0
+      const contentRight = card.getBoundingClientRect().right - pad
+      const r = (sel: string) => panel.querySelector(sel)!.getBoundingClientRect()
+      return { total: r('[data-test="total"]'), edit: r('[data-test="edit"]'), subEnd: r('.receipt-sub-end'), contentRight }
+    })
+    expect(headGeom.edit.bottom).toBeGreaterThan(headGeom.total.top)
+    expect(headGeom.edit.top).toBeLessThan(headGeom.total.bottom)
+    expect(headGeom.total.right).toBeLessThanOrEqual(headGeom.edit.left + 1)
+    expect(Math.abs(headGeom.edit.right - headGeom.contentRight)).toBeLessThanOrEqual(2)
+    expect(Math.abs(headGeom.subEnd.right - headGeom.contentRight)).toBeLessThanOrEqual(2)
+  })
+
+  // TASK-175 review #1: the chips' own host (.label-dots) wraps when the
+  // five titled chips outgrow the row — at this width the wrap is guaranteed
+  // (chips ≈229px vs ≈188px of content width), so every wrapped line's
+  // right edge is measured, not just the outer .receipt-sub-end box
+  test.describe('head sub wrap (260x780)', () => {
+    test.use({ viewport: { width: 260, height: 780 } })
+
+    test('[covers:web-receipts.head-row-grammar] 頭部副行: 複数ラベルで折返しても .receipt-sub-end は右端・各行チップの右端も右端・label-add 44px は主行要素と重複しない', async ({ page }) => {
+      logPageIssues(page, 'task175-head-sub')
+      // richLabels titles all five labels and puts them on receipt 102
+      await installApiStub(page, { richLabels: true })
+      await page.goto('/receipts/102')
+      await expect(page.locator('[data-test="receipt-panel-102"] .receipt-title')).toBeVisible()
+      const g = await page.evaluate(() => {
+        const panel = document.querySelector('[data-test="receipt-panel-102"]')!
+        const card = panel.querySelector('.receipt-header')!.closest('.card')!
+        const pad = parseFloat(getComputedStyle(card).paddingRight) || 0
+        const contentRight = card.getBoundingClientRect().right - pad
+        const r = (sel: string) => panel.querySelector(sel)!.getBoundingClientRect()
+        // group the sub row's chips into their wrapped lines (same top = one
+        // line) and keep each line's rightmost edge
+        const lines: Array<{ top: number; right: number }> = []
+        for (const chip of Array.from(panel.querySelectorAll('.receipt-sub-end .label-chip'))) {
+          const b = chip.getBoundingClientRect()
+          const line = lines.find((x) => Math.abs(x.top - b.top) <= 4)
+          if (line) line.right = Math.max(line.right, b.right)
+          else lines.push({ top: b.top, right: b.right })
+        }
+        return {
+          contentRight,
+          subEnd: r('.receipt-sub-end'),
+          add: r('[data-test="label-add"]'),
+          total: r('[data-test="total"]'),
+          edit: r('[data-test="edit"]'),
+          lines,
+        }
+      })
+      const dump = JSON.stringify(g)
+      // five chips + the 44px button may wrap the picker's line(s) — the host
+      // stays glued to the head card's content right edge either way (H-5)
+      expect(Math.abs(g.subEnd.right - g.contentRight)).toBeLessThanOrEqual(2)
+      // non-vacuous: the chips really wrapped inside their own host
+      expect(g.lines.length, dump).toBeGreaterThanOrEqual(2)
+      // review #1: EVERY wrapped chip line hugs the right edge (a left-
+      // aligned fallback line misses it by the line's leftover width)
+      for (const line of g.lines) {
+        expect(Math.abs(line.right - g.contentRight), dump).toBeLessThanOrEqual(2)
+      }
+      // the 44px label button never overlaps the MAIN row's total / edit
+      // (separate rows: the vertical spans are disjoint)
+      const mainBottom = Math.max(g.total.bottom, g.edit.bottom)
+      expect(g.add.top).toBeGreaterThanOrEqual(mainBottom - 1)
+      expect(g.add.width).toBeCloseTo(44, 1)
+      expect(g.add.height).toBeCloseTo(44, 1)
+    })
+  })
+
+  // TASK-175 review #2: the main row's worst case as real geometry — the
+  // seeded receipt 113 (longDeletedHead) carries a deleted 削除済み badge,
+  // a delimiter-free long store name and an 8-digit total on ONE row
+  test('[covers:web-receipts.head-row-grammar] 削除済み+長店名+大きい金額の主行: 店名のみellipsis・badgeと合計は非重複・主行はカード内に収まる', async ({ page }) => {
+    logPageIssues(page, 'task175-head-deleted-long')
+    await installApiStub(page, { longDeletedHead: true })
+    await page.goto('/receipts/113')
+    await expect(page.locator('[data-test="receipt-panel-113"] .receipt-title')).toBeVisible()
+    // deleted: no pencil; the badge rides the title (out of the ellipsis
+    // span)
+    await expect(page.locator('[data-test="receipt-panel-113"] [data-test="edit"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="receipt-panel-113"] [data-test="deleted"]')).toBeVisible()
+    const g = await page.evaluate(() => {
+      const panel = document.querySelector('[data-test="receipt-panel-113"]')!
+      const card = panel.querySelector('.receipt-header')!.closest('.card')!
+      const cs = getComputedStyle(card)
+      const box = card.getBoundingClientRect()
+      const contentLeft = box.left + (parseFloat(cs.paddingLeft) || 0)
+      const contentRight = box.right - (parseFloat(cs.paddingRight) || 0)
+      const name = panel.querySelector('.receipt-title-name')!
+      const nb = name.getBoundingClientRect()
+      const badge = panel.querySelector('[data-test="deleted"]')!.getBoundingClientRect()
+      const total = panel.querySelector('[data-test="total"]')!.getBoundingClientRect()
+      const main = panel.querySelector('.receipt-mainrow')!.getBoundingClientRect()
+      return {
+        contentLeft,
+        contentRight,
+        nameClient: name.clientWidth,
+        nameScroll: name.scrollWidth,
+        nameRight: nb.right,
+        badgeLeft: badge.left,
+        badgeRight: badge.right,
+        totalLeft: total.left,
+        totalRight: total.right,
+        mainLeft: main.left,
+        mainRight: main.right,
+        cardScroll: card.scrollWidth,
+        cardClient: card.clientWidth,
+      }
+    })
+    const dump = JSON.stringify(g)
+    // the name alone ellipsizes: its text overflows the clip box (the full
+    // name stays on the title attribute)
+    expect(g.nameScroll, dump).toBeGreaterThan(g.nameClient)
+    expect(g.nameRight, dump).toBeLessThanOrEqual(g.badgeLeft + 1)
+    // the badge (width protected) and the big total never overlap: the
+    // badge ends before the total starts, both on the same main row
+    expect(g.badgeRight, dump).toBeLessThanOrEqual(g.totalLeft + 1)
+    // the whole main row fits inside the head card: no horizontal overflow,
+    // the row spans exactly the card's content width (no pencil — the
+    // total itself is the right edge)
+    expect(g.cardScroll, dump).toBeLessThanOrEqual(g.cardClient + 1)
+    expect(g.mainLeft, dump).toBeGreaterThanOrEqual(g.contentLeft - 1)
+    expect(g.mainRight, dump).toBeLessThanOrEqual(g.contentRight + 1)
+    expect(Math.abs(g.totalRight - g.contentRight), dump).toBeLessThanOrEqual(2)
   })
 })
