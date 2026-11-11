@@ -45,14 +45,23 @@ function qOf(query: Record<string, unknown>): string | undefined {
 const draft = ref(firstString(route.query.q) ?? '')
 const composing = ref(false)
 let timer: ReturnType<typeof setTimeout> | null = null
+// TASK-174 queued every commit behind the FIFO, so its acknowledgement can
+// arrive in route.query.q long after the user kept typing (a pending period
+// push holds the queue). The committed terms wait here until their own
+// landing, so the q watcher below can tell that owned ack — which must leave
+// the newer draft and its debounce alone — from an external change to follow.
+const pendingAcks: Array<string | undefined> = []
 
 function commit(): void {
   if (timer !== null) {
     clearTimeout(timer)
     timer = null
   }
-  const term = draft.value.trim()
-  browsing.patch({ q: term || undefined })
+  const term = draft.value.trim() || undefined
+  // a term equal to the logical q never becomes a write (the coordinator
+  // drops the no-op patch), so it must not wait for an ack either
+  if (term !== browsing.logicalValue('q')) pendingAcks.push(term)
+  browsing.patch({ q: term })
 }
 
 function commitSoon(): void {
@@ -90,6 +99,9 @@ onBeforeUnmount(() => {
 browsing.onBoundary(() => {
   if (timer !== null) clearTimeout(timer)
   timer = null
+  // a boundary drops the queued writes these entries were waiting for (and
+  // resets the draft from the route below), so no ack can arrive for them
+  pendingAcks.length = 0
   draft.value = firstString(route.query.q) ?? ''
 })
 
@@ -97,10 +109,22 @@ browsing.onBoundary(() => {
 watch(
   () => route.query.q,
   (v) => {
-    // the dialog run (or a back-navigation) changed the term underneath:
-    // follow it and stop a pending debounce from overwriting it with the
+    const term = firstString(v) ?? undefined
+    const ack = pendingAcks.indexOf(term)
+    if (ack !== -1) {
+      // this page's own queued commit landing (possibly behind a pending
+      // period push): an older acknowledgement must not overwrite the newer
+      // draft nor stop its debounce — the term it carries will be superseded
+      // by that debounce's own commit
+      pendingAcks.splice(ack, 1)
+      return
+    }
+    // a dialog run (or a back-navigation) changed the term underneath:
+    // follow it, drop the entries whose queued writes a boundary already
+    // discarded, and stop a pending debounce from overwriting it with the
     // stale draft
-    draft.value = firstString(v) ?? ''
+    pendingAcks.length = 0
+    draft.value = term ?? ''
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
