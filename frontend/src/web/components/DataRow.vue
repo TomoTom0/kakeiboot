@@ -1,22 +1,19 @@
 <script setup lang="ts">
-// TASK-167 D-1/D-2 (design: tmp/tasks/tm-167/design_row_hierarchy.md v2):
-// the ONE shared list-row grammar — the main line (the data name 16px w600 +
-// the amount w700 tabular right, the row's strongest figure) over a sub line
-// (the derived representative items 0.8rem muted + the secondary figure +
-// the label dots), with an optional bottom bar riding the caller's track.
-// Every surface's rows (the receipt lists / ranked lists / search / the
-// axis-detail static rows) render through this component; the per-surface
-// .recent-row definitions are gone. The root carries the row's pressability
-// (D-4): `to` renders a RouterLink, `onSelect` a button, neither a plain
-// span — a non-pressable row never washes.
-import { computed, useSlots } from 'vue'
+// TASK-170 W-1: the row grammar's structure lives in
+// shared/components/DataRow.vue (router-free); this thin wrapper is the
+// web's root resolution alone — a `to` renders the RouterLink
+// (a.data-row.is-link, the same DOM as before), everything else passes
+// through untouched: the props, the attrs and ONLY the slots the caller
+// actually passed (none are fabricated here, so the shared hasSub slot
+// detection keeps its behavior — a v-if-false slot does not exist).
 import { RouterLink } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import type { Label } from '@/shared/labels'
-import AppIcon from './AppIcon.vue'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import SharedDataRow from '@/shared/components/DataRow.vue'
 
-const props = withDefaults(
+defineOptions({ inheritAttrs: false })
+
+withDefaults(
   defineProps<{
     /** the row's destination: renders a RouterLink (null = not pressable) */
     to?: RouteLocationRaw | null
@@ -49,71 +46,31 @@ const props = withDefaults(
     chevron: false,
   },
 )
-
-const slots = useSlots()
-// D-3: a row with no sub content at all (the client-built rest rows, whose
-// label already carries the information) renders no sub line
-const hasSub = computed(
-  () =>
-    !!props.subText ||
-    !!props.subFigure ||
-    (props.labels?.length ?? 0) > 0 ||
-    !!slots.sub ||
-    !!slots.figure ||
-    !!slots['sub-end'],
-)
 </script>
 
 <template>
-  <component
-    :is="to ? RouterLink : onSelect ? 'button' : 'span'"
-    class="data-row"
-    :class="{ 'is-link': !!to || !!onSelect }"
-    v-bind="to ? { to } : onSelect ? { type: 'button', onClick: onSelect } : {}"
+  <SharedDataRow
+    :root-as="to ? RouterLink : undefined"
+    :root-props="to ? { to } : undefined"
+    :on-select="onSelect"
+    :name="name"
+    :name-title="nameTitle"
+    :amount="amount"
+    :sub-text="subText"
+    :sub-figure="subFigure"
+    :labels="labels"
+    :chevron="chevron"
+    v-bind="$attrs"
   >
-    <span class="row-main">
-      <slot name="main">
-        <span
-          class="row-name truncate"
-          :title="nameTitle ?? name"
-        >{{ name }}</span>
-      </slot>
-      <slot name="amount">
-        <span class="amount">{{ amount }}</span>
-      </slot>
-      <AppIcon
-        v-if="chevron"
-        class="ranked-chevron"
-        name="chevron-right"
-        :size="12"
-      />
-    </span>
-    <span
-      v-if="hasSub"
-      class="row-sub"
+    <template
+      v-for="(_, slotName) in $slots"
+      :key="slotName"
+      #[slotName]="slotProps"
     >
-      <slot name="sub">
-        <span
-          v-if="subText"
-          class="row-items truncate"
-        >{{ subText }}</span>
-      </slot>
-      <slot name="sub-end" />
-      <span
-        v-if="labels && labels.length"
-        class="row-labels"
-        data-test="row-labels"
-      ><LabelDots
-        :labels="labels"
-        compact
-      /></span>
-      <slot name="figure">
-        <span
-          v-if="subFigure"
-          class="row-fig"
-        >{{ subFigure }}</span>
-      </slot>
-    </span>
-    <slot name="bar" />
-  </component>
+      <slot
+        :name="slotName"
+        v-bind="slotProps ?? {}"
+      />
+    </template>
+  </SharedDataRow>
 </template>

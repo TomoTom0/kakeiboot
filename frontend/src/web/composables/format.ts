@@ -1,5 +1,8 @@
 import { ApiError } from '../api/http'
-import type { TopItem } from '../api/data'
+
+// TASK-170 W-8: topItemsText moved to shared/format (the widget's rows read
+// it too); the web import sites keep this path.
+export { topItemsText } from '@/shared/format'
 
 const dateTime = new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo',
@@ -18,12 +21,6 @@ export function formatDateTime(value: number | string | null | undefined): strin
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '-'
   return dateTime.format(d)
-}
-
-/** TASK-167 D-3: the derived representative items as the sub line's text
- * —「品目A・品目B」. Empty (item-less receipts / rest rows) renders ''. */
-export function topItemsText(items: TopItem[] | null | undefined): string {
-  return (items ?? []).map((i) => i.name).join('・')
 }
 
 export function formatYen(value: number | null | undefined): string {

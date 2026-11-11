@@ -6,6 +6,7 @@
 import { flushPromises } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import type { ReportKind, StatsFilters } from '@/shared/types'
+import { paymentLabel } from '@/shared/format'
 import { draftEnvelope, receiptEnvelope, receiptListEnvelope, statsEnvelope } from '@/widget/fixtures'
 import { fakeHost, mountWidget, result } from './helpers'
 
@@ -25,6 +26,10 @@ describe('widget labels', () => {
     expect(chip.classes()).toContain('label-red')
     expect(chip.text()).toBe('旅行')
     expect(chip.attributes('aria-label')).toBe('旅行')
+    // TASK-175: the chips ride the head sub-row's right-edge host (outside
+    // the context element)
+    expect(chip.element.closest('.receipt-sub-end')).not.toBeNull()
+    expect(chip.element.closest('.receipt-sub-context')).toBeNull()
     expect(detail.wrapper.find('[data-test="receipt-screen"]').text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
 
     // receipt list: compact dots per row, nothing on unlabeled rows, no controls
@@ -94,7 +99,7 @@ describe('widget labels', () => {
     const labeled = await mountWidget(
       fakeHost({ toolOutput: draftEnvelope({ labels: [RED, { color: 'green' as const, title: null }] }) })
     )
-    const chips = labeled.wrapper.findAll('[data-test="draft-screen"] .bb-labels .label-chip')
+    const chips = labeled.wrapper.findAll('[data-test="draft-screen"] .receipt-sub-end .label-chip')
     expect(chips).toHaveLength(2)
     expect(chips[0]!.text()).toBe('旅行')
     expect(chips[0]!.classes()).toContain('label-red')
@@ -102,9 +107,13 @@ describe('widget labels', () => {
     // untitled label: a bare color chip — no text, spoken name only
     expect(chips[1]!.text()).toBe('')
     expect(chips[1]!.classes()).toContain('label-green')
+    // TASK-175: the chips ride the head sub-row's RIGHT-EDGE host — the
+    // payment text lives in the sibling context element, not the same one
+    const sub = chips[0]!.element.closest('.receipt-sub')
+    expect(sub?.querySelector('.receipt-sub-context')?.textContent ?? '').toContain(paymentLabel('credit_card'))
     expect(labeled.wrapper.find('[data-test="draft-screen"]').text()).not.toMatch(/赤|黄|緑|青|紫|ラベル[1-5]|名前なし/)
 
-    // unlabeled draft: nothing rendered
+    // unlabeled draft: nothing rendered (and no empty carrier line)
     const plain = await mountWidget(fakeHost({ toolOutput: draftEnvelope() }))
     expect(plain.wrapper.find('[data-test="draft-screen"] .bb-labels').exists()).toBe(false)
     expect(plain.wrapper.find('[data-test="draft-screen"] .label-chip').exists()).toBe(false)

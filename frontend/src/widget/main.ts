@@ -1,6 +1,10 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
+// TASK-170 W-1: the shared row-grammar / motion sheets come AHEAD of this
+// surface's sheet (the surface may override; the vocabulary is not redefined)
+import '@/shared/styles/row-grammar.css'
+import '@/shared/styles/motion.css'
 import './style.css'
 import { applyTheme, resolveHost } from './host'
 import { useWidgetStore } from './stores/widget'

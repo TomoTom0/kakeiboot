@@ -32,13 +32,29 @@
 // everywhere on the browsing side, TASK-145 D2-2's carry with it) and
 // /search joins the browsing history-back side (the parentTo map keeps the
 // other ten screens). The TASK-164 cases stay red until it lands.
+//
+// TASK-174 (test-first against tmp/tasks/tm-174/design_url-history-entries.md
+// v4): the value-watch write-back is replaced by the store's typed operation
+// notifications feeding a single FIFO that owns the browsing URL writes —
+// ONE history entry per identifiable operation (the same-tick compression
+// "two steps in one tick batch into one push" is WITHDRAWN: A→B→C and A→B→A
+// stack two entries each), the queue's head is the only navigation in
+// flight, an ACKed write never echoes back into the store (the pending-echo
+// guard), every system write (labels / the reset / the patch writers of
+// Receipts filter, Search tab/q, TopbarFilterBar, Stores category, Axis
+// chips, the scope boundary) rides the same queue behind a pending push
+// without cancelling it, and boundaries (an external entry, an unnotified
+// back, a late pop) and failures (a refused / redirected / duplicated
+// navigation, a rejected pop) stop the drain instead of being counted as
+// entries. The TASK-174 cases stay red until it lands.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LocationQuery } from 'vue-router'
+import type { LocationQuery, Router } from 'vue-router'
 import { setDataApi, type DataApi } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
+import { browsingNavigation } from '@/web/composables/browsingNavigation'
 import { direction, navKind } from '@/web/composables/navDirection'
 import { usePeriodStore } from '@/web/stores/period'
-import { ME, cleanup, mockFetch, mountApp, scrollMocks, settle } from './helpers'
+import { ME, cleanup, createManualHistory, mockFetch, mountApp, scrollMocks, settle } from './helpers'
 
 let api: DataApi
 
@@ -87,6 +103,30 @@ async function remount(path: string): Promise<M> {
   setDataApi(api)
   mockFetch(MOCK)
   return mountApp(path)
+}
+
+/** A beforeEach guard holding every MATCHING navigation until release()
+ * (TASK-174's manual-release window: finalize never runs while held, so a
+ * test can hand the coordinator a next operation while the first write's
+ * navigation is still in flight). `held()` counts the parked navigations. */
+function holdGuard(
+  router: Router,
+  shouldHold: (to: { query: LocationQuery }) => boolean = () => true,
+): { release: () => void; held: () => number } {
+  const waiting: Array<() => void> = []
+  let active = true
+  router.beforeEach(async (to) => {
+    if (!active || !shouldHold(to)) return true
+    await new Promise<void>((resolve) => waiting.push(resolve))
+    return true
+  })
+  return {
+    release() {
+      active = false
+      for (const r of waiting.splice(0)) r()
+    },
+    held: () => waiting.length,
+  }
 }
 
 describe('browsing URL sync: period keys (TASK-124 D2)', () => {
@@ -455,7 +495,7 @@ describe('topbar back ‹ on the tabbar-外 screens (TASK-124 D3 + TASK-164 §2-
 })
 
 describe('writeBack push/replace + labels asymmetry (TASK-164 §2-2-1/§2-5)', () => {
-  it('[covers:web-browse.url-user-period-push] 利用者の期間変更（mode切替・range指定・jump）は push で書り戻る（同tickの連続変更は1回のpush・labels同時差分は同一pushに載る）', async () => {
+  it('[covers:web-browse.url-user-period-push] 利用者の期間変更（mode切替・range指定・jump）は push で書り戻る（D1-5識別区間では別々の有効API呼出は別entry・labels同時差分は同一pushに載る）', async () => {
     // the mode switch: the picker's tab rides the new setMode API
     const m = await mountApp('/?month=2026-10')
     await m.wrapper.find('[data-test="filter-period"]').trigger('click')
@@ -478,20 +518,29 @@ describe('writeBack push/replace + labels asymmetry (TASK-164 §2-2-1/§2-5)', (
     expect(q(m).to).toBe('2026-03-31')
     expect(push).toHaveBeenCalledTimes(1)
 
-    // a jump (setMonth — a trend bar press) pushes once; two steps in one
-    // tick batch into ONE push carrying the final value
+    // a jump (setMonth — a trend bar press) pushes once
     const store = usePeriodStore()
     push.mockClear()
     store.setMonth('2026-05')
     await settle()
     expect(q(m).month).toBe('2026-05')
     expect(push).toHaveBeenCalledTimes(1)
+    // TASK-174 D1-5: two VALID calls in one tick are TWO pushes — the
+    // same-tick batching of the old value watch is withdrawn, and the
+    // entries are real: back walks the intermediate, then the prior value
     push.mockClear()
     store.step(-1)
     store.step(-1)
     await settle()
     expect(q(m).month).toBe('2026-03')
-    expect(push).toHaveBeenCalledTimes(1)
+    expect(push).toHaveBeenCalledTimes(2)
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-04')
+    expect(store.month).toBe('2026-04')
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
 
     // a period change with a simultaneous labels diff rides ONE push
     push.mockClear()
@@ -543,6 +592,28 @@ describe('writeBack push/replace + labels asymmetry (TASK-164 §2-2-1/§2-5)', (
     expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
   })
 
+  it('[covers:web-browse.url-system-write-replace] reset は順序付きのsystem要素: user B→user C→reset は両user entryを残して現在entryをデフォルト期間へ置換する（backでCへ戻る）', async () => {
+    const m = await mountApp('/?month=2026-08')
+    const store = usePeriodStore()
+    const push = vi.spyOn(m.router, 'push')
+    store.setMonth('2026-09')
+    store.setMonth('2026-05')
+    await settle()
+    // TASK-174 D2: the reset never cancels the pending user pushes — both
+    // land as entries first, then the reset replaces the CURRENT (2026-05)
+    // entry with the default period
+    store.resetToDefault()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(push).toHaveBeenCalledTimes(2) // the two user pushes only
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-09')
+    await m.router.forward()
+    await settle()
+    expect(q(m).month).toBe('2026-10') // the reset replaced the current entry
+  })
+
   it('[covers:web-browse.url-label-pop-asymmetry] labels単独の変更は履歴に載せないが pop で戻り先 entry の labels ごと復元される（5月・赤 → 6月push → 青replace → ‹ で 5月・赤）', async () => {
     const m = await mountApp('/?month=2026-05')
     // the search dialog opens ONCE and stays open across the toggles (the
@@ -571,44 +642,579 @@ describe('writeBack push/replace + labels asymmetry (TASK-164 §2-2-1/§2-5)', (
     expect(store.labelColors).toEqual(['red'])
   })
 
-  it('[covers:web-browse.url-next-write-discard-off-target] 対象外画面での期間変更は nextWrite を即座に破棄し・対象画面への直接遷移でも keys-less 補完は replace（残留 user 指定の誤 push なし）', async () => {
+  it('[covers:web-browse.url-next-write-discard-off-target] 対象外画面での期間変更は履歴要求として受理されず・対象画面への再流入でも再生しない（補完はreplace）', async () => {
     const m = await mountApp('/settings/general')
     const store = usePeriodStore()
-    // a user period change OFF a sync target: the store watch fires, the
-    // write-back returns early — and the early return itself discards the
-    // one-shot flag (REVIEW-12 #4: the change will never be written, so it
-    // must not stand for the NEXT arrival's keys-less completion to misread
-    // as a user change)
+    // a user period change OFF a sync target is NOT accepted as a history
+    // demand (TASK-174 D1-4): no entry stands behind it — and the demand
+    // does not replay when a browsing target arrives later
     store.setMonth('2026-05')
     await settle()
-    expect(store.nextWrite).toBe('system')
+    const push = vi.spyOn(m.router, 'push')
+    const replace = vi.spyOn(m.router, 'replace')
     // the direct hop to a keys-less target lands a replace completion: the
     // store's period rides the URL without stacking an entry
-    const push = vi.spyOn(m.router, 'push')
     await m.router.push('/')
     await settle()
     expect(q(m).month).toBe('2026-05')
     expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
+    expect(replace).toHaveBeenCalled()
+    // a back cannot walk to the unaccepted month: the only entries are the
+    // settings screen and this completion
+    await m.router.back()
+    await settle()
+    expect(m.router.currentRoute.value.path).toBe('/settings/general')
+    expect(q(m).month).toBeUndefined()
+    // nothing replays the unaccepted demand on a later target arrival either
+    replace.mockClear()
+    await m.router.push('/categories')
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(push).toHaveBeenCalledTimes(2) // the two test navigations only
   })
 
-  it('[covers:web-browse.url-next-write-discard-off-target] 同tick往復（step(-1);step(1)・watch不発火）で立ったフラグは掃き捨てられ keys-less 遷移の補完は replace（REVIEW-12 #3）', async () => {
+  it('[covers:web-browse.url-operation-capture] 同tick往復（step(-1);step(1)）は破棄でなく2操作として保存され back/forward が往復を再現する（旧フラグ掃き捨て前提の撤回）', async () => {
     const m = await mountApp('/?month=2026-10')
     const store = usePeriodStore()
-    // the same-tick round trip ends where it started: the value watch never
-    // fires (nothing changed), while the first step DID legitimately raise
-    // 'user' — the composable's sweep watch drops the orphaned marking at
-    // the end of the tick (a real user change has been consumed through
-    // writeBack by then; only a marking with no write behind it resets)
+    // the same-tick round trip ends where it started, but it is TWO
+    // operations (D1-5: A→B→A stacks two entries — the old sweep that
+    // dropped the round trip when the value watch never fired is withdrawn)
     store.step(-1)
     store.step(1)
-    await settle()
     expect(store.month).toBe('2026-10')
-    expect(store.nextWrite).toBe('system')
-    // ... so a keys-less arrival's completion stays a replace
+    await settle()
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-09') // back lands on the B leg ...
+    expect(store.month).toBe('2026-09')
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10') // ... then the original A
+    await m.router.forward()
+    await settle()
+    expect(q(m).month).toBe('2026-09')
+    expect(store.month).toBe('2026-09')
+  })
+})
+
+// TASK-174 (test-first against tmp/tasks/tm-174/design_url-history-entries.md
+// v4): the operation-notification FIFO owns the browsing URL writes — one
+// entry per identifiable operation (same-tick A→B→C / A→B→A stack two
+// entries each; the old watch-batching compression is withdrawn), max one
+// navigation in flight, an ACKed write never echoes into the store, every
+// system write rides the same queue behind a pending push, and boundaries
+// (an external entry, an unnotified back, a late pop) and failures (a
+// refused / redirected / duplicated navigation, a rejected pop) stop the
+// drain instead of being counted as entries. The new cases stay red until
+// the implementation lands.
+describe('browsing URL sync: one operation, one entry (TASK-174)', () => {
+  it('[covers:web-browse.url-operation-capture] 同tickのA→B→Cは2つの期間entryとして保存され store/画面は最新操作を即座に反映する（watchバッチング圧縮なし）', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
     const push = vi.spyOn(m.router, 'push')
-    await m.router.push('/receipts')
+    // two valid operations in ONE tick: two pushes — the intermediate
+    // 2026-05 must not vanish into watch batching
+    store.setMonth('2026-05')
+    store.setMonth('2026-04')
+    expect(store.month).toBe('2026-04') // the store shows the LATEST at once
+    await settle()
+    expect(push).toHaveBeenCalledTimes(2)
+    // the entries are real and ordered: back walks B, then the original A
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(usePeriodStore().month).toBe('2026-05')
+    await m.router.back()
     await settle()
     expect(q(m).month).toBe('2026-10')
-    expect(push).toHaveBeenCalledTimes(1) // only the test's own navigation
   })
+
+  it('[covers:web-browse.url-serialized-history] 最初のnavigationをguard保留中に次の操作を与えても失われず in-flight は1のまま・解除後に back/forward がA/B/Cを順に再現する', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const hold = holdGuard(m.router)
+    const store = usePeriodStore()
+    store.setMonth('2026-05') // the first write's navigation sits in the guard
+    await settle()
+    // while the first navigation is held, the NEXT operation is accepted
+    // and saved — but no second navigation is issued (max in-flight = 1)
+    store.setMonth('2026-04')
+    await settle()
+    expect(hold.held()).toBe(1)
+    hold.release()
+    await settle()
+    expect(q(m).month).toBe('2026-04')
+    expect(store.month).toBe('2026-04')
+    // the entries stand in operation order: A(2026-10) B(2026-05) C(2026-04)
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    await m.router.forward()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    await m.router.forward()
+    await settle()
+    expect(q(m).month).toBe('2026-04')
+  })
+
+  it('[covers:web-browse.url-pending-echo] store=C のとき保留中のBが確定しても storeを巻き戻さずB由来の再取得・追加writeがない（外部popはimportする）', async () => {
+    const stats = vi.spyOn(api, 'getAnalysis')
+    const m = await mountApp('/?month=2026-10')
+    const hold = holdGuard(m.router)
+    const store = usePeriodStore()
+    store.setMonth('2026-05') // B — held in the guard
+    await settle()
+    store.setMonth('2026-04') // the store is now C
+    await settle()
+    hold.release()
+    await settle()
+    // the queue drained: the URL ends at C ...
+    expect(q(m).month).toBe('2026-04')
+    // ... but B's landing never rolled the store back: 2026-05 drove
+    // exactly ONE analysis (the setMonth) — the B echo issued no re-query
+    expect(stats.mock.calls.filter(([, p]) => p.month === '2026-05')).toHaveLength(1)
+    expect(store.month).toBe('2026-04')
+    // an EXTERNAL pop is the opposite: the landing entry imports
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(store.month).toBe('2026-05')
+  })
+
+  it('[covers:web-browse.url-ordered-system-write] pending期間push中のlabels選択はpushをcancelせずlabelsは最終状態に載る（entry数は期間操作ぶんのみ）', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const hold = holdGuard(m.router)
+    const push = vi.spyOn(m.router, 'push')
+    usePeriodStore().setMonth('2026-05') // the user push — held in the guard
+    await settle()
+    await toggleLabel(m, 'red') // a labels change while the push is pending
+    hold.release()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(q(m).labels).toBe('red')
+    expect(push).toHaveBeenCalledTimes(1) // labels adds no entry
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(q(m).labels).toBe('red') // absent labels retains the selection (D2-1)
+  })
+
+  it('[covers:web-browse.url-ordered-system-write] pending期間push中のReceipts filter適用はpushをcancelせずfilter keysは後続replaceで載る（導出from/toは適用時の期間から算出）', async () => {
+    const m = await remount('/receipts?month=2026-10&labels=red&keep=yes')
+    const push = vi.spyOn(m.router, 'push')
+    const hold = holdGuard(m.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    await m.wrapper.find('[data-test="filters-toggle"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="payment"]').setValue('credit_card')
+    await m.wrapper.find('[data-test="filters"]').trigger('submit')
+    hold.release()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(q(m).labels).toBe('red')
+    expect(q(m).keep).toBe('yes')
+    expect(q(m).payment_method).toBe('credit_card')
+    // the derived from/to ride the patch computed from the APPLIED period —
+    // 2026-05's own bounds, not the stale 2026-10 pair
+    expect(q(m).from).toBe('2026-05-01')
+    expect(q(m).to).toBe('2026-05-31')
+    expect(push).toHaveBeenCalledTimes(1)
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(q(m).payment_method).toBeUndefined()
+  })
+
+  it('[covers:web-browse.url-ordered-system-write] pending期間push中のStores店カテゴリ設定とAxis chip削除はpushをcancelせずpatchだけが後続replaceされる', async () => {
+    // /stores: the store-category toggle
+    const st = await remount('/stores?month=2026-10&labels=red&keep=yes')
+    const stPush = vi.spyOn(st.router, 'push')
+    const stHold = holdGuard(st.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    await st.wrapper.findAll('[data-test="store-category"]')[0]!.trigger('click')
+    stHold.release()
+    await settle()
+    expect(q(st).month).toBe('2026-05')
+    expect(q(st).labels).toBe('red')
+    expect(q(st).keep).toBe('yes')
+    expect(q(st).store_category).toBe('スーパー')
+    expect(stPush).toHaveBeenCalledTimes(1)
+    await st.router.back()
+    await settle()
+    expect(q(st).month).toBe('2026-10')
+    expect(q(st).store_category).toBeUndefined()
+
+    // /axes: the cross-filter chip removal (a store_id delete patch)
+    const ax = await remount('/axes/category/1?month=2026-10&store_id=1&labels=red&keep=yes')
+    const axPush = vi.spyOn(ax.router, 'push')
+    const axHold = holdGuard(ax.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    await ax.wrapper.find('[data-test="chip-store"]').find('.chip-x').trigger('click')
+    axHold.release()
+    await settle()
+    expect(q(ax).month).toBe('2026-05')
+    expect(q(ax).labels).toBe('red')
+    expect(q(ax).keep).toBe('yes')
+    expect(q(ax).store_id).toBeUndefined()
+    expect(axPush).toHaveBeenCalledTimes(1)
+    await ax.router.back()
+    await settle()
+    expect(q(ax).month).toBe('2026-10')
+    expect(q(ax).store_id).toBe('1')
+  })
+
+  it('[covers:web-browse.url-ordered-system-write] pending期間push中の検索語確定（topbar dialog・Search Enter・Search debounce）はpushをcancelせず連続確定は受付順になる', async () => {
+    // on /search with scope=period the period push is accepted; the q
+    // writers (the topbar dialog's submit and the page input's Enter /
+    // debounce) send their patch through the same queue behind the push
+    const m = await remount('/search?q=牛乳&scope=period&month=2026-10&labels=red&keep=yes')
+    const push = vi.spyOn(m.router, 'push')
+    const landed: unknown[] = []
+    m.router.afterEach((to, _from, failure) => { if (!failure) landed.push(to.query.q) })
+    const hold = holdGuard(m.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    // writer 1: the topbar dialog's submit (on /search it replaces q)
+    await m.wrapper.find('[data-test="filter-search"]').trigger('click')
+    await settle()
+    await m.wrapper.find('[data-test="search-dialog-input"]').setValue('パン')
+    await m.wrapper.find('form.search-dialog').trigger('submit')
+    await settle()
+
+    // writers 2 (Enter) and 3 (debounce) land in acceptance order: the
+    // Enter commits at once, the debounce commit fires 300ms later and the
+    // final q is the debounce's (the later acceptance wins, never reordered)
+    await m.wrapper.find('[data-test="search-input"]').setValue('卵')
+    await m.wrapper.find('[data-test="search-input"]').trigger('keydown.enter')
+    await settle()
+    expect(q(m).q).toBe('牛乳')
+    await m.wrapper.find('[data-test="search-input"]').setValue('酒')
+    await new Promise((r) => setTimeout(r, 320))
+    await settle()
+    expect(hold.held()).toBe(1)
+    expect(q(m).month).toBe('2026-10')
+    hold.release()
+    await settle()
+    expect(q(m).q).toBe('酒')
+    expect(q(m).labels).toBe('red')
+    expect(q(m).keep).toBe('yes')
+    expect(q(m).month).toBe('2026-05')
+    expect(q(m).labels).toBe('red')
+    expect(q(m).keep).toBe('yes')
+    expect(push).toHaveBeenCalledTimes(1) // still one period entry only
+    expect(landed).toEqual(['牛乳', 'パン', '卵', '酒'])
+    m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    expect(q(m).q).toBe('牛乳')
+  })
+
+  it('[covers:web-browse.url-ordered-system-write] pending期間push中のSearch tab切替は後続replace・scope切替は先行期間操作を完了してから置換し all後の期間操作は誤受理しない', async () => {
+    // the tab toggle rides behind the pending push
+    const m = await remount('/search?q=牛乳&scope=period&month=2026-10&labels=red&keep=yes')
+    const push = vi.spyOn(m.router, 'push')
+    const hold = holdGuard(m.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    await m.wrapper.find('[data-test="search-tab-items"]').trigger('click')
+    hold.release()
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    expect(q(m).labels).toBe('red')
+    expect(q(m).keep).toBe('yes')
+    expect(q(m).tab).toBe('items')
+    expect(push).toHaveBeenCalledTimes(1)
+    await m.router.back()
+    await settle()
+    expect(q(m).tab).toBeUndefined()
+
+    // the scope toggle is an ORDERED boundary element: the pending period
+    // operation completes first, then the scope replace lands — and once
+    // the scope is all, a period operation is not accepted as a history
+    // demand
+    const se = await remount('/search?q=牛乳&scope=period&month=2026-10&labels=red&keep=yes')
+    const sePush = vi.spyOn(se.router, 'push')
+    const seHold = holdGuard(se.router)
+    usePeriodStore().setMonth('2026-05')
+    await settle()
+    await se.wrapper.find('[data-test="search-scope"]').trigger('click') // period -> all
+    usePeriodStore().setMonth('2026-07') // all accepted, replace still uncommitted
+    await settle()
+    expect(q(se).scope).toBe('period')
+    expect(seHold.held()).toBe(1)
+    seHold.release()
+    await settle()
+    expect(q(se).month).toBeUndefined() // the all-switch dropped the keys
+    expect(q(se).labels).toBe('red')
+    expect(q(se).keep).toBe('yes')
+    expect(q(se).q).toBe('牛乳')
+    expect(sePush).toHaveBeenCalledTimes(1) // the period push stood first
+    await se.router.back()
+    await settle()
+    expect(q(se).month).toBe('2026-10') // the entry before the scope replace
+    expect(q(se).scope).toBe('period')
+    await se.router.forward() // return to the all entry before testing its acceptance rule
+    await settle()
+    expect(q(se).scope).toBeUndefined()
+    sePush.mockClear()
+    usePeriodStore().setMonth('2026-07')
+    await settle()
+    expect(sePush).not.toHaveBeenCalled() // not accepted while scope=all
+    expect(q(se).month).toBeUndefined()
+  })
+
+  it('[covers:web-browse.url-queue-boundary] 外部pushは境界: 保留中の期間pushと未送信操作は破棄され旧queueは再生しない', async () => {
+    const m = await mountApp('/?month=2026-10')
+    // hold ONLY the FIFO write (its target is the month push); the external
+    // entry below passes the guard and interrupts
+    const hold = holdGuard(m.router, (to) => to.query.month === '2026-05')
+    const store = usePeriodStore()
+    store.setMonth('2026-05') // held
+    await settle()
+    store.setMonth('2026-04') // accepted, saved — NOT yet sent
+    await settle()
+    // an EXTERNAL entry: the queue is dropped, not resumed
+    await m.router.push('/stores')
+    await settle()
+    hold.release()
+    await settle()
+    expect(m.router.currentRoute.value.path).toBe('/stores')
+    // the dropped demands never replay: the entries behind /stores are the
+    // initial period and this external push only
+    await m.router.back()
+    await settle()
+    expect(m.router.currentRoute.value.path).toBe('/')
+    expect(q(m).month).toBe('2026-10')
+  })
+
+  it('[covers:web-browse.url-queue-boundary][covers:web-shell.browsing-back] 未通知back（awaiting-pop）は外部replaceのPromise終端では解消せず再押下は追加backなし・後着popは新しい境界として扱う', async () => {
+    const history = createManualHistory()
+    window.history.replaceState({ position: 1 }, '')
+    const m = await mountApp('/?month=2026-10', { history })
+    window.history.replaceState({ position: 2 }, '')
+    const store = usePeriodStore()
+    store.setMonth('2026-05')
+    await settle()
+    // hold the pop notifications, then press ‹: the back moves the position
+    // but its pop never arrives (the awaiting-pop window)
+    history.holdPops()
+    await m.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    await settle()
+    expect(history.goCalls.filter((c) => c.delta < 0)).toHaveLength(1)
+    // an external replace lands while the back's pop is un-notified: its
+    // Promise settling does NOT cancel or resolve the awaited pop
+    await m.router.replace({ query: { month: '2026-06' } })
+    await settle()
+    // the press stays locked — a re-press issues no additional back
+    await m.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    await settle()
+    expect(history.goCalls.filter((c) => c.delta < 0)).toHaveLength(1)
+    // the late pop finally arrives: a NEW boundary — the old queue never
+    // replays (a fresh period operation writes nothing)
+    history.releasePops()
+    await settle()
+    store.setMonth('2026-07')
+    await settle()
+    expect(q(m).month).not.toBe('2026-07')
+  })
+
+  it('[covers:web-browse.url-queue-failure] 拒否（aborted）になった期間pushは成功entryに数えず未送信分は破棄される（後続操作のwriteなし）', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const hold = holdGuard(m.router)
+    // Register before navigation starts: the router snapshots its guard
+    // list at entry. Release the first guard, then actually abort the push.
+    let refused = false
+    m.router.beforeEach(() => {
+      if (refused) return true
+      refused = true
+      return false
+    })
+    const store = usePeriodStore()
+    store.setMonth('2026-05') // held
+    await settle()
+    store.setMonth('2026-04') // saved, unsent
+    await settle()
+    hold.release()
+    await settle()
+    // the aborted push stacked no entry and the unsent demand is dropped:
+    // the URL stands where it was and nothing writes 2026-04
+    expect(q(m).month).toBe('2026-10')
+    expect(store.month).toBe('2026-10') // D4 restores the last committed snapshot
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+  })
+
+  it('[covers:web-browse.url-queue-failure] 同一URLへの外部replace競合は境界・duplicatedはbeforeEachなしで識別しentryに数えない', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
+    store.setMonth('2026-09')
+    await settle() // E1 = 2026-09 stands
+    const hold = holdGuard(m.router, (to) => to.query.month === '2026-05')
+    store.setMonth('2026-05') // held
+    await settle()
+    // an EXTERNAL replace seats the very URL the queue is about to push
+    // (it matches the guard's hold condition too — fire it un-awaited and
+    // let the release settle both)
+    void m.router.replace({ query: { month: '2026-05' } })
+    await settle()
+    hold.release()
+    await settle()
+    // The held push is cancelled by the external entrance (not duplicated).
+    // Neither failure adds a period entry: back returns to 2026-10
+    // directly — no 2026-05 entry was stacked between
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+    // A successful, unambiguous pop establishes a new baseline (D4).
+    // Only newly accepted operations may resume; the old queue never replays.
+    store.setMonth('2026-07')
+    await settle()
+    expect(q(m).month).toBe('2026-07')
+    // Exercise a REAL duplicated result: no beforeEach runs for an already
+    // committed target. The adapter observes its own returned Promise.
+    const guard = vi.fn(() => true)
+    m.router.beforeEach(guard)
+    const result = await browsingNavigation(m.router).write('push', m.router.currentRoute.value.fullPath, {
+      operationId: 999, generation: 0, context: 'duplicate-probe',
+    })
+    expect(result.kind).toBe('duplicate')
+    expect(guard).not.toHaveBeenCalled()
+    await m.router.back()
+    await settle()
+    expect(q(m).month).toBe('2026-10')
+
+  })
+
+  it('[covers:web-browse.url-queue-failure][covers:web-shell.browsing-back] pop拒否 → failure afterEach → 復元前の再押下/期間変更では backロック・drain停止を維持し追加のhistory要求・writeがない', async () => {
+    const history = createManualHistory()
+    window.history.replaceState({ position: 1 }, '')
+    const m = await mountApp('/?month=2026-10', { history })
+    window.history.replaceState({ position: 2 }, '')
+    const store = usePeriodStore()
+    store.setMonth('2026-05')
+    await settle()
+    history.holdRestorations()
+    const push = vi.spyOn(m.router, 'push')
+    const replace = vi.spyOn(m.router, 'replace')
+    const failed = vi.fn()
+    m.router.afterEach((_to, _from, failure) => { if (failure) failed() })
+    // the next navigation (the ‹ press's pop) is held, then REFUSED — the
+    // failure afterEach lands while the history restoration is unconfirmed
+    let armed = true
+    let settleGuard: ((v: boolean) => void) | null = null
+    m.router.beforeEach(() => {
+      if (!armed) return true
+      armed = false
+      return new Promise<boolean>((resolve) => {
+        settleGuard = resolve
+      })
+    })
+    await m.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    await settle()
+    // pop-active: the re-press is ignored (no second back) ...
+    await m.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    await settle()
+    expect(history.goCalls.filter((c) => c.delta < 0)).toHaveLength(1)
+    // ... and a period change is neither accepted nor written while the
+    // pop's navigation waits
+    store.setMonth('2026-07')
+    await settle()
+    expect(q(m).month).toBe('2026-05')
+    // refuse the pop: the navigation aborts (the failure afterEach) and the
+    // router restores the position with a SILENT go — the restoration is
+    // unconfirmed from the public surface, so the lock STAYS
+    settleGuard!(false)
+    await settle()
+    expect(failed).toHaveBeenCalledTimes(1)
+    expect(history.pendingRestorations).toBe(1)
+    expect(history.location).toContain('month=2026-10')
+    expect(history.goCalls.filter((c) => c.trigger === false)).toHaveLength(1)
+    expect(history.goCalls.filter((c) => c.delta < 0)).toHaveLength(1)
+    await m.wrapper.find('[data-test="topbar-back"]').trigger('click')
+    store.setMonth('2026-03')
+    await settle()
+    expect(push).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
+    expect(history.goCalls.filter((c) => c.delta < 0)).toHaveLength(1)
+    history.releaseRestorations()
+    expect(history.location).toContain('month=2026-05')
+    expect(history.pendingRestorations).toBe(0)
+    browsingNavigation(m.router).topbarBack()
+    store.setMonth('2026-02')
+    await settle()
+    expect(browsingNavigation(m.router).historyLocked.value).toBe(true)
+    expect(push).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
+    expect(history.goCalls).toHaveLength(2)
+  })
+})
+
+it.each([
+  { path: '/stores', query: 'store_category=スーパー', key: 'store_category', selector: '[data-test="store-category"]' },
+  { path: '/axes/payment/credit_card', query: 'category=食費', key: 'category', selector: '[data-test="chip-category"] .chip-x' },
+  { path: '/axes/category/1', query: 'store_category=スーパー', key: 'store_category', selector: '[data-test="chip-store_category"] .chip-x' },
+])('[covers:web-browse.url-ordered-system-write] pending push preserves entry and unrelated keys during $path $key removal', async ({ path, query, key, selector }) => {
+  const m = await mountApp(`${path}?month=2026-10&labels=red&keep=yes&${query}`)
+  const original = q(m)[key]
+  const hold = holdGuard(m.router)
+  const push = vi.spyOn(m.router, 'push')
+  const replace = vi.spyOn(m.router, 'replace')
+  usePeriodStore().setMonth('2026-05')
+  await settle()
+  await m.wrapper.find(selector).trigger('click')
+  await settle()
+  expect(hold.held()).toBe(1)
+  expect(replace).not.toHaveBeenCalled()
+  expect(q(m).month).toBe('2026-10')
+  hold.release()
+  await settle()
+  expect(push).toHaveBeenCalledTimes(1)
+  expect(replace).toHaveBeenCalledTimes(1)
+  expect(q(m)).toEqual({ month: '2026-05', labels: 'red', keep: 'yes' })
+  m.router.back()
+  await settle()
+  expect(q(m)).toEqual({ month: '2026-10', labels: 'red', keep: 'yes', [key]: original })
+  m.router.forward()
+  await settle()
+  expect(q(m)).toEqual({ month: '2026-05', labels: 'red', keep: 'yes' })
+})
+
+it('[covers:web-browse.url-ordered-system-write] scope all→period受付で確定前から期間操作を受理しFIFO順と非所有queryを保持する', async () => {
+  const m = await mountApp('/search?q=牛乳&scope=period&month=2026-10&labels=red&keep=yes')
+  const hold = holdGuard(m.router)
+  const push = vi.spyOn(m.router, 'push')
+  const landed: Array<{ scope: unknown; month: unknown }> = []
+  m.router.afterEach((to, _from, failure) => {
+    if (!failure) landed.push({ scope: to.query.scope, month: to.query.month })
+  })
+  usePeriodStore().setMonth('2026-05')
+  await settle()
+  await m.wrapper.find('[data-test="search-scope"]').trigger('click') // all accepted
+  usePeriodStore().setMonth('2026-07') // ignored for history while logically all
+  await m.wrapper.find('[data-test="search-scope"]').trigger('click') // period accepted
+  usePeriodStore().setMonth('2026-06') // accepted before either scope replace lands
+  await settle()
+  expect(hold.held()).toBe(1)
+  expect(q(m).month).toBe('2026-10')
+  hold.release()
+  await settle()
+  expect(landed).toEqual([
+    { scope: 'period', month: '2026-05' },
+    { scope: undefined, month: undefined },
+    { scope: 'period', month: '2026-07' },
+    { scope: 'period', month: '2026-06' },
+  ])
+  expect(push).toHaveBeenCalledTimes(2)
+  expect(q(m)).toEqual({ q: '牛乳', scope: 'period', month: '2026-06', labels: 'red', keep: 'yes' })
+  m.router.back()
+  await settle()
+  expect(q(m).month).toBe('2026-07')
+  m.router.back()
+  await settle()
+  expect(q(m).month).toBe('2026-10')
 })

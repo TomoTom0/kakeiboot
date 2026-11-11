@@ -1,14 +1,21 @@
 <script setup lang="ts">
 // view=draft (spec §11-2): ledger badge, header (with the draft's label
 // chips, TASK-21), duplicate band, image state, line list (unknown category
-// in warning color), totals diff, revision and the approve button (spec
-// §11-3). Editing happens in the conversation.
+// in warning color), totals diff, and the approve button (spec §11-3).
+// Editing happens in the conversation. TASK-175 H-7/H-9: the head rides the
+// SHARED ReceiptHeader component — one MAIN row (the store name + the
+// inline-label total at its right, no actions on the widget) over one SUB
+// row (the muted context text + the LabelChip list at the right edge), and
+// no operating-meta line (the draft / revision numbers are edit-lock data,
+// never displayed).
 import { computed, ref } from 'vue'
 import type { DraftEnvelope } from '@/shared/types'
 import MoneyAmount from '@/shared/components/MoneyAmount.vue'
 import ItemTable, { type ItemRow } from '@/shared/components/ItemTable.vue'
-import LabelDots from '@/shared/components/LabelDots.vue'
+import LabelChip from '@/shared/components/LabelChip.vue'
+import ReceiptHeader from '@/shared/components/ReceiptHeader.vue'
 import { paymentLabel } from '@/shared/format'
+import { labelIndexOf } from '@/shared/labels'
 import LedgerBadge from '../components/LedgerBadge.vue'
 import DuplicateBand from '../components/DuplicateBand.vue'
 import DetailImage from '../components/DetailImage.vue'
@@ -20,6 +27,7 @@ const selected = ref<number | null>(null)
 
 const d = computed(() => props.envelope.draft)
 const p = computed(() => d.value.payload)
+const storeName = computed(() => p.value.store_name ?? p.value.store_name_raw ?? '店名未設定')
 const catStatus = computed(() => new Map(d.value.resolution.categories.map((c) => [c.line_no, c])))
 const rows = computed<ItemRow[]>(() =>
   p.value.items.map((it) => {
@@ -49,28 +57,32 @@ function select(lineNo: number) {
     data-test="draft-screen"
   >
     <LedgerBadge :ledger="envelope.ledger" />
-    <header class="bb-head">
-      <h2 class="bb-title">
-        {{ p.store_name ?? p.store_name_raw ?? '店名未設定' }}
-      </h2>
-      <p class="bb-muted">
+    <ReceiptHeader>
+      <template #title>
+        <span
+          class="receipt-title-name"
+          :title="storeName"
+        >{{ storeName }}</span>
+      </template>
+      <template #total>
+        <MoneyAmount :value="p.total_amount ?? d.resolution.items_total" />
+      </template>
+      <template #context>
         {{ p.purchased_on ?? '日付未設定' }}<template v-if="p.purchased_time">
           {{ p.purchased_time }}
-        </template> ・ {{ paymentLabel(p.payment_method) }}
-      </p>
-      <LabelDots
-        v-if="d.labels?.length"
-        :labels="d.labels"
-        class="bb-labels"
-      />
-      <p class="bb-total">
-        <span>合計</span>
-        <MoneyAmount :value="p.total_amount ?? d.resolution.items_total" />
-      </p>
-      <p class="bb-muted bb-small">
-        下書き #{{ d.draft_id }} ・ rev {{ d.revision }}
-      </p>
-    </header>
+        </template> ・ {{ paymentLabel(p.payment_method) }}<template v-if="p.store_category">
+          ・ {{ p.store_category }}
+        </template>
+      </template>
+      <template #sub-end>
+        <LabelChip
+          v-for="l in d.labels ?? []"
+          :key="l.color"
+          :label="l"
+          :index="labelIndexOf(l.color)"
+        />
+      </template>
+    </ReceiptHeader>
 
     <DuplicateBand
       :duplicates="d.possible_duplicates"
@@ -104,12 +116,13 @@ function select(lineNo: number) {
 
     <ItemTable
       :rows="rows"
+      :items-total="d.resolution.items_total"
       :selected="selected"
       @select="select"
     />
     <p
       v-if="p.note"
-      class="bb-note"
+      class="receipt-note"
     >
       {{ p.note }}
     </p>

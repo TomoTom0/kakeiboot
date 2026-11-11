@@ -13,6 +13,7 @@ import {
 import { errorCodeOf, errorMessage, formatYen } from '../composables/format'
 import { PAYMENT_LABEL } from '../composables/labels'
 import AppIcon from './AppIcon.vue'
+import ReceiptHeader from '@/shared/components/ReceiptHeader.vue'
 import { dayLabel } from '../composables/period'
 import { useCatalogStore } from '../stores/catalog'
 import { usePeriodStore } from '../stores/period'
@@ -139,6 +140,12 @@ function applyReceipt(next: ReceiptView): void {
   receipt.value = next
   emit('changed', next)
 }
+
+/** The head title's full text (TASK-175 H-1): the name alone ellipsizes, so
+ * the whole name rides the .receipt-title-name title attribute. */
+const storeName = computed(
+  () => receipt.value?.store?.name ?? receipt.value?.store_name_raw ?? '店名なし',
+)
 
 // Receipt image (spec_mcp-tools.md 11-5): the URL comes only from the API
 // response and must point at /media/img/ — anything else is not rendered.
@@ -361,66 +368,84 @@ const labelSlotProps = computed(() => ({
         </button>
       </div>
 
-      <section class="card receipt-head">
-        <div>
-          <h2
-            class="detail-title"
-            tabindex="-1"
-          >
-            <span data-test="store-name"><RouterLink
-                                           v-if="receipt.store"
-                                           class="store-link hover-ink"
-                                           :to="{ path: `/axes/store/${receipt.store.store_id}`, query: linkQuery }"
-                                         >{{ receipt.store.name }}</RouterLink>
+      <!-- TASK-175 H-1..H-9: the head rides the SHARED ReceiptHeader — one
+           MAIN row (store name + the inline-label total at its right + the
+           pencil at the far right) over one SUB row (the context links + the
+           labels slot at the right edge); the .receipt-side column stack is
+           gone and the total never takes a row of its own -->
+      <section class="card">
+        <ReceiptHeader>
+          <template #title>
+            <span
+              class="receipt-title-name"
+              data-test="store-name"
+              :title="storeName"
+            ><RouterLink
+               v-if="receipt.store"
+               class="store-link hover-ink"
+               :to="{ path: `/axes/store/${receipt.store.store_id}`, query: linkQuery }"
+             >{{ receipt.store.name }}</RouterLink>
               <template v-else>{{ receipt.store_name_raw ?? '店名なし' }}</template></span>
             <span
               v-if="receipt.deleted_at"
               class="badge badge-danger"
               data-test="deleted"
             >削除済み</span>
-          </h2>
-          <!-- TASK-167 D-10: the chip tags row is gone — the payment method
-               and the store category ride as inline muted links on the
-               datetime line, and the labels slot closes the line -->
-          <p class="muted receipt-when">
-            {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}<template v-if="receipt.payment_method">・<RouterLink
-              class="when-link hover-ink"
-              :to="{ path: '/receipts', query: { payment_method: receipt.payment_method, ...linkQuery } }"
-              data-test="payment-method"
-            >{{ PAYMENT_LABEL[receipt.payment_method] }}</RouterLink></template><template v-if="receipt.store?.category">・<RouterLink
-              class="when-link hover-ink"
-              :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
-              data-test="store-category"
-            >{{ receipt.store.category }}</RouterLink></template><slot
-              name="labels"
-              v-bind="labelSlotProps"
-            />
-          </p>
-        </div>
-        <div class="receipt-side">
-          <!-- TASK-167 D-7: the edit action is a pencil icon-only ibtn at the
-               head's top-right (above the total) — its name lives in the
-               aria-label alone -->
-          <button
-            v-if="!receipt.deleted_at"
-            class="ibtn"
-            type="button"
-            aria-label="修正"
-            title="修正"
-            data-test="edit"
-            @click="startEdit"
-          >
-            <AppIcon name="pencil" />
-          </button>
-          <div class="receipt-total">
-            <span class="muted small">合計</span>
-            <strong data-test="total">{{ formatYen(receipt.total_amount ?? receipt.items_total) }}</strong>
+          </template>
+          <template #total>
+            {{ formatYen(receipt.total_amount ?? receipt.items_total) }}
+          </template>
+          <template #actions>
+            <!-- TASK-167 D-7 / TASK-175 H-2: the edit action is a pencil
+                 icon-only ibtn at the MAIN row's far right (after the total)
+                 — its name lives in the aria-label alone -->
+            <button
+              v-if="!receipt.deleted_at"
+              class="ibtn"
+              type="button"
+              aria-label="修正"
+              title="修正"
+              data-test="edit"
+              @click="startEdit"
+            >
+              <AppIcon name="pencil" />
+            </button>
+          </template>
+          <template #total-diff>
             <span
               v-if="receipt.total_diff"
               class="warn small"
             >明細合計 {{ formatYen(receipt.items_total) }}（差額 {{ formatYen(receipt.total_diff) }}）</span>
-          </div>
-        </div>
+          </template>
+          <template #context>
+            <!-- TASK-167 D-10: the chip tags row is gone — the payment method
+                 and the store category ride as inline muted links inside the
+                 sub row's ONE context element -->
+            {{ receipt.purchased_on ? dayLabel(receipt.purchased_on) : '日付なし' }} {{ receipt.purchased_time ?? '' }}<template v-if="receipt.payment_method">
+              ・<RouterLink
+                class="when-link hover-ink"
+                :to="{ path: '/receipts', query: { payment_method: receipt.payment_method, ...linkQuery } }"
+                data-test="payment-method"
+              >
+                {{ PAYMENT_LABEL[receipt.payment_method] }}
+              </RouterLink>
+            </template><template v-if="receipt.store?.category">
+              ・<RouterLink
+                class="when-link hover-ink"
+                :to="{ path: '/stores', query: { store_category: receipt.store.category, ...linkQuery } }"
+                data-test="store-category"
+              >
+                {{ receipt.store.category }}
+              </RouterLink>
+            </template>
+          </template>
+          <template #sub-end>
+            <slot
+              name="labels"
+              v-bind="labelSlotProps"
+            />
+          </template>
+        </ReceiptHeader>
       </section>
 
       <section
@@ -635,6 +660,13 @@ const labelSlotProps = computed(() => ({
               </tr>
             </tfoot>
           </table>
+          <p
+            v-if="receipt.note"
+            class="receipt-note"
+            data-test="note"
+          >
+            {{ receipt.note }}
+          </p>
         </section>
 
         <section

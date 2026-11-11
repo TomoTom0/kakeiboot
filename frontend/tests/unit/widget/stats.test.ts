@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import type { ReportKind } from '@/shared/types'
 import { statsEnvelope, statsMeta, trendMatrix } from '@/widget/fixtures'
@@ -514,5 +516,25 @@ describe('stats dashboard', () => {
     await btn().trigger('click')
     expect(host.requestDisplayMode).toHaveBeenLastCalledWith('inline')
     expect(btn().text()).toBe('全画面')
+  })
+
+  // TASK-170 W-5 (design: tmp/tasks/tm-170/design_widget-row-grammar.md v3
+  // §2): the totals card's value climbs to the web total's strongest tier —
+  // 1.9rem w700 (the old 1.5rem is gone) — and the contract-only table
+  // fallback aligns its amounts (w700 tabular right). Static: the tier is a
+  // stylesheet property jsdom cannot evaluate.
+  it('[covers:widget.stats-total-tier] 合計カードの値は最強階層（1.9rem w700）・table fallback の金額は w700 tabular right', async () => {
+    const { wrapper } = await mountWidget(fakeHost({ toolOutput: statsEnvelope('monthly_overview') }))
+    expect(wrapper.find('[data-test="totals-card"] .bb-card__value').exists()).toBe(true)
+    const css = readFileSync(resolve(process.cwd(), 'src/widget/style.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const value = /\.bb-card__value\s*\{[^}]*\}/.exec(css)
+    expect(value, '.bb-card__value rule').not.toBeNull()
+    expect(value![0]).not.toMatch(/font-size:\s*1\.5rem/)
+    expect(value![0]).toMatch(/font-size:\s*1\.9rem/)
+    expect(value![0]).toMatch(/font-weight:\s*700/)
+    const td = /\.bb-table[^{}]*td[^{]*\{[^}]*\}/.exec(css)
+    expect(td, '.bb-table td rule').not.toBeNull()
+    expect(td![0]).toMatch(/font-weight:\s*700/)
+    expect(td![0]).toMatch(/tabular-nums/)
   })
 })

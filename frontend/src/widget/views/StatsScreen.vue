@@ -285,7 +285,7 @@ async function onPeriod(e: Event) {
 
     <ul
       v-if="envelope.notes.length > 0"
-      class="bb-notes"
+      class="bb-stat-notes"
     >
       <li
         v-for="(n, i) in envelope.notes"

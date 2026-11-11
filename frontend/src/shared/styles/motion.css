@@ -1,0 +1,21 @@
+/* The single appear-fade grammar (TASK-146 §3 遷移全数表 #18/#20; TASK-170
+   W-9 moved the vocabulary's home here so both entry points — web/main.ts
+   and widget/main.ts — import the ONE definition): the appended list rows,
+   the manage screens' inline state changes and the widget's list / item
+   expansions all ride this opacity fade plus the FLIP move member. The fade
+   timing lives on the -active pair once; the from/to pair only sets the
+   origin. Reduced motion swaps every member for an instant change. */
+.bb-appear-enter-active,
+.bb-appear-leave-active { transition: opacity 0.16s ease; }
+.bb-appear-enter-from,
+.bb-appear-leave-to { opacity: 0; }
+/* the move member (TASK-171, PR#4 review): a departing row keeps its layout
+   box through the leave fade, so the survivors' close-up eases through the
+   FLIP transform at the fade's own grade instead of teleporting */
+.bb-appear-move { transition: transform 0.16s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bb-appear-enter-active,
+  .bb-appear-leave-active,
+  .bb-appear-move { transition: none; }
+}

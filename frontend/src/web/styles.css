@@ -951,17 +951,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 
 .confirm { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid var(--bb-danger); border-radius: var(--bb-radius); }
 
-.items { width: 100%; border-collapse: collapse; margin: 0.5rem 0; }
-.items th, .items td { padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--bb-border); text-align: left; }
-.items th { color: var(--bb-muted); font-size: 0.8rem; font-weight: 600; }
-.items .num { text-align: right; font-variant-numeric: tabular-nums; }
-/* TASK-167 D-6: the item rows are not pressable — no hover wash (D-4); the
-   amount cell takes the mid tier of the three-tier hierarchy (w600) */
-.items td.num { font-weight: 600; }
-.items .neg { color: var(--bb-danger); }
+/* TASK-170 W-3: the .items token family moved to
+   shared/styles/row-grammar.css (the single definition point the web table
+   and the widget list both reference) */
 .item-edit { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.4rem; align-items: center; }
-
-.detail-title { font-size: 1.25rem; margin: 0 0 0.25rem; }
 
 .guide { margin-top: 1.25rem; padding-top: 0.75rem; border-top: 1px solid var(--bb-border); font-size: 0.9rem; }
 
@@ -1430,59 +1423,9 @@ h3.zone-title { font-size: 0.85rem; }
 .bar-col.stacked { position: relative; }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
-/* TASK-167 D-1/D-2 (design_row_hierarchy.md §2): the ONE shared two-line
-   row grammar (the DataRow component) — the main line (the data name 16px
-   w600 + the amount w700 tabular at the right, the row's strongest figure)
-   over a sub line (the derived representative items, the secondary figure
-   and the label dots) at 0.8rem muted. The rows grow past the old one-line
-   44px; the per-surface recent-row definitions are gone. The row wash is
-   pressable-rows-only and lives in the hover media block below (D-4) */
-.data-row {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  row-gap: 2px;
-  min-height: 52px;
-  padding: 0.25rem 0.5rem;
-  margin: 0 -0.5rem;
-  width: 100%;
-  border-radius: 8px;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  text-decoration: none;
-}
-/* scoped under .data-row: the settings `.row` grammar keeps its own bare
-   .row-main (the manage block above, flex: 1 1 14rem) — unscoped, that
-   basis leaks into this column flex and stretches the row's main line to
-   14rem of height, and this flex/baseline leaks into the settings rows */
-.data-row .row-main { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; flex: none; }
-.row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.data-row .amount { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
-.row-sub {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
-  font-size: 0.8rem;
-  color: var(--bb-muted);
-}
-.row-items { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-fig { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* TASK-167 D-4: the element-local hover family — a pressable in-row /
-   in-panel element (the detail links, the inline when-links, the link
-   buttons) reacts at its own boundary (underline + accent); non-pressable
-   text never reacts. Touch never sees hover, so the reactions live inside
-   the hover-capable media only (the TASK-130 §2-1 guard, extended); the
-   keyboard focus takes the same reaction outside the media */
-@media (hover: hover) {
-  .hover-ink:hover { text-decoration: underline; color: var(--bb-accent); }
-  a.data-row.is-link:hover,
-  button.data-row.is-link:hover,
-  a.week-row.is-link:hover,
-  button.week-row.is-link:hover { background-color: var(--bb-hover); }
-}
-.hover-ink:focus-visible { color: var(--bb-accent); text-decoration: underline; }
+/* TASK-170 W-1: the .data-row family, the hover-ink family and the row
+   affordances moved to shared/styles/row-grammar.css (both entry points
+   import it ahead of this sheet) */
 /* --- /search (TASK-41): the two-row head, the flat result rows and the
    item rows' two-line composition. Both tabs' rows ride the shared
    .data-row grammar (TASK-167; REVIEW-15 中1 moved the item tab over too —
@@ -1668,24 +1611,6 @@ h3 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--bb-muted); }
    padding keeps the text and the bar from sharing pixels */
 .ranked-row { position: relative; border-radius: 10px; padding-bottom: calc(var(--row-bar-h) + 4px); }
 .ranked-row .row-main { gap: 8px; }
-/* link rows (RankedList `to` / `select`, TASK-74 §4-6 / TASK-65): the same
-   box plus the affordances — the wash lives in the hover media block above
-   (TASK-167 D-4). `select` rows render as <button> (in-place filter) */
-a.ranked-row.is-link,
-button.ranked-row.is-link,
-a.data-row.is-link,
-button.data-row.is-link,
-a.week-row.is-link,
-button.week-row.is-link { cursor: pointer; transition: background-color 0.15s; }
-a.ranked-row.is-link:focus-visible,
-button.ranked-row.is-link:focus-visible,
-a.data-row.is-link:focus-visible,
-button.data-row.is-link:focus-visible,
-a.week-row.is-link:focus-visible,
-button.week-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
-button.ranked-row,
-button.data-row,
-button.week-row { border: 0; background-color: transparent; }
 .ranked-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ranked-share { color: var(--bb-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .ranked-chevron { color: var(--bb-muted); flex: none; }
@@ -1991,7 +1916,6 @@ button.row-seg:focus-visible {
 /* label dots of a list row (TASK-17): the labels cell of the one-line rows —
    never wraps (review L5): many dots / the 削除済み badge would grow the row
    past the 44px line (§6-4), so the overflow clips instead */
-.row-labels { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 0.25rem; overflow: hidden; }
 .more-btn { width: 100%; margin-top: 0.75rem; }
 
 /* ------------------------------------------------------ labels (TASK-17/26) */
@@ -2071,7 +1995,6 @@ button.row-seg:focus-visible {
   flex: none;
   width: 44px;
   height: 44px;
-  margin: -8px 0;
   padding: 0;
   background: none;
   border: none;
@@ -2187,13 +2110,16 @@ button.row-seg:focus-visible {
    carrier for the bb-appear grammar, no bullet or indent of its own */
 .feed-list { list-style: none; margin: 0; padding: 0; }
 
+/* TASK-175 H-6: the nav is a grid whose equal minmax(0,1fr) sides keep the
+   middle group at the nav's EXACT centre — the back link at the left edge,
+   the ‹ position › group in the middle (the arrows flank the number) */
 .feed-nav {
   position: sticky;
   top: var(--topbar-h);
   z-index: 10;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 0.75rem;
   padding: 0.4rem 0.6rem;
@@ -2202,10 +2128,13 @@ button.row-seg:focus-visible {
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius);
 }
-.feed-back { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+/* min-width:0 keeps the side column's auto minimum (content width) from
+   pushing the centred group off-centre on narrow widths — the back link
+   compresses first */
+.feed-back { display: inline-flex; align-items: center; gap: 0.2rem; min-width: 0; overflow: hidden; font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+.feed-move { display: inline-flex; flex-wrap: nowrap; align-items: center; justify-self: center; gap: 0.25rem; }
+.feed-move .icon-btn { width: 44px; height: 44px; }
 .feed-position { font-variant-numeric: tabular-nums; }
-.feed-nav-buttons { display: inline-flex; gap: 0.25rem; }
-.feed-nav-buttons .icon-btn { width: 44px; height: 44px; }
 
 .receipt-panel { margin-bottom: 1rem; min-width: 0; }
 /* while the detail fetch is in flight the panel body is empty (v-if
@@ -2281,31 +2210,25 @@ button.row-seg:focus-visible {
 .io-row .msg { width: 100%; margin: 0.75rem 0 0; }
 
 /* receipt detail — TASK-167: the head's chip tags row is gone (the payment
-   method and the store category ride as inline muted links on the datetime
-   line), the edit action is the pencil ibtn at the head's top-right, and
-   the item list takes the three-tier typography (the zone h2s are gone) */
-.receipt-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
-.receipt-head p { margin: 0.1rem 0; }
-.receipt-side { display: flex; flex-direction: column; align-items: flex-end; gap: 0.4rem; }
-.receipt-when { font-size: 0.85rem; }
+   method and the store category ride as inline muted links in the head's
+   context element), the edit action is the pencil ibtn at the head main
+   row's right end, and the item list takes the three-tier typography (the
+   zone h2s are gone). TASK-175 H-9: the head's own vocabulary (the column
+   stack, the title, the when line, the total) lives in
+   shared/styles/row-grammar.css — the .receipt-header family */
 .when-link { color: inherit; text-decoration: none; }
 /* detail links into the hierarchy pages (TASK-74 §4-8): the item category
  * is an inline muted small string after the name (TASK-167 D-5 — no chip
  * padding, never its own line); the store name keeps the link look. Both
- * react through the shared .hover-ink family (D-4) */
-.items td .cat-link, .items td .small { font-size: 0.78rem; }
+ * react through the shared hover family (D-4; TASK-170: the family lives in
+ * shared/styles/row-grammar.css) */
 .cat-link { color: var(--bb-muted); text-decoration: none; }
 .store-link { text-decoration: none; }
-.receipt-total { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
-.receipt-total strong { font-size: 1.9rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .receipt-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
 .receipt-body .card { margin-bottom: 0; }
 .receipt-body .card:only-child { grid-column: 1 / -1; }
-/* TASK-167 D-6: the 明細合計 row — the rule above it, a muted small w600
-   label and the w700 tabular value (the top tier under the head total) */
-.items tfoot td { border-top: 1px solid var(--bb-border); border-bottom: 0; }
-.items tfoot td:first-child { font-size: 0.85rem; font-weight: 600; color: var(--bb-muted); }
-.items tfoot td.num { font-weight: 700; }
+/* TASK-170 W-3: the .items tfoot tokens moved to
+   shared/styles/row-grammar.css with the rest of the item family */
 .btn-quiet { border-color: transparent; background: transparent; color: var(--bb-muted); font-weight: 500; }
 .btn-quiet:hover:not(:disabled) { color: var(--bb-fg); }
 .deleted-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 1rem; }
@@ -2474,23 +2397,8 @@ button.row-seg:focus-visible {
    column rhythm moves inside it (the stack itself now holds one child) */
 .content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
 
-/* the single appear-fade grammar (TASK-146 §3 遷移全数表 #18/#20): the ONE
-   shared vocabulary the appended rows (Search / the receipts list / the
-   feed's tail fetch) and the manage screens' inline state changes (the row
-   editor, the add row, the archived rows, the fold children) all ride — an
-   opacity fade in the bb-fade-in family plus the FLIP move member below,
-   nothing fancier. The fade timing lives on the -active pair once; the
-   from/to pair only sets the origin */
-.bb-appear-enter-active,
-.bb-appear-leave-active { transition: opacity 0.16s ease; }
-.bb-appear-enter-from,
-.bb-appear-leave-to { opacity: 0; }
-/* the move member (TASK-171, PR#4 review): a departing row keeps its layout
-   box through the leave fade, so the survivors' close-up (the manage
-   screens' archive / merge, the AppearList reorder) eases through the FLIP
-   transform at the fade's own grade instead of teleporting — one shared
-   rule, no per-page move grammar */
-.bb-appear-move { transition: transform 0.16s ease; }
+/* TASK-170 W-9: the bb-appear vocabulary moved to
+   shared/styles/motion.css (both entry points import it) */
 
 /* messages (errors / notices) fade in when inserted (the copy confirmation
    moved to the button's icon swap, TASK-48) */
@@ -2615,14 +2523,12 @@ button.row-seg:focus-visible {
   .ledger-chip { transition: none; }
   .cat-fold .icon { transition: none; }
   /* TASK-146 §3: the vocabulary's new members are off as well — the scrim
-     / backdrop fades and the bb-appear grammar (the JS side skips them
-     too; these are the second guard) */
+     / backdrop fades (the JS side skips them too; these are the second
+     guard). The bb-appear members' own guard lives in
+     shared/styles/motion.css (TASK-170 W-9) */
   .scrim,
   .popover-scrim,
   .dialog-backdrop { transition: none; }
-  .bb-appear-enter-active,
-  .bb-appear-leave-active,
-  .bb-appear-move { transition: none; }
   .zone { transition: none; }
   /* TASK-161 §2-2/§7: the period-move vocabulary's new members are off as
      well — the row-bar width transition and the label's micro move (the JS

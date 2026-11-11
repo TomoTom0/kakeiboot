@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
+import { useRoute } from 'vue-router'
 import type { Label, LabelColor } from '@/shared/labels'
 import { useDataApi, type AnalysisResult, type AnalysisTrendResult, type PaymentMethod, type ReceiptListQuery, type ReceiptSummary, type StatsRow } from '../api/data'
 import AppIcon from '../components/AppIcon.vue'
@@ -35,7 +36,7 @@ import { usePeriodStore } from '../stores/period'
 // links from the other screens set them through the URL query.
 const api = useDataApi()
 const route = useRoute()
-const router = useRouter()
+const browsing = useBrowsingQuery()
 const period = usePeriodStore()
 const { markReady } = usePageReady()
 const rootEl = ref<HTMLElement | null>(null)
@@ -228,20 +229,15 @@ function togglePayment(method: PaymentMethod): void {
 }
 
 function syncQuery(): void {
-  // keep the filters and the feed-round-trip context in the URL: rows link
-  // back into the feed with this same context. The period mode keys and
-  // labels= belong to the shell-level URL sync (TASK-124 D2-5) — the replace
-  // starts from the current query so their present values ride along, and
-  // from/to (the range's derived value, D2-4) lands here for the feed round
-  // trip (a reload/deep link restores the mode off the mode key, TASK-57 A16)
-  const context = listQueryToContext(listQuery())
-  delete context.labels
-  const query: LocationQueryRaw = { ...route.query, ...context }
-  // a dropped filter key must leave the URL too — the spread above only adds
-  for (const k of ['store', 'item', 'category', 'payment_method', 'include_deleted']) {
-    if (!(k in context)) delete query[k]
-  }
-  void router.replace({ query })
+  // Capture only filter ownership; the coordinator derives from/to from
+  // the period actually committed when this element reaches the FIFO head.
+  browsing.patch({
+    store: filters.store || undefined,
+    item: filters.item || undefined,
+    category: filters.category || undefined,
+    payment_method: filters.paymentMethod || undefined,
+    include_deleted: filters.includeDeleted ? '1' : undefined,
+  }, true)
 }
 
 const activeFilters = computed(() =>

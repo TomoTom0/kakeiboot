@@ -1,3 +1,4 @@
+import { createBrowsingNavigation, installBrowsingNavigation } from './composables/browsingNavigation'
 import { createRouter, type RouterHistory, type RouteRecordRaw } from 'vue-router'
 import type { Pinia } from 'pinia'
 import { advanceRestoreGeneration, navKind, pendingRestore, updateDirection } from './composables/navDirection'
@@ -128,6 +129,7 @@ export const routes: RouteRecordRaw[] = [
 ]
 
 export function createAppRouter(history: RouterHistory, pinia: Pinia) {
+  const navigation = createBrowsingNavigation(history)
   const router = createRouter({
     history,
     routes,
@@ -164,6 +166,7 @@ export function createAppRouter(history: RouterHistory, pinia: Pinia) {
       return { top: 0 }
     },
   })
+  installBrowsingNavigation(router, navigation)
   router.beforeEach(async (to) => {
     if (to.meta.public) return true
     const session = useSessionStore(pinia)

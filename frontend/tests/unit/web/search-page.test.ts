@@ -21,6 +21,7 @@ import {
 } from '@/web/api/data'
 import { createMockDataApi } from '@/web/api/data/mock'
 import ContentSwap from '@/web/components/ContentSwap.vue'
+import { usePeriodStore } from '@/web/stores/period'
 import { ME, cleanup, mockFetch, mountApp, settle } from './helpers'
 
 let api: DataApi
@@ -552,6 +553,58 @@ describe('search page: input commit', () => {
     // the stale timer never fires: 300ms later the URL still holds the new term
     await vi.advanceTimersByTimeAsync(600)
     expect(router.currentRoute.value.query['q']).toBe('牛乳 1L')
+  })
+
+  // PR#5 review: TASK-174 queued every commit behind the FIFO, so a period
+  // push held in flight delays the page's own q write — and the older
+  // acknowledgement landing in route.query.q must not read as the external
+  // follow case above (which reverts the draft and stops the debounce)
+  it('[covers:web-search.queued-ack] pending期間push背後の自Q確定ackが遅れて届いても draft と debounce timer を守る（外部変更のみ追従）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper, router } = await mountApp('/search?scope=period&month=2026-10')
+    fakeTimersWithDebounce()
+    const input = wrapper.find('[data-test="search-input"]')
+    const q = () => router.currentRoute.value.query['q']
+
+    // hold every navigation (the url-sync tests' holdGuard window): the
+    // period push below stays in flight while the page keeps accepting input
+    const waiting: Array<() => void> = []
+    let held = true
+    router.beforeEach(async () => {
+      if (!held) return true
+      await new Promise<void>((resolve) => waiting.push(resolve))
+      return true
+    })
+    const release = (): void => {
+      held = false
+      for (const resolve of waiting.splice(0)) resolve()
+    }
+
+    // a period operation enqueues the push (held pending) and the Enter
+    // commit queues its q write behind it — TASK-174's FIFO
+    usePeriodStore().setMonth('2026-05')
+    await input.setValue('卵')
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(q()).toBeUndefined()
+
+    // the user keeps typing: a NEWER draft with its 300ms debounce pending
+    await input.setValue('酒')
+
+    // the push completes and the queued q=卵 write lands — an owned ack, not
+    // an external change: the newer draft and its timer must survive it
+    release()
+    await flushPromises()
+    await nextTick()
+    expect(q()).toBe('卵')
+    expect((input.element as HTMLInputElement).value).toBe('酒')
+
+    // the debounce still fires 300ms after the last keystroke: the newer
+    // term is searched, never reverted to the stale acknowledgement
+    await vi.advanceTimersByTimeAsync(299)
+    expect(q()).toBe('卵')
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(q()).toBe('酒')
   })
 })
 

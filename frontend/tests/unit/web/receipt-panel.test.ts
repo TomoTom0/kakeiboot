@@ -70,14 +70,15 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     expect(editor.last().ledgerId).toBe(1)
     expect(editor.last().canEdit).toBe(true)
     expect(editor.last().editing).toBe(false)
-    // TASK-167 D-10: the chip tags row is gone — the labels slot rides at
-    // the end of the head's datetime line, the same line that carries the
-    // inline payment / store-category links
+    // TASK-175 H-5: the chip tags row stays gone — the labels slot rides
+    // inside the head sub-row's RIGHT-EDGE host (.receipt-sub-end), not
+    // inline in the context text line
     const probe = editor.wrapper.find('[data-test="labels-probe"]').element
-    expect(editor.wrapper.find('.receipt-head .tags').exists()).toBe(false)
-    const line = editor.wrapper.find('[data-test="payment-method"]').element.parentElement
-    expect(probe.parentElement).toBe(line)
-    expect(line!.lastElementChild).toBe(probe)
+    expect(editor.wrapper.find('.receipt-header .tags').exists()).toBe(false)
+    expect(probe.closest('.receipt-sub-end')).not.toBeNull()
+    const pay = editor.wrapper.find('[data-test="payment-method"]').element
+    expect(pay.parentElement?.classList.contains('receipt-sub-context')).toBe(true)
+    expect(probe.closest('.receipt-sub-context')).toBeNull()
 
     // edit mode
     await editor.wrapper.find('[data-test="edit"]').trigger('click')
@@ -296,44 +297,182 @@ describe('ReceiptPanel detail hierarchy (TASK-167)', () => {
     // D-7: icon-only, its name lives in the aria-label alone
     expect(btn.attributes('aria-label')).toBe('修正')
     expect(btn.text()).toBe('')
-    // at the head card's top-right (the 合計 block's side), not a footer
-    expect(btn.element.closest('.receipt-head')).not.toBeNull()
+    // TASK-175 H-2: at the head MAIN row's right end — right AFTER the total
+    // (the row's last child), never a footer, never a row of its own
+    expect(btn.element.closest('.receipt-header')).not.toBeNull()
+    const main = wrapper.find('.receipt-header .receipt-mainrow')
+    expect(btn.element.closest('.receipt-mainrow')).not.toBeNull()
+    expect(main.element.lastElementChild).toBe(btn.element)
+    expect(btn.element.previousElementSibling?.classList.contains('receipt-total')).toBe(true)
     expect(wrapper.text()).not.toContain('内容を修正')
     await btn.trigger('click')
     await settle()
     expect(wrapper.find('[data-test="edit-form"]').exists()).toBe(true)
   })
 
-  it('[covers:web-receipts.meta-footer-removed] footer運用meta行は廃止・note boxは読み取りviewから除去（edit formのtextareaは存続）', async () => {
+  it('[covers:web-receipts.meta-footer-removed] footer運用meta行は廃止（revision は edit form の楽観lock用 data として継続）', async () => {
+    const raw = await copyOf(101)
+    vi.spyOn(api, 'getReceipt').mockResolvedValue(raw)
+    const { wrapper } = await mountReadonly(101)
+    // D-8: レシート #N ・ 版 ・ 更新 — the operating meta is gone entirely
+    // (TASK-170: the note box is BACK on the read view — its display is
+    // web-receipts.note-display's own expectation now)
+    expect(wrapper.find('.receipt-foot').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('レシート #')
+    expect(wrapper.text()).not.toContain('版')
+  })
+
+  it('[covers:web-receipts.note-display] 読み取りviewは明細table直下に .receipt-note で note を表示（edit formのtextareaは不変）', async () => {
     const raw = await copyOf(101)
     raw.note = 'ユーザー申告のamazon購入履歴から入力'
     vi.spyOn(api, 'getReceipt').mockResolvedValue(raw)
     const { wrapper } = await mountReadonly(101)
-    // D-8: レシート #N ・ 版 ・ 更新 — the operating meta is gone entirely
-    expect(wrapper.find('.receipt-foot').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('レシート #')
-    expect(wrapper.text()).not.toContain('版')
-    // D-9: the note stays DATA — the read view drops the box, the edit
-    // form's textarea keeps reading and writing it
-    expect(wrapper.find('[data-test="note"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('ユーザー申告')
+    // TASK-170 W-4: the note rides the shared .receipt-note vocabulary (the
+    // same class the widget's receipt/draft screens use) as one block right
+    // under the items table
+    const note = wrapper.find('[data-test="note"]')
+    expect(note.exists()).toBe(true)
+    expect(note.classes()).toContain('receipt-note')
+    expect(note.text()).toBe('ユーザー申告のamazon購入履歴から入力')
+    expect(note.element.previousElementSibling).toBe(wrapper.find('[data-test="items"]').element)
+    // the edit form keeps reading and writing it (textarea unchanged)
     await wrapper.find('[data-test="edit"]').trigger('click')
     await settle()
     expect(wrapper.find<HTMLTextAreaElement>('[data-test="f-note"]').element.value).toBe('ユーザー申告のamazon購入履歴から入力')
   })
 
-  it('[covers:web-receipts.head-tags-inline] 頭部のchip行は廃止: 支払・店categoryは日時行のinline link・「画像あり」chipは除去', async () => {
+  it('[covers:web-receipts.head-tags-inline] 頭部のchip行は廃止: 支払・店categoryは副行の文脈要素内inline link・「画像あり」chipは除去', async () => {
     const raw = await copyOf(101)
     raw.has_image = true
     vi.spyOn(api, 'getReceipt').mockResolvedValue(raw)
     const { wrapper } = await mountReadonly(101)
-    expect(wrapper.find('.receipt-head .tags').exists()).toBe(false)
+    expect(wrapper.find('.receipt-header .tags').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('画像あり')
-    // the payment and store-category links sit on the datetime line (the
-    // same parent element), inline — their filter destinations are unchanged
+    // the payment and store-category links sit inside the head sub-row's
+    // ONE context element (.receipt-sub-context), inline — their filter
+    // destinations are unchanged
     const pay = wrapper.find('[data-test="payment-method"]')
     const cat = wrapper.find('[data-test="store-category"]')
     expect(pay.element.parentElement).toBe(cat.element.parentElement)
+    expect(pay.element.closest('.receipt-sub-context')).not.toBeNull()
     expect(new URL(pay.attributes('href')!, 'http://localhost').searchParams.get('payment_method')).toBe('cash')
+  })
+})
+
+// TASK-175 (design: tmp/tasks/tm-175/design_receipt-header-layout.md v3
+// §1 H-1..H-9): the receipt head takes the LIST-ROW grammar via the shared
+// ReceiptHeader component — one MAIN row (store name + the inline-label
+// total at its right + the pencil at the row's far right) over one SUB row
+// (the context links + the labels picker at the right edge). The total never
+// takes a row of its own (the .receipt-side column stack is gone) and the
+// store name is the ONLY ellipsis target. Test-first: red until the
+// implementation lands.
+describe('ReceiptPanel head row grammar (TASK-175)', () => {
+  async function mountReadonly(receiptId: number) {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore(pinia).setMe(ME)
+    const router = createAppRouter(createMemoryHistory(), pinia)
+    await router.push(`/receipts/${receiptId}`)
+    const wrapper = mount(ReceiptPanel, {
+      props: { ledgerId: 1, receiptId },
+      global: { plugins: [pinia, router] },
+    })
+    await settle()
+    return { wrapper }
+  }
+
+  async function copyOf(receiptId: number): Promise<ReceiptView> {
+    // structuredClone keeps the ReceiptView type (no as-cast — TASK-175
+    // review #3: the type-safe convention holds in test code too)
+    return structuredClone(await api.getReceipt(1, receiptId))
+  }
+
+  it('[covers:web-receipts.head-row-grammar] 頭部はReceiptHeaderの2行構成: 主行=店名+合計（label inline）右端+pencil最右端 / 副行=文脈要素+右端host・.receipt-side廃止', async () => {
+    const { wrapper } = await mountReadonly(101)
+    const header = wrapper.find('.receipt-header')
+    expect(header.exists()).toBe(true)
+    // H-9: the title keeps the goTo focus target (-1 tabindex rides on the
+    // component's own h2)
+    const main = header.find('.receipt-mainrow')
+    expect(main.exists()).toBe(true)
+    const title = main.find('h2.receipt-title')
+    expect(title.exists()).toBe(true)
+    expect(title.attributes('tabindex')).toBe('-1')
+    // the store name alone ellipsizes: it rides its own .receipt-title-name
+    // span INSIDE the title
+    expect(title.find('.receipt-title-name').exists()).toBe(true)
+    expect(title.find('[data-test="store-name"]').exists()).toBe(true)
+    // the total never stacks: the label rides INLINE ahead of the value in
+    // the same .receipt-total element
+    const total = main.find('.receipt-total')
+    expect(total.exists()).toBe(true)
+    expect(total.find('.receipt-total__label').text()).toBe('合計')
+    const totalValue = total.find('[data-test="total"]')
+    expect(totalValue.exists()).toBe(true)
+    expect(totalValue.element.parentElement).toBe(total.element)
+    // the DOM order on the main row: title → total → edit (the pencil is the
+    // row's LAST child, right of the total)
+    const edit = main.find('[data-test="edit"]')
+    expect(edit.exists()).toBe(true)
+    expect(main.element.children[0]).toBe(title.element)
+    expect(main.element.children[1]).toBe(total.element)
+    expect(main.element.lastElementChild).toBe(edit.element)
+    // the sub row: ONE context element + the right-edge host (the labels
+    // slot target)
+    const sub = header.find('.receipt-sub')
+    expect(sub.exists()).toBe(true)
+    expect(sub.find('.receipt-sub-context').exists()).toBe(true)
+    expect(sub.find('.receipt-sub-end').exists()).toBe(true)
+    // the old right-column stack and its vocabulary are gone entirely
+    expect(wrapper.find('.receipt-side').exists()).toBe(false)
+    expect(wrapper.find('.detail-title').exists()).toBe(false)
+    expect(wrapper.find('.receipt-when').exists()).toBe(false)
+  })
+
+  it('[covers:web-receipts.head-row-grammar] total_diff は主行直下の条件付きwarn行（なしのとき存在しない）', async () => {
+    // 101 itself carries no diff (total matches the items sum): no warn line
+    const plain = await mountReadonly(101)
+    expect(plain.wrapper.find('.receipt-header .warn').exists()).toBe(false)
+
+    // a printed total off the items sum shows the warn line directly under
+    // the MAIN row (before the sub row)
+    const raw = await copyOf(101)
+    raw.total_amount = (raw.items_total ?? 0) + 30
+    raw.total_diff = 30
+    vi.spyOn(api, 'getReceipt').mockResolvedValue(raw)
+    const diff = await mountReadonly(101)
+    const main = diff.wrapper.find('.receipt-header .receipt-mainrow')
+    const warn = diff.wrapper.find('.receipt-header .warn')
+    expect(warn.exists()).toBe(true)
+    expect(warn.text()).toContain('明細合計')
+    expect(warn.text()).toContain('差額')
+    expect(warn.element.previousElementSibling).toBe(main.element)
+    expect(diff.wrapper.find('.receipt-sub').element.previousElementSibling).toBe(warn.element)
+  })
+
+  it('[covers:web-receipts.head-row-grammar] 削除済みはpencil不在でbadgeはtitle内に残る・長店名+大きい金額+badge併存でも店名のみが省略対象', async () => {
+    await api.deleteReceipt(1, 102, { confirm: true, revision: 1 })
+    const raw = await copyOf(102)
+    if (raw.store) raw.store.name = 'とても長い店名のスーパーマーケット成城石井ヒルズ店'
+    raw.total_amount = 12345678
+    vi.spyOn(api, 'getReceipt').mockResolvedValue(raw)
+    const { wrapper } = await mountReadonly(102)
+    const main = wrapper.find('.receipt-header .receipt-mainrow')
+    // deleted: no pencil — the main row is [title(name+badge) … total]
+    expect(main.find('[data-test="edit"]').exists()).toBe(false)
+    const badge = main.find('[data-test="deleted"]')
+    expect(badge.exists()).toBe(true)
+    // the badge rides INSIDE the title but OUTSIDE the ellipsis span (the
+    // name alone shrinks)
+    expect(badge.element.closest('.receipt-title')).not.toBeNull()
+    expect(badge.element.closest('.receipt-title-name')).toBeNull()
+    const name = main.find('.receipt-title-name')
+    expect(name.text()).toContain('とても長い店名の')
+    // the full name stays readable via the title attribute (H-1)
+    expect(name.attributes('title')).toBe('とても長い店名のスーパーマーケット成城石井ヒルズ店')
+    // the big total rides the same main row, right of the title
+    expect(main.find('[data-test="total"]').text()).toBe('12,345,678円')
+    expect(main.element.lastElementChild?.classList.contains('receipt-total')).toBe(true)
   })
 })

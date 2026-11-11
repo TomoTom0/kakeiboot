@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
@@ -54,6 +55,7 @@ import { usePeriodStore } from '../stores/period'
 const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
+const browsing = useBrowsingQuery()
 const period = usePeriodStore()
 const catalog = useCatalogStore()
 const { markReady } = usePageReady()
@@ -595,7 +597,7 @@ const chips = computed<FilterChip[]>(() => {
 function removeChip(key: string): void {
   if (key === 'category' || key === 'store' || key === 'store_category') {
     const queryKey = key === 'store' ? 'store_id' : key
-    void router.replace({ query: { ...route.query, [queryKey]: undefined } })
+    browsing.patch({ [queryKey]: undefined })
     return
   }
   if (key.startsWith('label-')) {

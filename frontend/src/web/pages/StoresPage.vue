@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 import { formatLabelQuery } from '@/shared/labels'
 import { barScale } from '@/shared/lib/stackedBars'
 import {
@@ -37,6 +38,7 @@ import { usePeriodStore } from '../stores/period'
 const api = useDataApi()
 const route = useRoute()
 const router = useRouter()
+const browsing = useBrowsingQuery()
 const period = usePeriodStore()
 const catalog = useCatalogStore()
 const { markReady } = usePageReady()
@@ -118,10 +120,7 @@ const storeCategories = computed(() => {
 })
 
 function toggleStoreCategory(path: string): void {
-  const rest: LocationQueryRaw = { ...route.query }
-  if (storeCategory.value === path) delete rest.store_category
-  else rest.store_category = path
-  void router.replace({ query: rest })
+  browsing.patch({ store_category: browsing.logicalValue('store_category') === path ? undefined : path })
 }
 
 // The manage entries live behind the "..." page menu (TASK-45 §2-4).

@@ -91,6 +91,13 @@ export function formatIsoDateJa(raw: string): string {
   return m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : raw
 }
 
+/** TASK-167 D-3 (moved to shared by TASK-170 W-8): the derived representative
+ * items as the sub line's text —「品目A・品目B」. Empty (item-less receipts /
+ * rest rows) renders ''. */
+export function topItemsText(items: readonly { name: string }[] | null | undefined): string {
+  return (items ?? []).map((i) => i.name).join('・')
+}
+
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   cash: '現金',
   credit_card: 'クレジットカード',

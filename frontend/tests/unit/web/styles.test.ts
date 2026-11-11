@@ -11,6 +11,17 @@ import { cleanup, ME, mockFetch, mountApp } from './helpers'
 
 const css = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
+/**
+ * TASK-170: the shared row-grammar / motion stylesheets — the home of the
+ * .data-row family, the hover family, the .items item tokens and bb-appear
+ * (web/styles.css only imports them). Read lazily INSIDE each test: the
+ * files land with the implementation, and a module-level read would fail the
+ * whole file's collection before then.
+ */
+function sharedCss(name: 'row-grammar.css' | 'motion.css'): string {
+  return readFileSync(resolve(process.cwd(), `src/shared/styles/${name}`), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
 interface Rule {
   selectors: string[]
   body: string
@@ -312,14 +323,17 @@ describe('density: two-row KPI + 720px card rhythm (TASK-75 §6-4)', () => {
     // the 34px icon column is gone from the stylesheet entirely
     expect(rulesFor('.recent-icon')).toHaveLength(0)
     expect(css).not.toMatch(/\.recent-icon/)
-    expect(rulesFor('.data-row').some((r) => decl(r.body, 'min-height') === '52px')).toBe(true)
-    expect(rulesFor('.data-row').some((r) => decl(r.body, 'flex-direction') === 'column')).toBe(true)
-    expect(rulesFor('.row-sub').some((r) => decl(r.body, 'font-size') === '0.8rem')).toBe(true)
+    // TASK-170: the row grammar's home is the shared sheet (web/styles.css
+    // keeps none of it)
+    const rowCss = sharedCss('row-grammar.css')
+    expect(rulesFor('.data-row', rowCss).some((r) => decl(r.body, 'min-height') === '52px')).toBe(true)
+    expect(rulesFor('.data-row', rowCss).some((r) => decl(r.body, 'flex-direction') === 'column')).toBe(true)
+    expect(rulesFor('.row-sub', rowCss).some((r) => decl(r.body, 'font-size') === '0.8rem')).toBe(true)
     expect(rulesFor('.day-head').some((r) => decl(r.body, 'min-height') === '28px')).toBe(true)
     // review L5: the labels cell never wraps — overflow clips the dots (or
     // the 削除済み badge row)
     expect(
-      rulesFor('.row-labels').some(
+      rulesFor('.row-labels', rowCss).some(
         (r) => decl(r.body, 'flex-wrap') === 'nowrap' && decl(r.body, 'overflow') === 'hidden',
       ),
     ).toBe(true)
@@ -383,12 +397,14 @@ describe('ranked row single line (TASK-75 §6-4)', () => {
     expect(rulesFor('.ranked-diff')).toHaveLength(0)
     expect(css).not.toMatch(/\.meter/)
     // TASK-167 D-4: the row wash lives on the shared link rows only — the
-    // ranked row itself has no :hover rule anymore
-    for (const r of rulesFor('a.data-row.is-link:hover')) {
+    // ranked row itself has no :hover rule anymore. TASK-170: the wash rule's
+    // home is the shared row-grammar sheet (web/styles.css imports it)
+    const sharedRow = sharedCss('row-grammar.css')
+    for (const r of rulesFor('a.data-row.is-link:hover', sharedRow)) {
       expect(decl(r.body, 'background'), 'hover background shorthand').toBeUndefined()
     }
-    expect(rulesFor('a.data-row.is-link:hover').some((r) => decl(r.body, 'background-color') === 'var(--bb-hover)')).toBe(true)
-    expect(css).not.toMatch(/\.ranked-row[^{]*:hover/)
+    expect(rulesFor('a.data-row.is-link:hover', sharedRow).some((r) => decl(r.body, 'background-color') === 'var(--bb-hover)')).toBe(true)
+    expect(`${css}\n${sharedRow}`).not.toMatch(/\.ranked-row[^{]*:hover/)
   })
 })
 
@@ -1051,7 +1067,10 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
     // bb-fade-in family, nothing fancier
     // (the reduced-motion block's own `transition: none` rules start with
     // .bb-appear too — they are the second guard below, not the vocabulary)
-    const appear = rules(css).filter(
+    // TASK-170 W-9: the vocabulary's home is shared/styles/motion.css (both
+    // entry points import it); web/styles.css carries no bb-appear rule
+    const motion = sharedCss('motion.css')
+    const appear = rules(motion).filter(
       (r) => r.selectors.some((s) => s.startsWith('.bb-appear')) && decl(r.body, 'transition') !== 'none',
     )
     expect(appear.length, 'the bb-appear grammar exists').toBeGreaterThan(0)
@@ -1080,9 +1099,15 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
       expect(decl(r.body, 'opacity'), 'the origin sets opacity 0').toBe('0')
     }
     // reduced-motion turns the vocabulary off (the second guard)
-    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    const reduced = motion.slice(motion.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)
     expect(reduced).toMatch(/\.bb-appear-move[^{]*\{[^}]*transition:\s*none/)
+    // the sheet pair is wired into BOTH entry points (web + widget)
+    for (const entry of ['src/web/main.ts', 'src/widget/main.ts']) {
+      const src = readFileSync(resolve(process.cwd(), entry), 'utf8')
+      expect(src, `${entry} imports motion.css`).toMatch(/motion\.css/)
+      expect(src, `${entry} imports row-grammar.css`).toMatch(/row-grammar\.css/)
+    }
   })
 })
 
@@ -1217,24 +1242,30 @@ describe('trend bar width / vertical segment labels / label type tokens (TASK-16
 
 
 // TASK-167 (design: tmp/tasks/tm-167/design_row_hierarchy.md v2 §2
-// D-2/D-4/D-6): the row hierarchy tokens (the amount is the strongest
+// D-2/D-4/D-6) + TASK-170 (design: tmp/tasks/tm-170/design_widget-row-grammar.md
+// v3 §2 W-1/W-3/W-7): the row hierarchy tokens (the amount is the strongest
 // figure at w700 tabular, the sub line drops to 0.8rem, the rows grow past
 // the old 44px), the hover family (an element-local underline + accent
 // reaction for pressable elements only, inside the hover-capable media,
 // focus-visible mirrors it) and the receipt detail's three-tier item
-// typography. Test-first: red until the implementation lands.
-describe('row hierarchy tokens + hover family (TASK-167)', () => {
-  it('[covers:web-common.data-row-grammar] 行token: 主行の金額は w700・tabular・副行は 0.8rem・行は2行分の高さ', () => {
-    const amount = rulesFor('.data-row .amount')
+// typography. TASK-170 moves the rules' HOME to shared/styles/row-grammar.css
+// (both entry points import it; web/styles.css keeps none of them) and pins
+// the .data-row font order (inherit shorthand, then the 16px size — the
+// button root keeps the inherited family). Test-first: red until the
+// implementation lands.
+describe('row hierarchy tokens + hover family (TASK-167/170)', () => {
+  it('[covers:web-common.data-row-grammar] 行token: 主行の金額は w700・tabular・副行は 0.8rem・行は2行分の高さ・font は inherit→16px の順', () => {
+    const rowCss = sharedCss('row-grammar.css')
+    const amount = rulesFor('.data-row .amount', rowCss)
     expect(amount.some((r) => decl(r.body, 'font-weight') === '700'), 'amount w700').toBe(true)
     expect(
       amount.some((r) => /tabular/.test(decl(r.body, 'font-variant-numeric') ?? '')),
       'amount tabular',
     ).toBe(true)
-    const sub = rulesFor('.row-sub')
+    const sub = rulesFor('.row-sub', rowCss)
     expect(sub.some((r) => decl(r.body, 'font-size') === '0.8rem'), 'sub 0.8rem').toBe(true)
     // two text lines grow past the old 44px single-line height
-    const row = rulesFor('.data-row')
+    const row = rulesFor('.data-row', rowCss)
     expect(
       row.some((r) => {
         const h = decl(r.body, 'min-height')
@@ -1242,19 +1273,30 @@ describe('row hierarchy tokens + hover family (TASK-167)', () => {
       }),
       'row min-height >= 52px',
     ).toBe(true)
+    // TASK-170 W-7: `font: inherit` (the family etc.) comes FIRST, the
+    // 16px size AFTER it — a button root keeps the inherited family while
+    // the size matches the web/widget surfaces exactly
+    const withFont = row.find((r) => /font:\s*inherit/.test(r.body))
+    expect(withFont, '.data-row font: inherit').toBeDefined()
+    expect(withFont!.body).toMatch(/font-size:\s*16px/)
+    expect(withFont!.body.indexOf('font:'), 'inherit shorthand precedes the size').toBeLessThan(withFont!.body.indexOf('font-size:'))
+    // the vocabulary's home is the shared sheet — web/styles.css keeps no
+    // .data-row root rule of its own
+    expect(rulesFor('.data-row'), 'no .data-row root rule left in web/styles.css').toHaveLength(0)
   })
 
-  it('[covers:web-common.hover-ink-family] hover族: .hover-ink は underline+accent（hover可能media内のみ）・focus-visible も同表現・行washは .data-row へ移行', () => {
+  it('[covers:web-common.hover-ink-family] hover族: .hover-ink は underline+accent（hover可能media内のみ）・focus-visible も同表現・行washは .data-row へ移行・実体は shared', () => {
+    const rowCss = sharedCss('row-grammar.css')
     // every @media (hover: hover) block's inner text (the TASK-130 guard the
     // family extends): the hover-ink reaction lives ONLY there
     const hoverBlocks: string[] = []
-    for (const m of css.matchAll(/@media[^{]*hover:\s*hover[^{]*\{/g)) {
-      const open = css.indexOf('{', m.index)
+    for (const m of rowCss.matchAll(/@media[^{]*hover:\s*hover[^{]*\{/g)) {
+      const open = rowCss.indexOf('{', m.index)
       let depth = 0
-      for (let i = open; i < css.length; i++) {
-        if (css[i] === '{') depth++
-        else if (css[i] === '}' && --depth === 0) {
-          hoverBlocks.push(css.slice(open + 1, i))
+      for (let i = open; i < rowCss.length; i++) {
+        if (rowCss[i] === '{') depth++
+        else if (rowCss[i] === '}' && --depth === 0) {
+          hoverBlocks.push(rowCss.slice(open + 1, i))
           break
         }
       }
@@ -1265,24 +1307,31 @@ describe('row hierarchy tokens + hover family (TASK-167)', () => {
     expect(hoverAll).toMatch(/\.hover-ink[^{]*:hover[^{]*\{[^}]*color:\s*var\(--bb-accent[^)]*\)/)
     // the keyboard focus takes the same local reaction (outside the media:
     // focus-visible exists regardless of hover capability)
-    expect(css).toMatch(/\.hover-ink[^{]*:focus-visible[^{]*\{[^}]*color:\s*var\(--bb-accent[^)]*\)/)
+    expect(rowCss).toMatch(/\.hover-ink[^{]*:focus-visible[^{]*\{[^}]*color:\s*var\(--bb-accent[^)]*\)/)
     // the row wash survives on the shared row vocabulary
     expect(hoverAll).toMatch(/\.data-row[^{]*:hover[^{]*\{[^}]*background/)
     // and the touch sticky-hover guard holds: NO hover-ink hover rule
-    // outside the hover-capable media
-    const outside = topLevel().replace(/@media[^{]*hover:\s*hover[^{]*\{[\s\S]*?\n\}/g, '')
+    // outside the hover-capable media (in either sheet)
+    const outside = topLevel(rowCss).replace(/@media[^{]*hover:\s*hover[^{]*\{[\s\S]*?\n\}/g, '')
     expect(outside).not.toMatch(/\.hover-ink[^{]*:hover/)
     // REVIEW-15 中2: the AppsPage text link rides the family too — its bare
     // .more:hover is gone (the reaction is the .hover-ink rule alone) and the
     // dead a.sub-row wash rule no longer claims a media-bare row hover
-    expect(outside).not.toMatch(/\.more\s*:hover/)
-    expect(css).not.toMatch(/a\.sub-row/)
+    expect(outside + topLevel()).not.toMatch(/\.more\s*:hover/)
+    expect(`${rowCss}\n${css}`).not.toMatch(/a\.sub-row/)
+    // TASK-170: the family rules are GONE from web/styles.css (the shared
+    // sheet is the one home) and the web entry imports it ahead of its own
+    const webSrc = readFileSync(resolve(process.cwd(), 'src/web/main.ts'), 'utf8')
+    expect(webSrc).toMatch(/row-grammar\.css/)
+    expect(webSrc.indexOf('row-grammar.css'), 'shared css precedes web/styles.css').toBeLessThan(webSrc.search(/styles\.css/))
+    expect(css, 'no hover-ink rules left in web/styles.css').not.toMatch(/\.hover-ink[^{]*\{/)
   })
 
-  it('[covers:web-receipts.items-typography] 明細3層: 品目金額は w600・明細合計は label縮小+w600・値 w700・上辺rule', () => {
-    const itemNum = rulesFor('.items td.num')
+  it('[covers:web-receipts.items-typography] 明細3層: 品目金額は w600・明細合計は label縮小+w600・値 w700・上辺rule（実体は shared）', () => {
+    const rowCss = sharedCss('row-grammar.css')
+    const itemNum = rulesFor('.items td.num', rowCss)
     expect(itemNum.some((r) => decl(r.body, 'font-weight') === '600'), 'item amount w600').toBe(true)
-    const foot = rules(css).filter((r) => r.selectors.some((s) => s.includes('.items') && s.includes('tfoot')))
+    const foot = rules(rowCss).filter((r) => r.selectors.some((s) => s.includes('.items') && s.includes('tfoot')))
     expect(foot.some((r) => decl(r.body, 'font-weight') === '700'), 'foot value w700').toBe(true)
     expect(
       foot.some((r) => {
@@ -1295,5 +1344,86 @@ describe('row hierarchy tokens + hover family (TASK-167)', () => {
       foot.some((r) => /border-top/.test(r.body) && !/border-top-style:\s*none/.test(r.body)),
       'the rule above 明細合計',
     ).toBe(true)
+    // TASK-170: the .items token family's home is the shared sheet — the
+    // widget's ItemTable (ul/li) references the same tokens
+    expect(css, 'no .items rules left in web/styles.css').not.toMatch(/\.items[\s,{]/)
+  })
+})
+
+// TASK-175 (design: tmp/tasks/tm-175/design_receipt-header-layout.md v3
+// §1 H-1..H-9): the receipt head's grammar lives in the SHARED sheet — the
+// .receipt-header family (main row / sub row) — and the feed nav becomes a
+// grid whose middle column hosts the ‹ position › group. Static checks, read
+// lazily (the rules land with the implementation; red until then).
+describe('TASK-175 receipt header + feed nav (static)', () => {
+  it('[covers:web-receipts.head-row-grammar] .receipt-header 族は shared: 主行 baseline・min-height 44px・店名のみ ellipsis・合計は flex:none の label inline+1.9rem・副行は context+sub-end 右端・web側旧語彙と -8px 補正は不在', () => {
+    const rowCss = sharedCss('row-grammar.css')
+    // the main row: baseline alignment across the 1.25rem name and the
+    // 1.9rem value, tall enough to hold the 44px actions
+    const main = rulesFor('.receipt-mainrow', rowCss)
+    expect(main.length, '.receipt-mainrow defined in shared').toBeGreaterThan(0)
+    expect(main.some((r) => decl(r.body, 'align-items') === 'baseline'), 'mainrow baseline').toBe(true)
+    expect(
+      main.some((r) => parseFloat(decl(r.body, 'min-height') ?? '0') >= 44),
+      'mainrow min-height >= 44px',
+    ).toBe(true)
+    // the title flexes and the NAME alone ellipsizes
+    const title = rulesFor('.receipt-title', rowCss)
+    expect(title.some((r) => decl(r.body, 'flex') === '1'), 'title flex:1').toBe(true)
+    expect(title.some((r) => decl(r.body, 'min-width') === '0'), 'title min-width:0').toBe(true)
+    const name = rulesFor('.receipt-title-name', rowCss)
+    expect(name.some((r) => decl(r.body, 'text-overflow') === 'ellipsis'), 'title-name ellipsis').toBe(true)
+    expect(name.some((r) => decl(r.body, 'min-width') === '0'), 'title-name min-width:0').toBe(true)
+    // the total keeps its width (never the ellipsis target): the label
+    // rides INLINE ahead of the value
+    const total = rulesFor('.receipt-total', rowCss)
+    expect(total.some((r) => decl(r.body, 'flex') === 'none'), 'total flex:none').toBe(true)
+    const totalValue = rulesFor('.receipt-total__value', rowCss)
+    expect(totalValue.some((r) => decl(r.body, 'font-size') === '1.9rem'), 'total value 1.9rem').toBe(true)
+    expect(totalValue.some((r) => decl(r.body, 'font-weight') === '700'), 'total value w700').toBe(true)
+    const totalLabel = rulesFor('.receipt-total__label', rowCss)
+    expect(
+      totalLabel.some((r) => parseFloat(decl(r.body, 'font-size') ?? '1') < 1),
+      'total label 0.85rem',
+    ).toBe(true)
+    expect(totalLabel.some((r) => decl(r.body, 'font-weight') === '600'), 'total label w600').toBe(true)
+    // the sub row: the right-edge host pushes itself to the end and keeps
+    // its wrapped lines right-aligned (the picker never falls back to a
+    // left-aligned second line — and neither do the chips inside their own
+    // .label-dots host, TASK-175 review #1)
+    const subEnd = rulesFor('.receipt-sub-end', rowCss)
+    expect(subEnd.some((r) => decl(r.body, 'margin-left') === 'auto'), 'sub-end margin-left:auto').toBe(true)
+    expect(rowCss).toMatch(/\.receipt-sub-end \.label-picker[^{]*\{[^}]*justify-content:\s*flex-end\s*;?\s*\}/)
+    expect(rowCss).toMatch(/\.receipt-sub-end \.label-dots[^{]*\{[^}]*justify-content:\s*flex-end\s*;?\s*\}/)
+    expect(rulesFor('.receipt-sub-context', rowCss).length, 'sub-context defined in shared').toBeGreaterThan(0)
+    // the vocabulary's home is the shared sheet — web/styles.css keeps no
+    // head rules of its own (the .receipt-head column stack, .receipt-side,
+    // .receipt-when, .detail-title and the web-side .receipt-total are gone)
+    for (const gone of ['.receipt-head', '.receipt-side', '.receipt-when', '.detail-title', '.receipt-total']) {
+      expect(css, `no ${gone} rules left in web/styles.css`).not.toMatch(new RegExp(`${gone.replace('.', '\\.')}[\\s,{:.[]`))
+    }
+    // H-5: the label button's -8px vertical fudge is gone (the flex sub row
+    // hosts the 44px button with its own height)
+    expect(css, 'no -8px margin on .label-add-btn').not.toMatch(/\.label-add-btn[^{]*\{[^}]*-8px/)
+  })
+
+  it('[covers:web-receipts.feed-nav-flanked-position] .feed-nav は grid（minmax(0,1fr) auto minmax(0,1fr)）・.feed-move は nowrap の中央group・44px は .feed-move .icon-btn・.feed-nav-buttons 廃止', () => {
+    // TASK-175 H-6: the equal 1fr sides carry minmax(0,…) so the middle
+    // group sits at the nav's exact centre
+    const nav = rulesFor('.feed-nav')
+    expect(nav.some((r) => decl(r.body, 'display') === 'grid'), 'feed-nav grid').toBe(true)
+    expect(
+      nav.some((r) => /minmax\(0\s*,\s*1fr\)\s+auto\s+minmax\(0\s*,\s*1fr\)/.test(decl(r.body, 'grid-template-columns') ?? '')),
+      'grid-template-columns minmax(0,1fr) auto minmax(0,1fr)',
+    ).toBe(true)
+    const move = rulesFor('.feed-move')
+    expect(move.length, '.feed-move defined').toBeGreaterThan(0)
+    expect(move.some((r) => /flex/.test(decl(r.body, 'display') ?? '')), 'feed-move flex').toBe(true)
+    expect(move.some((r) => decl(r.body, 'flex-wrap') === 'nowrap'), 'feed-move nowrap').toBe(true)
+    expect(move.some((r) => decl(r.body, 'justify-self') === 'center'), 'feed-move justify-self:center').toBe(true)
+    // the 44px tap target moved with the group vocabulary (a miss here
+    // would fall back to the generic .icon-btn's 40px)
+    expect(css).toMatch(/\.feed-move \.icon-btn[^{]*\{[^}]*width:\s*44px[^}]*height:\s*44px/)
+    expect(css, '.feed-nav-buttons vocabulary gone').not.toMatch(/\.feed-nav-buttons/)
   })
 })

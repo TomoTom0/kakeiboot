@@ -1,0 +1,222 @@
+/* The ONE shared row grammar (TASK-167 D-1..D-6; TASK-170 W-1/W-3/W-7 moved
+   the rules' home here so the web and the widget reference the same tokens):
+   the list-row two-line composition (.data-row), the hover / focus family,
+   the receipt detail's item tokens (the web table and the widget list share
+   the same classes) and the note block. Both entry points import this sheet
+   AHEAD of their own surface sheet (web/main.ts, widget/main.ts). */
+
+.data-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  row-gap: 2px;
+  min-height: 52px;
+  padding: 0.25rem 0.5rem;
+  margin: 0 -0.5rem;
+  width: 100%;
+  border-radius: 8px;
+  color: inherit;
+  /* TASK-170 W-7: the inherit shorthand first (a button root keeps the
+     inherited family), then the 16px size — the main line and the amount
+     match on both surfaces regardless of the surface's body size */
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+  text-decoration: none;
+}
+/* scoped under .data-row: the settings `.row` grammar keeps its own bare
+   .row-main (the web manage block, flex: 1 1 14rem) — unscoped, that
+   basis leaks into this column flex and stretches the row's main line to
+   14rem of height, and this flex/baseline leaks into the settings rows */
+.data-row .row-main { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; flex: none; }
+.row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.data-row .amount { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.row-sub {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--bb-muted);
+}
+.row-items { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-fig { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row-labels { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 0.25rem; overflow: hidden; }
+
+/* TASK-167 D-4: the element-local hover family — a pressable in-row /
+   in-panel element (the detail links, the inline when-links, the link
+   buttons) reacts at its own boundary (underline + accent); non-pressable
+   text never reacts. Touch never sees hover, so the reactions live inside
+   the hover-capable media only (the TASK-130 §2-1 guard, extended); the
+   keyboard focus takes the same reaction outside the media */
+@media (hover: hover) {
+  .hover-ink:hover { text-decoration: underline; color: var(--bb-accent); }
+  a.data-row.is-link:hover,
+  button.data-row.is-link:hover,
+  a.week-row.is-link:hover,
+  button.week-row.is-link:hover { background-color: var(--bb-hover); }
+}
+.hover-ink:focus-visible { color: var(--bb-accent); text-decoration: underline; }
+
+/* link rows (RankedList `to` / `select`, TASK-74 §4-6 / TASK-65): the same
+   box plus the affordances — the wash lives in the hover media block above
+   (TASK-167 D-4). `select` rows render as <button> (in-place filter) */
+a.ranked-row.is-link,
+button.ranked-row.is-link,
+a.data-row.is-link,
+button.data-row.is-link,
+a.week-row.is-link,
+button.week-row.is-link { cursor: pointer; transition: background-color 0.15s; }
+a.ranked-row.is-link:focus-visible,
+button.ranked-row.is-link:focus-visible,
+a.data-row.is-link:focus-visible,
+button.data-row.is-link:focus-visible,
+a.week-row.is-link:focus-visible,
+button.week-row.is-link:focus-visible { outline: 2px solid var(--bb-accent); outline-offset: -2px; }
+button.ranked-row,
+button.data-row,
+button.week-row { border: 0; background-color: transparent; }
+
+/* The receipt detail's item tokens (TASK-167 D-5/D-6; TASK-170 W-3 made this
+   the single definition point): the web table and the widget list reference
+   the SAME classes. Three tiers: the item amount w600 tabular < the 明細合計
+   row (a rule above it, a muted small w600 label, a w700 value) < the head
+   total. The item rows are not pressable — no hover wash (D-4) */
+.items { width: 100%; border-collapse: collapse; margin: 0.5rem 0; }
+.items th, .items td { padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--bb-border); text-align: left; }
+.items th { color: var(--bb-muted); font-size: 0.8rem; font-weight: 600; }
+.items .num { text-align: right; font-variant-numeric: tabular-nums; }
+.items td.num { font-weight: 600; }
+.items .neg { color: var(--bb-danger); }
+.items td .cat-link, .items td .small { font-size: 0.78rem; }
+.items tfoot td { border-top: 1px solid var(--bb-border); border-bottom: 0; }
+.items tfoot td:first-child { font-size: 0.85rem; font-weight: 600; color: var(--bb-muted); }
+.items tfoot td.num { font-weight: 700; }
+
+/* the widget's list twin (shared/components/ItemTable.vue): the same .items
+   token on a ul/li DOM. One line per item — the name, the category INLINE
+   after it (muted 0.78rem; unknown keeps the warning color) and the .num
+   amount at the right; the 明細合計 block sits above the folding list and
+   carries the envelope's FULL total (the folded rows count in too) */
+ul.items { list-style: none; margin: 0; padding: 0; }
+ul.items li { border-bottom: 1px solid var(--bb-border); }
+ul.items li.item--selected { background: var(--bb-accent-soft); transition: background 0.15s; }
+.item-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 4px;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.item-btn:disabled { cursor: default; }
+.item-btn:focus-visible { outline: 2px solid var(--bb-accent); }
+/* review: the name and the inline category share ONE wrappable container —
+   a long category wraps inside it instead of squeezing the name or pushing
+   the amount out of the row (the amount keeps its own non-shrinking space) */
+.item-line { flex: 1 1 auto; min-width: 0; }
+.item-name { overflow-wrap: anywhere; }
+.item-cat { font-size: 0.78rem; color: var(--bb-muted); overflow-wrap: anywhere; }
+.item-cat--unknown { color: var(--bb-warn); font-weight: 600; }
+.item-btn .num { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.items-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 4px;
+  border-top: 1px solid var(--bb-border);
+}
+.items-total-label { font-size: 0.85rem; font-weight: 600; color: var(--bb-muted); }
+.items-total .num { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* the receipt note (TASK-170 W-4): one muted pre-wrap block right under the
+   item table, the same vocabulary on both surfaces */
+.receipt-note {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--bb-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The receipt head's two-row grammar (TASK-175 H-1..H-5/H-9): the shared
+   ReceiptHeader component's vocabulary, the list-row composition at detail
+   sizes. The MAIN row — the store name (the ONLY ellipsis target, inside
+   .receipt-title-name; the badge keeps its width), the total (flex:none —
+   the label rides INLINE ahead of the 1.9rem w700 value) and the actions at
+   the row's far right edge, baseline-aligned with the icon button centered
+   on the row. The SUB row — ONE context element plus the right-edge host
+   (.receipt-sub-end, whose wrapped lines stay right-aligned so the picker
+   never falls back to a left-aligned second line). Both surfaces (the web
+   panel and the widget screens) reference these tokens alone. */
+.receipt-header { margin: 0; }
+.receipt-mainrow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+.receipt-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.25rem;
+}
+/* the name alone shrinks (H-1): the badge rides inside the title but keeps
+   its width — flex:none below */
+.receipt-title-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.receipt-title .badge { flex: none; }
+.receipt-total { display: flex; align-items: baseline; gap: 0.35rem; flex: none; }
+.receipt-total__label { font-size: 0.85rem; font-weight: 600; color: var(--bb-muted); }
+.receipt-total__value { font-size: 1.9rem; line-height: 1.2; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* the actions (web: the pencil ibtn) — an icon-only button's baseline is
+   undefined, so it centers on the row instead */
+.receipt-mainrow > .ibtn { align-self: center; }
+/* H-4: the total_diff warn line — directly under the main row, right-
+   aligned (it belongs to the total); a diff-less head passes no slot at all */
+.receipt-header > .warn { display: block; margin: 0; text-align: right; }
+/* the sub row: 0.85rem muted context text with the right-edge host at its
+   end — one flex item with an auto margin, so a wrapped second line still
+   hugs the right edge */
+.receipt-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--bb-muted);
+}
+.receipt-sub-context { min-width: 0; }
+.receipt-sub-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  min-width: 0;
+  margin-left: auto;
+}
+/* the picker's own wrapped lines stay right-aligned too (H-5: its only
+   mount point is this sub-row host) — and so are the chips' own host:
+   BOTH surfaces wrap their chips inside .label-dots (the web picker hosts
+   it, the widget's sub-end hosts it directly), and without this a wrapped
+   chip line falls back to the flex default (left) and misses the right
+   edge (TASK-175 review #1) */
+.receipt-sub-end .label-picker,
+.receipt-sub-end .label-dots { justify-content: flex-end; }

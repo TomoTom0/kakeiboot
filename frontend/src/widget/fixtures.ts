@@ -250,6 +250,12 @@ export function receiptListEnvelope(): ReceiptListEnvelope {
         amount: 900,
         item_count: 2,
         has_image: true,
+        // TASK-170 W-8: ReceiptListRow.top_items (the TASK-167 backend
+        // contract) — the sub line's representative items
+        top_items: [
+          { name: 'りんご', amount: 450 },
+          { name: 'ティッシュ', amount: 450 },
+        ],
         labels: [{ color: 'red', title: '旅行' }],
       },
       {

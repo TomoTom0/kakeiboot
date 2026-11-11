@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { useBrowsingQuery } from '../composables/useBrowsingUrlSync'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useDataApi, type ItemSummary, type ReceiptListQuery, type ReceiptSummary } from '../api/data'
 import AppearList from '../components/AppearList.vue'
 import ContentSwap from '../components/ContentSwap.vue'
@@ -23,7 +24,7 @@ import { usePeriodStore } from '../stores/period'
 // shared store like on the other browsing screens.
 const api = useDataApi()
 const route = useRoute()
-const router = useRouter()
+const browsing = useBrowsingQuery()
 const period = usePeriodStore()
 const catalog = useCatalogStore()
 const { markReady } = usePageReady()
@@ -40,29 +41,27 @@ function qOf(query: Record<string, unknown>): string | undefined {
   return firstString(query.q)?.trim() || undefined
 }
 
-/** Query without the period keys (scope=all never carries them, D1). */
-function dropPeriodQuery(query: LocationQueryRaw): LocationQueryRaw {
-  const rest: Record<string, LocationQueryRaw[string]> = { ...query }
-  delete rest.month
-  delete rest.week
-  delete rest.year
-  delete rest.from
-  delete rest.to
-  return rest
-}
-
 // --- input draft: Enter at once + a 300ms debounce, IME-safe ----------------
 const draft = ref(firstString(route.query.q) ?? '')
 const composing = ref(false)
 let timer: ReturnType<typeof setTimeout> | null = null
+// TASK-174 queued every commit behind the FIFO, so its acknowledgement can
+// arrive in route.query.q long after the user kept typing (a pending period
+// push holds the queue). The committed terms wait here until their own
+// landing, so the q watcher below can tell that owned ack — which must leave
+// the newer draft and its debounce alone — from an external change to follow.
+const pendingAcks: Array<string | undefined> = []
 
 function commit(): void {
   if (timer !== null) {
     clearTimeout(timer)
     timer = null
   }
-  const term = draft.value.trim()
-  void router.replace({ query: { ...route.query, q: term || undefined } })
+  const term = draft.value.trim() || undefined
+  // a term equal to the logical q never becomes a write (the coordinator
+  // drops the no-op patch), so it must not wait for an ack either
+  if (term !== browsing.logicalValue('q')) pendingAcks.push(term)
+  browsing.patch({ q: term })
 }
 
 function commitSoon(): void {
@@ -97,14 +96,35 @@ onBeforeUnmount(() => {
   timer = null
 })
 
+browsing.onBoundary(() => {
+  if (timer !== null) clearTimeout(timer)
+  timer = null
+  // a boundary drops the queued writes these entries were waiting for (and
+  // resets the draft from the route below), so no ack can arrive for them
+  pendingAcks.length = 0
+  draft.value = firstString(route.query.q) ?? ''
+})
+
 // --- the shared filters ride the URL both ways ------------------------------
 watch(
   () => route.query.q,
   (v) => {
-    // the dialog run (or a back-navigation) changed the term underneath:
-    // follow it and stop a pending debounce from overwriting it with the
+    const term = firstString(v) ?? undefined
+    const ack = pendingAcks.indexOf(term)
+    if (ack !== -1) {
+      // this page's own queued commit landing (possibly behind a pending
+      // period push): an older acknowledgement must not overwrite the newer
+      // draft nor stop its debounce — the term it carries will be superseded
+      // by that debounce's own commit
+      pendingAcks.splice(ack, 1)
+      return
+    }
+    // a dialog run (or a back-navigation) changed the term underneath:
+    // follow it, drop the entries whose queued writes a boundary already
+    // discarded, and stop a pending debounce from overwriting it with the
     // stale draft
-    draft.value = firstString(v) ?? ''
+    pendingAcks.length = 0
+    draft.value = term ?? ''
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -134,22 +154,11 @@ watch(
 )
 
 function setTab(next: 'receipts' | 'items'): void {
-  if (tab.value === next) return
-  void router.replace({ query: { ...route.query, tab: next === 'items' ? 'items' : undefined } })
+  browsing.patch({ tab: next === 'items' ? 'items' : undefined })
 }
 
 function toggleScope(): void {
-  const next = scope.value === 'period' ? 'all' : 'period'
-  // the toggle seats the store's current period keys ONLY on the narrowing
-  // direction (TASK-145 D1-3): back to all, dropPeriodQuery's result stands
-  // — no seat-then-strip round trip on our own transition (a stray old-URL
-  // shape is the shell write-back's to correct, not this replace's);
-  // keeping the seated keys current from then on is the URL sync's, which
-  // writes them only while scope=period (TASK-124 D1)
-  const rest = dropPeriodQuery({ ...route.query, scope: undefined })
-  void router.replace({
-    query: { ...rest, ...(next === 'period' ? { scope: 'period', ...period.urlQuery } : {}) },
-  })
+  browsing.patch({ scope: browsing.logicalValue('scope') === 'period' ? undefined : 'period' })
 }
 
 // --- results -----------------------------------------------------------------

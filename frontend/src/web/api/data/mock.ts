@@ -125,7 +125,9 @@ function item(id: number, line: number, name: string, amount: number, category: 
   }
 }
 
-function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: boolean } = {}): Ledger {
+function seedLedger(
+  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean } = {},
+): Ledger {
   let id = 1
   const cats: Cat[] = []
   const add = (kind: CategoryKind, name: string, parentId: number | null, archived = false) => {
@@ -203,7 +205,7 @@ function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: bool
       : { ...receipt(101, 1, '2026-10-10', [
           item(1001, 1, '牛乳', 220, '食費/食料品'),
           item(1002, 2, 'パン', 180, '食費/食料品'),
-        ]), has_image: true, labels: [{ color: 'red' as const, title: null }], image: { width: 1024, height: 2048, original_filename: 'receipt.jpg', taken_at: null, taken_at_source: null }, image_url: { url: 'https://localhost:40281/media/img/mock-token-101', expires_at: '2099-01-01T00:00:00+09:00', width: 1024, height: 2048 } },
+        ]), has_image: true, labels: [{ color: 'red' as const, title: null }], image: { width: 1024, height: 2048, original_filename: 'receipt.jpg', taken_at: null, taken_at_source: null }, image_url: { url: 'https://localhost:40281/media/img/mock-token-101', expires_at: '2099-01-01T00:00:00+09:00', width: 1024, height: 2048 }, note: '近所の特売' },
     // richLabels (TASK-60 §5): receipt 102 carries all five labels so the
     // list-row spec has a 5-dot row; the default keeps 102 label-less
     opts.richLabels
@@ -236,6 +238,25 @@ function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: bool
       ),
     )
   }
+  // longDeletedHead (TASK-175 review #2): receipt 113 — the head's worst
+  // case, seeded DELETED (削除済み badge, no pencil) with a delimiter-free
+  // long store name and an 8-digit total sharing ONE main row. The list
+  // never includes a deleted receipt, so the browser spec reaches it by
+  // direct URL (the detail page falls back to its single-panel render).
+  // Default stays off: the extra receipt would shift every list-count /
+  // feed-order fixture.
+  if (opts.longDeletedHead) {
+    const LONG_NAME = 'とても長い店名のスーパーマーケット成城石井ヒルズ店'
+    const amount = 298
+    receipts.push({
+      ...receipt(113, 1, '2026-10-06', [item(1013, 1, '歯磨き粉', amount, '日用品')]),
+      store: { store_id: 1, name: LONG_NAME, category: 'スーパー' },
+      store_name_raw: LONG_NAME,
+      total_amount: 12345678,
+      total_diff: 12345678 - amount,
+      deleted_at: '2026-10-13T09:00:00+09:00',
+    })
+  }
   // fixed 5-color label definitions, title NULL = color only (TASK-17);
   // richLabels (TASK-60 §5) titles all five for the real-browser layout /
   // contrast specs — the default stays untitled so the unit fixtures hold
@@ -243,7 +264,9 @@ function seedLedger(opts: { feed?: number; richLabels?: boolean; bareTags?: bool
   return { cats, stores, receipts, labels }
 }
 
-export function createMockDataApi(opts: { feed?: number; richLabels?: boolean; bareTags?: boolean } = {}): DataApi {
+export function createMockDataApi(
+  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean } = {},
+): DataApi {
   const ledgers = new Map<number, Ledger>()
   let seq = 5000
 
