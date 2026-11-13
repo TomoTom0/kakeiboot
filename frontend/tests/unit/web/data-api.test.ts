@@ -174,4 +174,60 @@ describe('web/api/data', () => {
       vi.useRealTimers()
     }
   })
+
+  // showcase seed (TASK-184 README figures): six months of lifestyle data on
+  // top of the default ledger — period / per-month count and total, the
+  // time spread, store rename, and the no-option default staying untouched
+  it('[covers:mock-data.showcase-seed-shape][covers:mock-data.showcase-off-default] mock showcase seed: 2026-05〜10 各月8〜15枚・月合計3〜6万円・時刻分散・店名差し替え・既定は不変', async () => {
+    const mock = createMockDataApi({ showcase: true })
+    const list = await mock.listReceipts(1, { limit: 500 })
+    expect(list.total_count).toBe(81) // 3 既定 + 78 showcase
+    const months = new Map<string, { count: number; sum: number }>()
+    for (const r of list.receipts) {
+      const ym = (r.purchased_on ?? '').slice(0, 7)
+      const e = months.get(ym) ?? { count: 0, sum: 0 }
+      e.count += 1
+      e.sum += r.amount
+      months.set(ym, e)
+    }
+    expect([...months.keys()].sort()).toEqual(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
+    for (const [ym, e] of months) {
+      expect(e.count, `${ym} receipt count`).toBeGreaterThanOrEqual(8)
+      expect(e.count, `${ym} receipt count`).toBeLessThanOrEqual(15)
+      expect(e.sum, `${ym} monthly total`).toBeGreaterThanOrEqual(30_000)
+      expect(e.sum, `${ym} monthly total`).toBeLessThanOrEqual(60_000)
+    }
+    // showcase rows break the 18:30 fix and stay within 2..7 lines / 300..8000円
+    const times = new Set<string>()
+    for (const r of list.receipts) {
+      if (r.receipt_id <= 103) continue // the default three keep 18:30
+      times.add(r.purchased_time ?? '')
+      expect(r.item_count, `receipt ${r.receipt_id} item count`).toBeGreaterThanOrEqual(2)
+      expect(r.item_count, `receipt ${r.receipt_id} item count`).toBeLessThanOrEqual(7)
+      expect(r.amount, `receipt ${r.receipt_id} amount`).toBeGreaterThanOrEqual(300)
+      expect(r.amount, `receipt ${r.receipt_id} amount`).toBeLessThanOrEqual(8000)
+    }
+    expect(times.size).toBeGreaterThanOrEqual(30)
+    // October rows stay within the capture clock (2026-10-31, no future dates)
+    for (const r of list.receipts) {
+      const on = r.purchased_on
+      if (on !== null && on.startsWith('2026-10')) expect(on <= '2026-10-30', `oct date ${on}`).toBe(true)
+    }
+    // the store rename reaches the default receipts too (ids 1..3 stay)
+    const stores = await mock.listStores(1)
+    expect(stores.map((s) => s.name).sort()).toEqual(
+      ['サンライフ', 'さくら薬局', 'デイリーベル駅前店', '麺処 こまち', '喫茶 モーニング'].sort(),
+    )
+    const rep = await mock.getReceipt(1, 271) // README representative: 10/13 スーパー7品目
+    expect(rep.store?.name).toBe('サンライフ')
+    expect(rep.items).toHaveLength(7)
+    expect(rep.has_image).toBe(true)
+    expect(rep.labels?.map((l) => l.color)).toEqual(['red'])
+    // without the option the default ledger is unchanged (regression guard)
+    const plain = createMockDataApi()
+    const base = await plain.listReceipts(1, { limit: 100 })
+    expect(base.total_count).toBe(3)
+    expect(base.sum_amount).toBe(948)
+    expect((await plain.listStores(1)).map((s) => s.name)).toEqual(['Aマート', 'エーマート', 'Bコンビニ'])
+  })
 })
