@@ -16,6 +16,7 @@ import type {
   DataApi,
   ItemSummary,
   Label,
+  PaymentMethod,
   ReceiptItem,
   ReceiptSummary,
   ReceiptView,
@@ -125,8 +126,144 @@ function item(id: number, line: number, name: string, amount: number, category: 
   }
 }
 
+// showcase (TASK-184 README figures): six months of a real-looking ledger
+// layered on the thin default seed. The store list below REPLACES the three
+// default names (ids 1..3 stay, so receipts 101-103 follow along); every
+// receipt is additive, like feed/richLabels — without the option the default
+// ledger is unchanged. Dates live in 2026-05..2026-10 because the browser
+// stub pins "today" in that era (stub.ts clock; the README capture pins
+// 10-31): October rows keep their dates at 10-30 or earlier, and the six
+// months fill the home trend window (2026-05..10). Store names avoid real
+// chains; trip shops (高速バス・道の駅・温泉宿・みやげ処) ride store_name_raw
+// only, like OCR'd one-offs.
+// Month shape — 2026-05: 13 receipts / 30,409円, 2026-06: 13 / 31,150円,
+// 2026-07: 14 / 36,406円 (red = one trip), 2026-08: 13 / 31,276円,
+// 2026-09: 13 / 30,498円, 2026-10: 15 (3 default + 12) / 30,932円 —
+// October spans 10/1..10/30 so every week bucket of the home week table
+// (10/19-25 and 10/26-11/1 included) carries real spend at the capture's
+// 10-31 clock. Receipt 271 (10-13 スーパー7品目 5,336円・image・red) is the
+// README receipt-figure representative.
+const SHOWCASE_STORES: Store[] = [
+  { id: 1, name: 'サンライフ', category: 'スーパー', aliases: [] },
+  { id: 2, name: 'さくら薬局', category: 'ドラッグストア', aliases: [] },
+  { id: 3, name: 'デイリーベル駅前店', category: 'コンビニ', aliases: [] },
+  { id: 4, name: '麺処 こまち', category: null, aliases: [] },
+  { id: 5, name: '喫茶 モーニング', category: null, aliases: [] },
+]
+
+const SHOWCASE_CATS = {
+  grocery: '食費/食料品',
+  eatingOut: '食費/外食',
+  daily: '日用品',
+  transit: '交通費',
+} as const
+
+interface ShowcaseRow {
+  /** purchased_on (YYYY-MM-DD) */
+  on: string
+  /** purchased_time (HH:MM), spread across 07:4x..21:4x */
+  tm: string
+  /** SHOWCASE_STORES id 1..5, or null for a one-off raw-named shop */
+  s: number | null
+  /** store_name_raw when s is null */
+  raw?: string
+  pay: PaymentMethod
+  /** lines: [name, amount_incl, category] */
+  it: Array<[string, number, string | null]>
+  lb?: LabelColor[]
+  note?: string
+  img?: boolean
+}
+
+const SHOWCASE_RECEIPTS: ShowcaseRow[] = [
+  // ---- 2026-05: 13 receipts / 30,409円 ----
+  { on: '2026-05-02', tm: '10:12', s: 1, pay: 'credit_card', it: [['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['豚バラブロック', 498, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['サラダ油', 398, SHOWCASE_CATS.grocery], ['冷凍うどん5玉', 358, SHOWCASE_CATS.grocery], ['ヨーグルト12個', 698, SHOWCASE_CATS.grocery], ['卵10個', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-03', tm: '12:40', s: 4, pay: 'cash', it: [['かけうどん', 430, SHOWCASE_CATS.eatingOut], ['だし巻き卵', 180, SHOWCASE_CATS.eatingOut], ['いなり寿司', 180, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-05-05', tm: '08:02', s: 3, pay: 'qr_code', it: [['サンドイッチ', 268, SHOWCASE_CATS.eatingOut], ['カフェオレ', 168, SHOWCASE_CATS.grocery], ['バナナ', 198, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-07', tm: '19:23', s: 1, pay: 'credit_card', it: [['豚こま切れ肉', 348, SHOWCASE_CATS.grocery], ['キリン一番搾り6缶', 948, SHOWCASE_CATS.grocery], ['玄米2kg', 1280, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['もやし', 98, SHOWCASE_CATS.grocery], ['絹豆腐3連', 148, SHOWCASE_CATS.grocery], ['ポテトサラダ', 198, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-09', tm: '10:05', s: 2, pay: 'e_money', it: [['洗剤詰替え特大', 698, SHOWCASE_CATS.daily], ['化粧水', 998, SHOWCASE_CATS.daily], ['キッチンペーパー5巻', 298, SHOWCASE_CATS.daily], ['使い捨てマスク', 398, SHOWCASE_CATS.daily], ['歯ブラシ3本', 288, SHOWCASE_CATS.daily]] },
+  { on: '2026-05-10', tm: '15:47', s: 1, pay: 'credit_card', it: [['鮭切身2切', 498, SHOWCASE_CATS.grocery], ['合わせ味噌', 348, SHOWCASE_CATS.grocery], ['ほうれん草', 158, SHOWCASE_CATS.grocery], ['油揚げ', 98, SHOWCASE_CATS.grocery], ['だしパック', 298, SHOWCASE_CATS.grocery], ['しょうが', 98, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-14', tm: '20:11', s: 1, pay: 'credit_card', it: [['鍋用牛肉パック', 980, SHOWCASE_CATS.grocery], ['しめじ', 158, SHOWCASE_CATS.grocery], ['焼き豆腐', 168, SHOWCASE_CATS.grocery], ['ポン酢', 258, SHOWCASE_CATS.grocery], ['バニラアイス', 298, SHOWCASE_CATS.grocery], ['冷凍ギョーザ', 298, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-16', tm: '11:30', s: 5, pay: 'cash', it: [['ブレンドコーヒー', 480, SHOWCASE_CATS.eatingOut], ['モーニングセット', 580, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-05-18', tm: '08:30', s: 3, pay: 'e_money', it: [['ICカードチャージ', 5000, SHOWCASE_CATS.transit], ['おにぎり', 158, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-05-21', tm: '19:05', s: 1, pay: 'credit_card', it: [['鶏むね肉2枚', 496, SHOWCASE_CATS.grocery], ['スパゲッティ1.6mm', 198, SHOWCASE_CATS.grocery], ['エキストラバージン油', 898, SHOWCASE_CATS.grocery], ['ツナ缶4缶', 516, SHOWCASE_CATS.grocery], ['ホールトマト缶', 258, SHOWCASE_CATS.grocery], ['にんにく', 158, SHOWCASE_CATS.grocery], ['粉チーズ', 498, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-24', tm: '13:15', s: 4, pay: 'cash', it: [['天ぷらうどん', 630, SHOWCASE_CATS.eatingOut], ['かき揚げ丼小', 380, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-05-28', tm: '19:44', s: 1, pay: 'credit_card', it: [['さんま3尾', 447, SHOWCASE_CATS.grocery], ['大根', 198, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['納豆3パック', 148, SHOWCASE_CATS.grocery], ['焼き海苔', 118, SHOWCASE_CATS.grocery], ['みりん', 298, SHOWCASE_CATS.grocery], ['そば茶', 348, SHOWCASE_CATS.grocery]] },
+  { on: '2026-05-30', tm: '16:20', s: 3, pay: 'qr_code', it: [['ポテトチップス', 148, SHOWCASE_CATS.grocery], ['緑茶2L', 178, SHOWCASE_CATS.grocery], ['アイスバー', 128, SHOWCASE_CATS.grocery]] },
+  // ---- 2026-06: 13 receipts / 31,150円 ----
+  { on: '2026-06-02', tm: '19:41', s: 1, pay: 'credit_card', it: [['鶏もも肉3パック', 1194, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['トマト', 298, SHOWCASE_CATS.grocery], ['麦茶12パック', 698, SHOWCASE_CATS.grocery], ['しょうゆ', 258, SHOWCASE_CATS.grocery], ['玉ねぎ', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-03', tm: '07:48', s: 3, pay: 'cash', it: [['おにぎり2個', 316, SHOWCASE_CATS.eatingOut], ['ウーロン茶', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-05', tm: '19:58', s: 1, pay: 'credit_card', img: true, it: [['牛カルビ500g', 1580, SHOWCASE_CATS.grocery], ['生ビール缶6缶', 1188, SHOWCASE_CATS.grocery], ['サラダ野菜ミックス', 298, SHOWCASE_CATS.grocery], ['スイカ1/4カット', 698, SHOWCASE_CATS.grocery], ['バニラアイス', 498, SHOWCASE_CATS.grocery], ['とうもろこし2本', 298, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-06', tm: '10:24', s: 1, pay: 'credit_card', it: [['牛切り落とし500g', 1080, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['玉ねぎ3個', 258, SHOWCASE_CATS.grocery], ['にんじん', 128, SHOWCASE_CATS.grocery], ['ジャガイモ', 198, SHOWCASE_CATS.grocery], ['カレールー', 298, SHOWCASE_CATS.grocery], ['サラダ油', 398, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-08', tm: '12:55', s: 5, pay: 'e_money', lb: ['blue'], it: [['スパゲッティセット', 850, SHOWCASE_CATS.eatingOut], ['アイスコーヒー', 380, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-06-10', tm: '15:22', s: 2, pay: 'cash', it: [['鎮痛剤', 498, SHOWCASE_CATS.daily], ['ビタミン剤', 998, SHOWCASE_CATS.daily], ['絆創膏', 198, SHOWCASE_CATS.daily]] },
+  { on: '2026-06-13', tm: '11:08', s: 4, pay: 'cash', it: [['カレーうどん', 680, SHOWCASE_CATS.eatingOut], ['白飯', 180, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-06-15', tm: '08:33', s: 3, pay: 'e_money', it: [['ICカードチャージ', 5000, SHOWCASE_CATS.transit], ['カフェオレ', 168, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-17', tm: '19:52', s: 1, pay: 'credit_card', it: [['豚ロース生姜焼き用', 548, SHOWCASE_CATS.grocery], ['玉ねぎ', 198, SHOWCASE_CATS.grocery], ['しょうが', 98, SHOWCASE_CATS.grocery], ['米味噌', 348, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery], ['青しそ', 98, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-20', tm: '10:40', s: 2, pay: 'credit_card', img: true, it: [['日焼け止め', 898, SHOWCASE_CATS.daily], ['シャンプー詰替え', 598, SHOWCASE_CATS.daily], ['リンス詰替え', 598, SHOWCASE_CATS.daily], ['ボディソープ', 498, SHOWCASE_CATS.daily], ['制汗剤', 498, SHOWCASE_CATS.daily], ['綿棒', 158, SHOWCASE_CATS.daily]] },
+  { on: '2026-06-22', tm: '19:18', s: 1, pay: 'credit_card', it: [['鶏ささみ', 298, SHOWCASE_CATS.grocery], ['春雨', 158, SHOWCASE_CATS.grocery], ['ごま油', 428, SHOWCASE_CATS.grocery], ['鶏ガラスープの素', 198, SHOWCASE_CATS.grocery], ['わかめ', 158, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-26', tm: '18:47', s: 3, pay: 'qr_code', it: [['焼きそばパン', 158, SHOWCASE_CATS.eatingOut], ['お茶', 128, SHOWCASE_CATS.grocery], ['プリン', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-06-28', tm: '17:02', s: 1, pay: 'credit_card', it: [['あじ干物3枚', 596, SHOWCASE_CATS.grocery], ['大根', 198, SHOWCASE_CATS.grocery], ['味噌', 348, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery], ['ほうれん草', 158, SHOWCASE_CATS.grocery], ['油揚げ', 98, SHOWCASE_CATS.grocery], ['麦茶', 348, SHOWCASE_CATS.grocery]] },
+  // ---- 2026-07: 14 receipts / 36,406円 (red = one 2-day trip) ----
+  { on: '2026-07-01', tm: '19:29', s: 1, pay: 'credit_card', it: [['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['なす', 198, SHOWCASE_CATS.grocery], ['しょうが', 98, SHOWCASE_CATS.grocery], ['めんつゆ', 298, SHOWCASE_CATS.grocery], ['そうめん5束', 358, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-03', tm: '12:18', s: 5, pay: 'cash', it: [['冷やしそうめんセット', 780, SHOWCASE_CATS.eatingOut], ['レモンスカッシュ', 420, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-07-05', tm: '09:52', s: 1, pay: 'credit_card', img: true, it: [['米5kg', 2280, SHOWCASE_CATS.grocery], ['豚バラ肉', 698, SHOWCASE_CATS.grocery], ['キリン一番搾り6缶', 948, SHOWCASE_CATS.grocery], ['トマト', 298, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['枝豆', 298, SHOWCASE_CATS.grocery], ['アイスカップ', 298, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-07', tm: '07:42', s: 3, pay: 'cash', it: [['サンドイッチ', 268, SHOWCASE_CATS.eatingOut], ['バナナ牛乳', 168, SHOWCASE_CATS.grocery], ['グレープフルーツジュース', 158, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-11', tm: '08:15', s: null, raw: '高速バスのりば', pay: 'credit_card', lb: ['red'], img: true, it: [['往復乗車券', 4600, SHOWCASE_CATS.transit], ['座席指定券', 200, SHOWCASE_CATS.transit]] },
+  { on: '2026-07-11', tm: '12:26', s: null, raw: '道の駅 みどりの里', pay: 'cash', lb: ['red'], it: [['地ビール2本', 1280, SHOWCASE_CATS.grocery], ['お土産クッキー', 880, SHOWCASE_CATS.grocery], ['ちまき', 380, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-11', tm: '18:39', s: null, raw: '温泉宿 松葉', pay: 'credit_card', lb: ['red'], it: [['1泊2食プラン', 7480, SHOWCASE_CATS.eatingOut], ['夕食ドリンク', 320, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-07-12', tm: '10:47', s: null, raw: 'みやげ処 香り', pay: 'cash', lb: ['red'], it: [['おかき詰め合わせ', 1480, SHOWCASE_CATS.grocery], ['抹茶クッキー', 880, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-15', tm: '20:15', s: 1, pay: 'credit_card', it: [['鶏むね肉', 298, SHOWCASE_CATS.grocery], ['カツ用豚ロース', 498, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['ソース', 258, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery], ['揚げ油', 398, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-18', tm: '10:31', s: 2, pay: 'e_money', it: [['洗剤', 498, SHOWCASE_CATS.daily], ['歯磨き粉2本', 396, SHOWCASE_CATS.daily], ['日焼け止め', 898, SHOWCASE_CATS.daily], ['マスク', 398, SHOWCASE_CATS.daily]] },
+  { on: '2026-07-20', tm: '08:05', s: 3, pay: 'qr_code', it: [['おにぎり2個', 316, SHOWCASE_CATS.eatingOut], ['炭酸水', 128, SHOWCASE_CATS.grocery], ['バナナ', 198, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-23', tm: '12:38', s: 4, pay: 'cash', it: [['ぶっかけうどん小', 380, SHOWCASE_CATS.eatingOut], ['おでん2個', 296, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-07-27', tm: '19:12', s: 1, pay: 'credit_card', it: [['牛スライス', 548, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['とろろ芋', 298, SHOWCASE_CATS.grocery], ['納豆6パック', 268, SHOWCASE_CATS.grocery], ['麦茶', 348, SHOWCASE_CATS.grocery], ['ヨーグルト', 398, SHOWCASE_CATS.grocery], ['冷凍うどん', 358, SHOWCASE_CATS.grocery]] },
+  { on: '2026-07-30', tm: '18:26', s: 3, pay: 'cash', it: [['アイスコーヒー', 138, SHOWCASE_CATS.grocery], ['チョコレート', 158, SHOWCASE_CATS.grocery], ['のど飴', 158, SHOWCASE_CATS.grocery]] },
+  // ---- 2026-08: 13 receipts / 31,276円 ----
+  { on: '2026-08-01', tm: '10:09', s: 1, pay: 'credit_card', img: true, it: [['米5kg', 2280, SHOWCASE_CATS.grocery], ['鶏もも肉2パック', 796, SHOWCASE_CATS.grocery], ['そうめん10束', 698, SHOWCASE_CATS.grocery], ['めんつゆ', 398, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['トマト', 298, SHOWCASE_CATS.grocery], ['かき氷シロップ', 300, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-03', tm: '07:44', s: 3, pay: 'cash', it: [['のり弁当', 498, SHOWCASE_CATS.eatingOut], ['お茶', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-05', tm: '12:33', s: 5, pay: 'cash', it: [['冷麺定食', 950, SHOWCASE_CATS.eatingOut], ['アイスコーヒー', 380, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-08-07', tm: '18:59', s: 1, pay: 'credit_card', it: [['豚バラ肉', 698, SHOWCASE_CATS.grocery], ['もやし', 98, SHOWCASE_CATS.grocery], ['ニラ', 158, SHOWCASE_CATS.grocery], ['味噌', 348, SHOWCASE_CATS.grocery], ['豆腐3連', 148, SHOWCASE_CATS.grocery], ['キリン一番搾り6缶', 948, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-09', tm: '21:12', s: 3, pay: 'qr_code', it: [['カップヌードル3個', 414, SHOWCASE_CATS.grocery], ['缶チューハイ6缶', 948, SHOWCASE_CATS.grocery], ['ポテトチップス', 148, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-11', tm: '09:41', s: 1, pay: 'credit_card', it: [['そうめん5束', 358, SHOWCASE_CATS.grocery], ['ハム', 298, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['梅干し', 398, SHOWCASE_CATS.grocery], ['めんつゆ', 298, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-13', tm: '08:22', s: 3, pay: 'e_money', it: [['ICカードチャージ', 5000, SHOWCASE_CATS.transit], ['サンドイッチ', 258, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-08-14', tm: '20:41', s: 1, pay: 'credit_card', lb: ['green'], img: true, it: [['牛カルビ500g', 1580, SHOWCASE_CATS.grocery], ['冷凍エビフライ', 698, SHOWCASE_CATS.grocery], ['ビール6缶', 948, SHOWCASE_CATS.grocery], ['スイカ1/4', 698, SHOWCASE_CATS.grocery], ['枝豆', 298, SHOWCASE_CATS.grocery], ['とうもろこし', 298, SHOWCASE_CATS.grocery], ['バニラアイス', 498, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-16', tm: '11:19', s: 4, pay: 'cash', it: [['冷やしうどん', 530, SHOWCASE_CATS.eatingOut], ['天ぷら盛り合わせ', 480, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-08-19', tm: '19:08', s: 2, pay: 'credit_card', it: [['掃除機紙パック3枚', 498, SHOWCASE_CATS.daily], ['トイレットペーパー12ロール', 498, SHOWCASE_CATS.daily], ['ウェットシート', 298, SHOWCASE_CATS.daily], ['食器用洗剤', 298, SHOWCASE_CATS.daily]] },
+  { on: '2026-08-22', tm: '10:02', s: 1, pay: 'credit_card', it: [['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['塩こうじ', 298, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['納豆3パック', 148, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery], ['調整豆乳', 168, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery]] },
+  { on: '2026-08-26', tm: '12:51', s: 5, pay: 'e_money', lb: ['blue'], it: [['パスタランチ', 980, SHOWCASE_CATS.eatingOut], ['コーヒー', 380, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-08-29', tm: '21:48', s: 3, pay: 'cash', it: [['麦茶ペットボトル2本', 356, SHOWCASE_CATS.grocery], ['アイスバー2本', 256, SHOWCASE_CATS.grocery], ['のど飴', 158, SHOWCASE_CATS.grocery]] },
+  // ---- 2026-09: 13 receipts / 30,498円 ----
+  { on: '2026-09-01', tm: '19:21', s: 1, pay: 'credit_card', it: [['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['きのこ3種パック', 298, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['麦茶', 348, SHOWCASE_CATS.grocery], ['しょうゆ', 258, SHOWCASE_CATS.grocery], ['玉子豆腐', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-03', tm: '07:58', s: 3, pay: 'cash', it: [['おにぎり2個', 316, SHOWCASE_CATS.eatingOut], ['カフェオレ', 168, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-05', tm: '10:16', s: 2, pay: 'e_money', it: [['風邪薬セット', 1296, SHOWCASE_CATS.daily], ['のど飴', 298, SHOWCASE_CATS.daily], ['マスク', 398, SHOWCASE_CATS.daily], ['ウイルス除去スプレー', 598, SHOWCASE_CATS.daily]] },
+  { on: '2026-09-07', tm: '12:44', s: 5, pay: 'cash', lb: ['blue'], it: [['日替わりランチ', 850, SHOWCASE_CATS.eatingOut], ['アイスティー', 380, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-09-09', tm: '19:47', s: 1, pay: 'credit_card', img: true, it: [['さんま2尾', 396, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['きのこ鍋つゆ', 298, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery], ['長ねぎ', 158, SHOWCASE_CATS.grocery], ['七味唐辛子', 168, SHOWCASE_CATS.grocery], ['梨4個', 896, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-12', tm: '11:27', s: 4, pay: 'cash', it: [['きつねうどん', 480, SHOWCASE_CATS.eatingOut], ['いなり寿司', 180, SHOWCASE_CATS.eatingOut], ['冷やしおろしそば', 580, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-09-14', tm: '08:18', s: 3, pay: 'e_money', it: [['ICカードチャージ', 5000, SHOWCASE_CATS.transit], ['バナナ', 198, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-16', tm: '19:02', s: 1, pay: 'credit_card', it: [['豚こま切れ肉', 348, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['塩だれ', 298, SHOWCASE_CATS.grocery], ['ごま油', 428, SHOWCASE_CATS.grocery], ['もやし', 98, SHOWCASE_CATS.grocery], ['ビール6缶', 948, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-19', tm: '10:35', s: 2, pay: 'credit_card', img: true, it: [['化粧水', 1280, SHOWCASE_CATS.daily], ['乳液', 980, SHOWCASE_CATS.daily], ['日焼け止め', 898, SHOWCASE_CATS.daily], ['クレンジング料', 798, SHOWCASE_CATS.daily], ['綿棒', 158, SHOWCASE_CATS.daily]] },
+  { on: '2026-09-21', tm: '13:26', s: 3, pay: 'qr_code', it: [['フランクフルト', 178, SHOWCASE_CATS.eatingOut], ['缶チューハイ', 148, SHOWCASE_CATS.grocery], ['フライドポテト', 198, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-09-24', tm: '18:52', s: 1, pay: 'credit_card', it: [['鶏むね肉', 298, SHOWCASE_CATS.grocery], ['塩こうじ', 298, SHOWCASE_CATS.grocery], ['大根', 198, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery], ['鍋つゆ', 398, SHOWCASE_CATS.grocery], ['春菊', 198, SHOWCASE_CATS.grocery], ['しらたき', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-27', tm: '17:11', s: 1, pay: 'credit_card', it: [['牛スライス', 548, SHOWCASE_CATS.grocery], ['とんかつ用豚肉', 598, SHOWCASE_CATS.grocery], ['パン粉', 158, SHOWCASE_CATS.grocery], ['揚げ油', 398, SHOWCASE_CATS.grocery], ['ソース', 258, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['卵', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-09-30', tm: '19:39', s: 3, pay: 'cash', it: [['チョコパイ', 128, SHOWCASE_CATS.grocery], ['牛乳', 238, SHOWCASE_CATS.grocery], ['みかん3個', 298, SHOWCASE_CATS.grocery]] },
+  // ---- 2026-10: 12 additions (default 101-103 stay; month = 15 / 30,932円) ----
+  { on: '2026-10-01', tm: '19:31', s: 1, pay: 'credit_card', it: [['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['じゃがいも', 298, SHOWCASE_CATS.grocery], ['にんじん', 198, SHOWCASE_CATS.grocery], ['玉ねぎ', 258, SHOWCASE_CATS.grocery], ['カレールー', 398, SHOWCASE_CATS.grocery], ['無洗米5kg', 2680, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-08', tm: '19:26', s: 1, pay: 'credit_card', img: true, it: [['国産牛切り落とし500g', 1580, SHOWCASE_CATS.grocery], ['きのこ3種', 298, SHOWCASE_CATS.grocery], ['鍋つゆ', 398, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery], ['長ねぎ', 158, SHOWCASE_CATS.grocery], ['しらたき', 128, SHOWCASE_CATS.grocery], ['調整豆乳', 168, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-09', tm: '15:48', s: 5, pay: 'e_money', lb: ['blue'], it: [['チーズケーキセット', 880, SHOWCASE_CATS.eatingOut], ['紅茶', 480, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-10-10', tm: '11:33', s: 1, pay: 'credit_card', img: true, it: [['牛カルビ500g', 1580, SHOWCASE_CATS.grocery], ['エビスビール6缶', 1188, SHOWCASE_CATS.grocery], ['サラダミックス', 298, SHOWCASE_CATS.grocery], ['鮭ほぐし', 498, SHOWCASE_CATS.grocery], ['明太子', 698, SHOWCASE_CATS.grocery], ['麦茶', 348, SHOWCASE_CATS.grocery], ['ヨーグルト', 398, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-13', tm: '19:44', s: 1, pay: 'credit_card', lb: ['red'], img: true, note: '今週のまとめ買い', it: [['鶏もも肉2パック', 796, SHOWCASE_CATS.grocery], ['豚バラ肉', 698, SHOWCASE_CATS.grocery], ['米5kg', 2280, SHOWCASE_CATS.grocery], ['キリン一番搾り6缶', 948, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['卵10個', 258, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-14', tm: '12:37', s: 3, pay: 'qr_code', it: [['おにぎり2個', 316, SHOWCASE_CATS.eatingOut], ['ウーロン茶', 128, SHOWCASE_CATS.grocery], ['プリン', 158, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-19', tm: '19:41', s: 1, pay: 'credit_card', it: [['米5kg', 2280, SHOWCASE_CATS.grocery], ['鶏もも肉', 398, SHOWCASE_CATS.grocery], ['キャベツ', 198, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['納豆6パック', 268, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-21', tm: '12:33', s: 4, pay: 'cash', it: [['かけうどん', 430, SHOWCASE_CATS.eatingOut], ['だし巻き卵', 180, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-10-24', tm: '10:19', s: 5, pay: 'e_money', lb: ['blue'], it: [['モーニングセット', 580, SHOWCASE_CATS.eatingOut], ['ブレンドコーヒー', 480, SHOWCASE_CATS.eatingOut]] },
+  { on: '2026-10-27', tm: '19:47', s: 1, pay: 'credit_card', it: [['豚バラ肉', 698, SHOWCASE_CATS.grocery], ['さんま2尾', 396, SHOWCASE_CATS.grocery], ['大根', 198, SHOWCASE_CATS.grocery], ['玉ねぎ', 258, SHOWCASE_CATS.grocery], ['長ねぎ', 158, SHOWCASE_CATS.grocery], ['みそ', 348, SHOWCASE_CATS.grocery], ['豆腐', 148, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-29', tm: '08:12', s: 3, pay: 'cash', it: [['サンドイッチ', 268, SHOWCASE_CATS.eatingOut], ['バナナ', 198, SHOWCASE_CATS.grocery], ['炭酸水', 128, SHOWCASE_CATS.grocery]] },
+  { on: '2026-10-30', tm: '19:55', s: 1, pay: 'credit_card', img: true, it: [['牛切り落とし500g', 1080, SHOWCASE_CATS.grocery], ['キリン一番搾り6缶', 948, SHOWCASE_CATS.grocery], ['卵10個', 258, SHOWCASE_CATS.grocery], ['もやし', 98, SHOWCASE_CATS.grocery], ['きゅうり', 158, SHOWCASE_CATS.grocery], ['ホールトマト缶', 258, SHOWCASE_CATS.grocery]] },
+]
+
 function seedLedger(
-  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean } = {},
+  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean; showcase?: boolean } = {},
 ): Ledger {
   let id = 1
   const cats: Cat[] = []
@@ -144,16 +281,22 @@ function seedLedger(
   add('store', 'スーパー', null)
   add('store', 'コンビニ', null)
   add('store', 'ドラッグストア', null)
-  const stores: Store[] = [
-    { id: 1, name: 'Aマート', category: 'スーパー', aliases: [] },
-    { id: 2, name: 'エーマート', category: null, aliases: [] },
-    { id: 3, name: 'Bコンビニ', category: 'コンビニ', aliases: [] },
-  ]
+  const stores: Store[] = opts.showcase
+    ? // showcase replaces the three default names (ids stay — receipts
+      // 101-103 follow); cloned per seed because updateStore/mergeStores
+      // mutate the array
+      SHOWCASE_STORES.map((s) => ({ ...s, aliases: [...s.aliases] }))
+    : [
+        { id: 1, name: 'Aマート', category: 'スーパー', aliases: [] },
+        { id: 2, name: 'エーマート', category: null, aliases: [] },
+        { id: 3, name: 'Bコンビニ', category: 'コンビニ', aliases: [] },
+      ]
   const receipt = (
     rid: number,
     storeId: number,
     on: string,
     items: ReceiptItem[],
+    time: string = '18:30',
   ): ReceiptView => {
     const s = stores.find((x) => x.id === storeId)!
     const total = items.reduce((a, b) => a + b.amount_incl, 0)
@@ -167,7 +310,7 @@ function seedLedger(
       store: { store_id: s.id, name: s.name, category: s.category },
       store_name_raw: s.name,
       purchased_on: on,
-      purchased_time: '18:30',
+      purchased_time: time,
       tax_mode: 'inclusive',
       total_amount: total,
       tax_amount: null,
@@ -257,6 +400,37 @@ function seedLedger(
       deleted_at: '2026-10-13T09:00:00+09:00',
     })
   }
+  // showcase (TASK-184 README figures): layer SHOWCASE_RECEIPTS on top —
+  // ids 201..278 (clear of feed's 104.. and longDeletedHead's 113), item
+  // ids from 3001 (feed seeds from 2001, runtime seq starts at 5000). The
+  // default three receipts keep their data (only the store names changed).
+  if (opts.showcase) {
+    let rid = 201
+    let iid = 3001
+    for (const row of SHOWCASE_RECEIPTS) {
+      const lines = row.it.map(([name, amount, cat], i) => item(iid++, i + 1, name, amount, cat))
+      const base = receipt(rid++, row.s ?? 1, row.on, lines, row.tm)
+      receipts.push({
+        ...base,
+        ...(row.s === null ? { store: null, store_name_raw: row.raw ?? null } : {}),
+        payment_method: row.pay,
+        labels: (row.lb ?? []).map((color) => ({ color, title: null })),
+        note: row.note ?? null,
+        ...(row.img
+          ? {
+              has_image: true,
+              image: { width: 1024, height: 2048, original_filename: 'receipt.jpg', taken_at: null, taken_at_source: null },
+              image_url: {
+                url: `https://localhost:40281/media/img/mock-token-${base.receipt_id}`,
+                expires_at: '2099-01-01T00:00:00+09:00',
+                width: 1024,
+                height: 2048,
+              },
+            }
+          : {}),
+      })
+    }
+  }
   // fixed 5-color label definitions, title NULL = color only (TASK-17);
   // richLabels (TASK-60 §5) titles all five for the real-browser layout /
   // contrast specs — the default stays untitled so the unit fixtures hold
@@ -265,7 +439,7 @@ function seedLedger(
 }
 
 export function createMockDataApi(
-  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean } = {},
+  opts: { feed?: number; richLabels?: boolean; bareTags?: boolean; longDeletedHead?: boolean; showcase?: boolean } = {},
 ): DataApi {
   const ledgers = new Map<number, Ledger>()
   let seq = 5000

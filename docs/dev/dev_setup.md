@@ -9,6 +9,7 @@
 | `Cargo.toml` | Cargo workspace（member: `backend`） |
 | `backend/` | Rust backend（axum + rmcp + sqlx/SQLite）。`src/`、`tests/`、`migrations/` |
 | `frontend/` | Vite + Vue 3 + Pinia + TypeScript（pnpm）。エントリは `web.html`（web 画面）と `widget.html`（MCP widget） |
+| `assets/` | README 用の画面画像（`img/shot_home.png`・`img/shot_receipt.png`。`frontend/tests/browser/capture.readme.spec.ts` が showcase seed から配置） |
 | `configs/` | 設定の単一管理元（環境別 `configs/<env>/` の `app.toml`・`auth.toml`・`mcp.toml` と、deploy 先の `deploy.toml`）。port・パス・タイムアウト等はここで管理し、コードに直書きしない |
 | `docs/` | 恒久文書（利用者向け・仕様・運用・開発）。`docs/usage/` は web 画面の使い方の本文の正本 |
 | `tests/` | テスト構成の索引と条件書 |

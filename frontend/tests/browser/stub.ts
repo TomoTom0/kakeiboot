@@ -22,9 +22,51 @@ export const ME: Me = {
   auth_at: Date.now(),
 }
 
-const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="1024" viewBox="0 0 512 1024">
-<rect width="512" height="1024" fill="#f4f1ea"/>
-${Array.from({ length: 20 }, (_, i) => `<rect x="48" y="${80 + i * 44}" width="${200 + ((i * 53) % 220)}" height="14" fill="#c9c3b6"/>`).join('')}
+// /media/img/* answer (TASK-184 review): a receipt-looking placeholder —
+// cream thermal-paper ground, store head + datetime, dotted rules, the
+// representative seven-line item table with 小計/合計/お預り/お釣り, and a
+// barcode band — instead of the old uniform gray skeleton bars. Same 512x1024
+// box, same route / content-type; only the picture changed. The lines mirror
+// the README representative receipt (mock.ts SHOWCASE_RECEIPTS 10-13 5,336円).
+const R_ITEMS: Array<[name: string, yen: string]> = [
+  ['鶏もも肉2パック', '796'],
+  ['豚バラ肉', '698'],
+  ['米5kg', '2,280'],
+  ['キリン一番搾り6缶', '948'],
+  ['キャベツ', '198'],
+  ['きゅうり', '158'],
+  ['卵10個', '258'],
+]
+// fixed alternating barcode bar widths — no randomness, so captures are
+// byte-stable across runs
+const R_BARS = [3, 2, 4, 2, 3, 3, 2, 5, 2, 3, 4, 2, 3, 2, 4, 3, 2, 3, 5, 2, 3, 2, 4, 3, 2, 3, 2, 4, 2, 3, 3, 2, 4, 2, 3, 2, 5, 3, 2, 3]
+const rLine = (name: string, yen: string, y: number, strong = false): string => {
+  const size = strong ? 25 : 23
+  const weight = strong ? ' font-weight="bold"' : ''
+  return (
+    `<text x="48" y="${y}" font-size="${size}"${weight} fill="#33312b">${name}</text>` +
+    `<text x="464" y="${y}" text-anchor="end" font-size="${size}"${weight} fill="#33312b">${yen}</text>`
+  )
+}
+const rRule = (y: number): string =>
+  `<line x1="44" y1="${y}" x2="468" y2="${y}" stroke="#a49c8a" stroke-width="2" stroke-dasharray="7 5"/>`
+const rBarcode = R_BARS.reduce<{ svg: string; x: number }>(
+  (acc, w) => ({ svg: `${acc.svg}<rect x="${acc.x}" y="742" width="${w}" height="170" fill="#1e1d19"/>`, x: acc.x + w + 4 }),
+  { svg: '', x: 122 },
+).svg
+const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="1024" viewBox="0 0 512 1024" font-family="sans-serif">
+<rect width="512" height="1024" fill="#f8f4e9"/>
+<text x="256" y="94" text-anchor="middle" font-size="36" font-weight="bold" fill="#262521">サンライフ</text>
+<text x="256" y="124" text-anchor="middle" font-size="20" fill="#57544b">2026年10月13日（火） 19:44</text>
+${rRule(152)}
+${R_ITEMS.map(([n, v], i) => rLine(n, v, 194 + i * 42)).join('\n')}
+${rRule(486)}
+${rLine('小計', '5,336', 522)}
+${rLine('合計', '5,336', 562, true)}
+${rRule(590)}
+${rLine('お預り', '10,000', 626)}
+${rLine('お釣り', '4,664', 664)}
+${rBarcode}
 </svg>`
 
 // Consent screen fixture (TASK-37 usage figures): the scope descriptions are
@@ -152,7 +194,9 @@ async function dispatch(api: DataApi, method: string, path: string, q: URLSearch
  * payment/category, no assigned labels — the seed of TASK-60 §9-1 alt-2,
  * unused by the specs since TASK-167's head rework, kept as the minimal-host
  * variation); `longDeletedHead` seeds the deleted long-store-name big-total
- * receipt 113 (TASK-175 review #2, reached by direct URL); `grants` replaces the
+ * receipt 113 (TASK-175 review #2, reached by direct URL); `showcase` layers
+ * the six-month README figure seed (TASK-184: 2026-05..10 lifestyle data on
+ * top of the default, store names swapped to realistic ones); `grants` replaces the
  * /api/oauth/grants answer (default stays the empty list — TASK-20 §7-1 /
  * §10-3: the grant-row chip check feeds its own fixture rows). The default
  * mock data is unchanged, and the options combine freely.
@@ -165,7 +209,10 @@ export async function installApiStub(
     richLabels?: boolean
     bareTags?: boolean
     longDeletedHead?: boolean
+    showcase?: boolean
     grants?: Grant[]
+    /** pinned "now" for page.clock (JST ISO); default 2026-10-15 */
+    now?: string
   } = {},
 ): Promise<void> {
   const loggedIn = opts.loggedIn ?? true
@@ -174,6 +221,7 @@ export async function installApiStub(
     richLabels: opts.richLabels,
     bareTags: opts.bareTags,
     longDeletedHead: opts.longDeletedHead,
+    showcase: opts.showcase,
   })
 
   // The mock data's era, pinned (TASK-162's browser-suite audit): the mock's
@@ -182,8 +230,11 @@ export async function installApiStub(
   // "initial window" away from its fixtures the moment the calendar month
   // rolls over (the 2026-11-04 run caught INIT as 2026-06..11). The clock
   // starts at the unit tests' fixed "today" (2026-10-15 JST) and keeps
-  // running from there, matching every fixture the spec files pin.
-  await page.clock.install({ time: '2026-10-15T12:00:00+09:00' })
+  // running from there, matching every fixture the spec files pin. `now`
+  // overrides the pin for a spec that needs a different era — the README
+  // capture (capture.readme.spec.ts) pins 10-31 so the showcase seed's
+  // 10/19..30 rows ride the current month, week table and recent feed.
+  await page.clock.install({ time: opts.now ?? '2026-10-15T12:00:00+09:00' })
 
   // SPA history fallback for document requests. The dev server itself now
   // retargets clean URLs to web.html (vite.config.ts devSpaFallbackPlugin,

@@ -137,10 +137,14 @@ ul.items li.item--selected { background: var(--bb-accent-soft); transition: back
 .items-total .num { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* the receipt note (TASK-170 W-4): one muted pre-wrap block right under the
-   item table, the same vocabulary on both surfaces */
+   item table, the same vocabulary on both surfaces. TASK-184 review: an
+   accent-ruled left edge + one step up in size, so the memo reads as its own
+   annotation instead of table debris */
 .receipt-note {
-  margin: 4px 0 0;
-  font-size: 0.8rem;
+  margin: 10px 0 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--bb-accent);
+  font-size: 0.85rem;
   color: var(--bb-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
