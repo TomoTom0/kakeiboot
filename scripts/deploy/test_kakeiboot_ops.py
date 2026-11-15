@@ -14,6 +14,13 @@ template source, render_unit / install-units, and the mise units:install task.
 New kakeiboot_ops names (render_unit, build_install_units_commands) are imported
 inside the test bodies so the pre-implementation red run fails only the new
 tests -- a top-level import would break the existing 36 with an ImportError.
+
+TASK-189 (test-first) adds: the promote subcommand (stg->prod artifact
+promotion, 11-step plan, runtime-dir port resolution) and the configs
+subcommand (--env required, --preview); prod:deploy is removed so the
+PROD_DEPLOY_LEGACY byte-match test is deleted. New names (build_promote_commands,
+build_configs_commands, resolve_runtime_port) follow the same inside-body
+import rule.
 """
 
 from __future__ import annotations
@@ -62,16 +69,6 @@ STG_DEPLOY_LEGACY = [
     f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
     "systemctl --user restart kakeiboot-stg",
     "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; "
-    "sleep 1; done; exit 1'",
-]
-PROD_DEPLOY_LEGACY = [
-    f"rsync -a target/debug/budget-book {DEPLOY_ROOT}/prod/budget-book",
-    f"mkdir -p {DEPLOY_ROOT}/prod/bin",
-    f"rsync -a scripts/backup/kakeiboot-backup.sh {DEPLOY_ROOT}/prod/bin/kakeiboot-backup.sh",
-    f"rsync -a --delete configs/prod/ {DEPLOY_ROOT}/prod/configs/prod/",
-    f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/prod/frontend/dist/",
-    "systemctl --user restart kakeiboot-prod",
-    "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40283/healthz && exit 0; "
     "sleep 1; done; exit 1'",
 ]
 STG_BACKUP_STATUS_LEGACY = [
@@ -197,10 +194,6 @@ class TestTransportLocal(unittest.TestCase):
     def test_stg_deploy_matches_legacy_run_array(self) -> None:
         cmds = build_deploy_commands(local_cfg(), "stg", 40282)
         self.assertEqual([shlex.join(c) for c in cmds], STG_DEPLOY_LEGACY)
-
-    def test_prod_deploy_matches_legacy_run_array(self) -> None:
-        cmds = build_deploy_commands(local_cfg(), "prod", 40283)
-        self.assertEqual([shlex.join(c) for c in cmds], PROD_DEPLOY_LEGACY)
 
     def test_stg_backup_status_matches_legacy_run_array(self) -> None:
         cmds = build_backup_status_commands(local_cfg(), "stg")
@@ -802,6 +795,532 @@ class TestUnitsInstallTask(unittest.TestCase):
         run_text = run if isinstance(run, str) else " ".join(run)
         self.assertIn("kakeiboot_ops.py", run_text)
         self.assertIn("install-units", run_text)
+
+
+# ---- TASK-189 (test-first): promote / configs subcommands --------------------
+# Design: tmp/tasks/tm-189/design_promote.md (D-1..D-7). New kakeiboot_ops names
+# are imported inside the test bodies (TASK-119 rule) so the pre-implementation
+# red run fails only these tests.
+
+STG_DIR = f"{DEPLOY_ROOT}/stg"
+PROD_DIR = f"{DEPLOY_ROOT}/prod"
+
+
+# [covers:deploy-ops.promote-plan]
+# [covers:deploy-ops.promote-rsync-flags]
+class TestPromotePlan(unittest.TestCase):
+    """D-6 fixed 11-step plan. Local form is the raw remote_exec argv list; the
+    ssh form (D-5) runs the stg->prod rsyncs ON gt430 (ssh-wrapped rsync, no
+    host: destination prefix) and only the configs preview goes repo->host via
+    rsync_exec."""
+
+    def build(self, cfg):
+        from kakeiboot_ops import build_promote_commands
+
+        return build_promote_commands(cfg, 40282, 40283)
+
+    def test_local_plan_is_eleven_steps_in_design_order(self) -> None:
+        cmds = self.build(local_cfg())
+        self.assertEqual(len(cmds), 11)
+        (
+            healthz_stg,
+            _mtime,
+            _sha,
+            _preview,
+            _archive,
+            mkdir,
+            rs_bin,
+            rs_script,
+            rs_dist,
+            restart,
+            healthz_prod,
+        ) = cmds
+        # step 1: stg healthz (port resolved from the stg RUNTIME-DIR config)
+        self.assertEqual(healthz_stg, healthz_command(40282))
+        # step 6: prerequisite dirs (rsync never creates intermediate dirs)
+        self.assertEqual(
+            mkdir,
+            [
+                "mkdir",
+                "-p",
+                f"{PROD_DIR}/bin",
+                f"{PROD_DIR}/frontend",
+                f"{PROD_DIR}/configs/prod",
+            ],
+        )
+        # steps 7/8: single-file rsyncs carry --checksum (mtime-only drift must
+        # not pass); step 9: dist is --delete only, no --checksum (D-3)
+        self.assertEqual(
+            rs_bin,
+            ["rsync", "-a", "--checksum", "-i", f"{STG_DIR}/budget-book", f"{PROD_DIR}/budget-book"],
+        )
+        self.assertEqual(
+            rs_script,
+            [
+                "rsync",
+                "-a",
+                "--checksum",
+                "-i",
+                f"{STG_DIR}/bin/kakeiboot-backup.sh",
+                f"{PROD_DIR}/bin/",
+            ],
+        )
+        self.assertEqual(
+            rs_dist,
+            ["rsync", "-a", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
+        )
+        # step 10/11: restart prod, then healthz on the prod runtime-dir port
+        self.assertEqual(restart, ["systemctl", "--user", "restart", "kakeiboot-prod"])
+        self.assertEqual(healthz_prod, healthz_command(40283))
+
+    # [covers:deploy-ops.promote-configs-preview]
+    def test_configs_drift_preview_step_is_transfer_free(self) -> None:
+        cmds = self.build(local_cfg())
+        preview = cmds[3]
+        self.assertEqual(preview[0], "rsync")
+        self.assertEqual(preview[1:6], ["-a", "--delete", "--checksum", "-i", "--dry-run"])
+        self.assertEqual(preview[-2:], ["configs/prod/", f"{PROD_DIR}/configs/prod/"])
+
+    def test_plan_does_not_distribute_configs_or_touch_var(self) -> None:
+        # D-1: configs are NOT a promote target -- the only step with a prod
+        # configs destination is the transfer-free preview above.
+        for cmd in self.build(local_cfg()):
+            joined = " ".join(cmd)
+            if cmd[0] == "rsync" and cmd[-1].endswith("/configs/prod/"):
+                self.assertIn("--dry-run", cmd)
+            self.assertNotIn("/var/", joined)
+
+    def test_ssh_plan_runs_remote_steps_on_runtime_host(self) -> None:
+        local_cmds = self.build(local_cfg())
+        ssh_cmds = self.build(ssh_cfg())
+        self.assertEqual(len(ssh_cmds), 11)
+        # step 4 is the only repo->host rsync (rsync_exec: -e option + host:)
+        preview = ssh_cmds[3]
+        self.assertEqual(preview[preview.index("-e") + 1], SSH_RSYNC_E)
+        self.assertEqual(preview[-1], f"gt430:{PROD_DIR}/configs/prod/")
+        # every other step is one ssh-wrapped remote string of the local argv
+        for idx in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10):
+            self.assertEqual(
+                ssh_cmds[idx],
+                ["ssh", *SSH_OPTIONS, "gt430", "--", shlex.join(local_cmds[idx])],
+            )
+        # stg->prod rsyncs (steps 7-9) run ON gt430: no host: destination prefix
+        for idx in (6, 7, 8):
+            self.assertNotIn("gt430:", ssh_cmds[idx][-1])
+
+
+# [covers:deploy-ops.promote-stg-precheck]
+class TestPromoteStgPrecheck(unittest.TestCase):
+    """D-2: healthz + service-start>=mtime precede any prod write, fail-closed."""
+
+    def test_first_step_is_stg_healthz(self) -> None:
+        from kakeiboot_ops import build_promote_commands
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        self.assertEqual(cmds[0], healthz_command(40282))
+
+    def test_second_step_hashes_running_process_exe_against_disk(self) -> None:
+        from kakeiboot_ops import build_promote_commands
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        self.assertEqual(cmds[1][:2], ["sh", "-c"])
+        script = cmds[1][2]
+        self.assertIn("systemctl --user show kakeiboot-stg", script)
+        self.assertIn("MainPID", script)
+        self.assertIn("/proc/$pid/exe", script)
+        self.assertIn("sha256sum", script)
+        self.assertIn(f"{STG_DIR}/budget-book", script)
+
+
+# [covers:deploy-ops.promote-sha256-display]
+class TestPromoteSha256Display(unittest.TestCase):
+    def test_sha_step_shows_both_sides_and_tolerates_undeployed_prod(self) -> None:
+        from kakeiboot_ops import build_promote_commands
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        self.assertEqual(cmds[2][:2], ["sh", "-c"])
+        script = cmds[2][2]
+        # stg side: hash shown; a sha256sum failure stops promote (non-zero)
+        self.assertIn(f"sha256sum {STG_DIR}/budget-book", script)
+        # prod side: hash when present, "not deployed yet" + continue when absent
+        self.assertIn(f"sha256sum {PROD_DIR}/budget-book", script)
+        self.assertIn("not deployed yet", script)
+        self.assertIn("if", script)  # the prod lookup is conditional
+
+
+# [covers:deploy-ops.promote-archive-previous]
+class TestPromoteArchivePrevious(unittest.TestCase):
+    def test_archive_step_copies_previous_artifacts_to_timestamped_release(self) -> None:
+        from kakeiboot_ops import build_promote_commands
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        self.assertEqual(cmds[4][:2], ["sh", "-c"])
+        script = cmds[4][2]
+        self.assertIn(f"{PROD_DIR}/releases/", script)
+        # UTC timestamp is decided at run time inside the remote shell
+        self.assertIn("date -u", script)
+        # binary, bin/ and frontend/ (dist's only restoration source) archived
+        self.assertIn(f"{PROD_DIR}/budget-book", script)
+        self.assertIn(f"{PROD_DIR}/bin", script)
+        self.assertIn(f"{PROD_DIR}/frontend", script)
+        # skipped when the prod binary is absent (first deployment)
+        self.assertIn("if", script)
+
+
+# [covers:deploy-ops.promote-restart-healthz]
+class TestPromoteRestartHealthz(unittest.TestCase):
+    def test_restart_and_prod_healthz_close_the_plan(self) -> None:
+        from kakeiboot_ops import build_promote_commands
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        self.assertEqual(cmds[9], ["systemctl", "--user", "restart", "kakeiboot-prod"])
+        self.assertEqual(cmds[10], healthz_command(40283))
+
+
+# [covers:deploy-ops.promote-shell-execution]
+class TestPromoteShellSteps(unittest.TestCase):
+    """Review follow-up (code review): the safety-critical sh -c steps are
+    EXECUTED here -- a stub systemctl leading PATH, real sha256sum/cp/date on
+    a tmp deploy layout -- and their exit codes asserted. Substring matching
+    alone cannot prove a shell chain fails closed, and the archive step once
+    masked cp failures behind a trailing echo (`;` chaining)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.cfg = DeployConfig(deploy_root=str(self.root), transport="local", runtime_host=None)
+        for env in ("stg", "prod"):
+            (self.root / env / "configs" / env).mkdir(parents=True)
+        self.env: dict[str, str] | None = None
+
+    def plan(self) -> list[list[str]]:
+        from kakeiboot_ops import build_promote_commands
+
+        return build_promote_commands(self.cfg, 40282, 40283)
+
+    def write_stub_systemctl(self, body: str) -> None:
+        # leads PATH: `systemctl --user show kakeiboot-stg -p MainPID --value`
+        # resolves to this stub, whose stdout stands in for the real answer.
+        stub_dir = self.root / "stub-bin"
+        stub_dir.mkdir()
+        stub = stub_dir / "systemctl"
+        stub.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        stub.chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"}
+
+    def run_step(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(cmd, capture_output=True, text=True, env=self.env)
+
+    def start_sleeper(self) -> subprocess.Popen:
+        # a live process whose /proc/<pid>/exe is the `sleep` binary itself
+        proc = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+        return proc
+
+    # (b) process-identity precheck: success / empty PID / hash mismatch
+    def test_process_check_passes_when_running_exe_matches_disk(self) -> None:
+        if shutil.which("sha256sum") is None or shutil.which("sleep") is None:
+            self.skipTest("sha256sum/sleep not on PATH")
+        sleeper = self.start_sleeper()
+        self.write_stub_systemctl(f"echo {sleeper.pid}\n")
+        shutil.copyfile(shutil.which("sleep"), self.root / "stg" / "budget-book")
+        proc = self.run_step(self.plan()[1])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_process_check_fails_on_empty_pid(self) -> None:
+        # MainPID empty (service not running): must stop, not date-parse ""
+        self.write_stub_systemctl("printf '\\n'\n")
+        (self.root / "stg" / "budget-book").write_bytes(b"whatever")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_process_check_fails_on_hash_mismatch(self) -> None:
+        if shutil.which("sleep") is None:
+            self.skipTest("sleep not on PATH")
+        sleeper = self.start_sleeper()
+        self.write_stub_systemctl(f"echo {sleeper.pid}\n")
+        # disk carries a NEW binary the running process is not made of
+        # (distributed but not restarted -- exactly the state to reject)
+        (self.root / "stg" / "budget-book").write_bytes(b"new-binary-not-running")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    # (a) archive step: success / cp failure / skip
+    def make_prod_artifacts(self) -> None:
+        prod = self.root / "prod"
+        (prod / "bin").mkdir(parents=True)
+        (prod / "frontend" / "dist").mkdir(parents=True)
+        (prod / "budget-book").write_bytes(b"old-binary")
+        (prod / "bin" / "kakeiboot-backup.sh").write_text("# backup\n", encoding="utf-8")
+        (prod / "frontend" / "dist" / "index.html").write_text("shell\n", encoding="utf-8")
+
+    def test_archive_step_succeeds_and_archives_all_three(self) -> None:
+        self.make_prod_artifacts()
+        proc = self.run_step(self.plan()[4])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        releases = list((self.root / "prod" / "releases").iterdir())
+        self.assertEqual(len(releases), 1)
+        archived = releases[0]
+        self.assertTrue((archived / "budget-book").is_file())
+        self.assertTrue((archived / "bin" / "kakeiboot-backup.sh").is_file())
+        self.assertTrue((archived / "frontend" / "dist" / "index.html").is_file())
+
+    def test_archive_step_fails_nonzero_when_a_copy_fails(self) -> None:
+        # binary present, frontend/ missing: the && chain must surface the cp
+        # failure (the review's original bug: `;` + trailing echo masked it)
+        prod = self.root / "prod"
+        (prod / "budget-book").write_bytes(b"old-binary")
+        proc = self.run_step(self.plan()[4])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_archive_step_skips_cleanly_when_prod_not_deployed(self) -> None:
+        # setUp already created <root>/prod (configs/ layout): no binary in it
+        proc = self.run_step(self.plan()[4])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse((self.root / "prod" / "releases").exists())
+
+    # (c) sha256 display step: stg absent / prod absent / both present
+    def test_sha_step_fails_when_stg_binary_absent(self) -> None:
+        proc = self.run_step(self.plan()[2])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_sha_step_continues_with_marker_when_prod_undeployed(self) -> None:
+        (self.root / "stg" / "budget-book").write_bytes(b"stg-binary")
+        proc = self.run_step(self.plan()[2])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("prod: budget-book not deployed yet", proc.stdout)
+        self.assertNotIn("prod-binary-hash", proc.stdout)
+
+    def test_sha_step_shows_both_hashes_when_both_present(self) -> None:
+        (self.root / "stg" / "budget-book").write_bytes(b"stg-binary")
+        (self.root / "prod" / "budget-book").write_bytes(b"prod-binary")
+        proc = self.run_step(self.plan()[2])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("not deployed yet", proc.stdout)
+
+
+# [covers:deploy-ops.port-from-runtime-config]
+class TestRuntimePortResolution(unittest.TestCase):
+    """D-6 port split: promote resolves ports from the DEPLOYED runtime-dir
+    config, not the repo config (repo independence is promote's core value)."""
+
+    def make_cfg_with_app(self, text: str) -> DeployConfig:
+        tmp_obj = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_obj.cleanup)
+        root = Path(tmp_obj.name)
+        env_dir = root / "stg" / "configs" / "stg"
+        env_dir.mkdir(parents=True)
+        write(env_dir / "app.toml", text)
+        return DeployConfig(deploy_root=str(root), transport="local", runtime_host=None)
+
+    def test_local_reads_runtime_dir_config(self) -> None:
+        from kakeiboot_ops import resolve_runtime_port
+
+        cfg = self.make_cfg_with_app("[server]\nport = 40299\n")
+        self.assertEqual(resolve_runtime_port(cfg, "stg"), 40299)
+
+    def test_missing_port_rejected(self) -> None:
+        from kakeiboot_ops import resolve_runtime_port
+
+        cfg = self.make_cfg_with_app('[server]\nhosts = ["::"]\n')
+        with self.assertRaises(ConfigError):
+            resolve_runtime_port(cfg, "stg")
+
+    def test_ssh_captures_remote_cat_output(self) -> None:
+        from kakeiboot_ops import resolve_runtime_port
+
+        app = "[server]\nport = 40283\n"
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=app)
+        with mock.patch.object(kakeiboot_ops.subprocess, "run", return_value=result) as run:
+            self.assertEqual(resolve_runtime_port(ssh_cfg(), "prod"), 40283)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:7], ["ssh", *SSH_OPTIONS, "gt430", "--"])
+        self.assertIn("cat", argv[-1])
+        self.assertIn(f"{PROD_DIR}/configs/prod/app.toml", argv[-1])
+
+    # [covers:deploy-ops.promote-dry-run-port-resolution]
+    def test_promote_dry_run_still_resolves_both_runtime_ports(self) -> None:
+        # documented spec (review follow-up): --dry-run distributes nothing,
+        # but port resolution is a read-only plan-construction prerequisite and
+        # DOES run -- both remote cats happen even though no step executes.
+        # An unreachable host therefore fails the dry-run (early discovery).
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = write(Path(tmp) / "deploy.toml", BASE_TOML)
+            results = [
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="[server]\nport = 40282\n"),
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="[server]\nport = 40283\n"),
+            ]
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                with mock.patch.object(kakeiboot_ops.subprocess, "run", side_effect=results) as run:
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["promote", "--dry-run"])
+        self.assertEqual(rc, 0)
+        # exactly the two resolution cats ran; the 11 plan steps executed none
+        self.assertEqual(run.call_count, 2)
+        plan = out.getvalue()
+        self.assertIn("localhost:40282/healthz", plan)
+        self.assertIn("localhost:40283/healthz", plan)
+
+
+# [covers:deploy-ops.deploy-env-stg-only]
+class TestDeployEnvRestricted(unittest.TestCase):
+    def test_deploy_accepts_stg_only(self) -> None:
+        args = build_parser().parse_args(["deploy", "--env", "stg"])
+        self.assertEqual(args.env, "stg")
+        # prod is structurally excluded: the only prod write path is promote
+        err = io.StringIO()
+        with redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(["deploy", "--env", "prod"])
+
+
+# [covers:deploy-ops.promote-plan] (parser half: promote takes no --env)
+class TestPromoteParser(unittest.TestCase):
+    def test_promote_parses_without_env(self) -> None:
+        args = build_parser().parse_args(["promote"])
+        self.assertFalse(args.dry_run)
+        dry = build_parser().parse_args(["promote", "--dry-run"])
+        self.assertTrue(dry.dry_run)
+
+    def test_promote_rejects_env(self) -> None:
+        err = io.StringIO()
+        with redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(["promote", "--env", "stg"])
+
+
+# [covers:deploy-ops.configs-command]
+class TestConfigsCommandPlan(unittest.TestCase):
+    """D-7-1/D-7-2: file distribution only (mkdir + checksum rsync); no restart."""
+
+    def test_local_plan_is_mkdir_then_checksum_rsync_without_restart(self) -> None:
+        from kakeiboot_ops import build_configs_commands
+
+        cmds = build_configs_commands(local_cfg(), "prod")
+        self.assertEqual(
+            cmds,
+            [
+                ["mkdir", "-p", f"{PROD_DIR}/configs/prod"],
+                [
+                    "rsync",
+                    "-a",
+                    "--delete",
+                    "--checksum",
+                    "-i",
+                    "configs/prod/",
+                    f"{PROD_DIR}/configs/prod/",
+                ],
+            ],
+        )
+        for cmd in cmds:
+            self.assertNotIn("systemctl", " ".join(cmd))
+
+    def test_ssh_plan_uses_rsync_exec_transport(self) -> None:
+        from kakeiboot_ops import build_configs_commands
+
+        cmds = build_configs_commands(ssh_cfg(), "prod")
+        self.assertEqual(
+            cmds[0],
+            ["ssh", *SSH_OPTIONS, "gt430", "--", f"mkdir -p {PROD_DIR}/configs/prod"],
+        )
+        rsync = cmds[1]
+        self.assertEqual(rsync[rsync.index("-e") + 1], SSH_RSYNC_E)
+        self.assertEqual(rsync[-1], f"gt430:{PROD_DIR}/configs/prod/")
+
+    # [covers:deploy-ops.configs-preview-flag]
+    def test_preview_adds_rsync_dry_run(self) -> None:
+        from kakeiboot_ops import build_configs_commands
+
+        preview_cmds = build_configs_commands(local_cfg(), "prod", preview=True)
+        self.assertEqual(len(preview_cmds), 2)
+        self.assertIn("--dry-run", preview_cmds[1])  # rsync's own dry run
+        plain_cmds = build_configs_commands(local_cfg(), "prod", preview=False)
+        self.assertNotIn("--dry-run", plain_cmds[1])
+
+
+# [covers:deploy-ops.configs-command]
+# [covers:deploy-ops.configs-preview-flag]
+class TestConfigsParser(unittest.TestCase):
+    def test_env_is_required(self) -> None:
+        err = io.StringIO()
+        with redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(["configs"])
+
+    def test_env_choices_and_preview_flag(self) -> None:
+        args = build_parser().parse_args(["configs", "--env", "prod", "--preview"])
+        self.assertEqual(args.env, "prod")
+        self.assertTrue(args.preview)
+        args = build_parser().parse_args(["configs", "--env", "stg"])
+        self.assertEqual(args.env, "stg")
+        self.assertFalse(args.preview)
+
+
+# [covers:deploy-ops.promote-mise-tasks]
+class TestPromoteMiseTasks(unittest.TestCase):
+    def tasks(self) -> dict:
+        return tomllib.loads((REPO_ROOT / "mise.toml").read_text(encoding="utf-8"))["tasks"]
+
+    @staticmethod
+    def run_text(task: dict) -> str:
+        run = task["run"]
+        return run if isinstance(run, str) else " ".join(run)
+
+    def test_prod_promote_task_has_no_build_dependency(self) -> None:
+        task = self.tasks()["prod:promote"]
+        run_text = self.run_text(task)
+        self.assertIn("kakeiboot_ops.py promote", run_text)
+        # depends must be absent: promote never builds (repo independence)
+        self.assertNotIn("depends", task)
+
+    def test_prod_configs_task_runs_configs_subcommand(self) -> None:
+        run_text = self.run_text(self.tasks()["prod:configs"])
+        self.assertIn("kakeiboot_ops.py configs", run_text)
+        self.assertIn("--env prod", run_text)
+
+    def test_prod_deploy_task_is_removed(self) -> None:
+        self.assertNotIn("prod:deploy", self.tasks())
+
+    def test_stg_deploy_task_unchanged(self) -> None:
+        task = self.tasks()["stg:deploy"]
+        self.assertEqual(
+            task["run"],
+            "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env stg",
+        )
+        self.assertEqual(task["depends"], ["build"])
+
+
+# [covers:deploy-ops.promote-failure-report]
+class TestPromoteFailureReport(unittest.TestCase):
+    def test_failure_lists_executed_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # runtime-dir configs feed both healthz ports (local file reads)
+            for env, port in (("stg", 40282), ("prod", 40283)):
+                env_dir = Path(tmp) / env / "configs" / env
+                env_dir.mkdir(parents=True)
+                write(env_dir / "app.toml", f"[server]\nport = {port}\n")
+            cfg_path = write(
+                Path(tmp) / "deploy.toml",
+                f'deploy_root = "{tmp}"\ntransport = "local"\n',
+            )
+            with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
+                results = [
+                    subprocess.CompletedProcess(args=[], returncode=0),  # stg healthz
+                    subprocess.CompletedProcess(args=[], returncode=0),  # mtime check
+                    subprocess.CompletedProcess(args=[], returncode=7),  # sha256 step fails
+                ]
+                with mock.patch.object(kakeiboot_ops.subprocess, "run", side_effect=results):
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["promote"])
+        self.assertEqual(rc, 7)
+        self.assertIn("steps executed before failure:", err.getvalue())
+        # only the three executed read-only steps are listed; the prod restart
+        # (step 10) never ran and must not appear
+        self.assertNotIn("kakeiboot-prod", err.getvalue())
 
 
 if __name__ == "__main__":

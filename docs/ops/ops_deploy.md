@@ -1,6 +1,6 @@
 # stg・prod 運用環境（kakeiboot）
 
-作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd user service が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
+作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・promote・configs配布・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd user service が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
 
 ## 構成
 
@@ -20,6 +20,7 @@
   bin/kakeiboot-backup.sh            # backup構成script（作業repo scripts/backup/ のコピー。deployのrsyncで配布）
   configs/<env>/{app,auth,mcp}.toml  # 作業repo configs/<env>/ のコピー
   frontend/dist/                     # backendが配信するSPA shell・widget・assets
+  releases/<UTC timestamp>/          # promoteが配布前に旧成果物（binary・bin/・frontend/）を退避（prodのみ）
   var/<env>/                         # runtime生成（SQLite・画像）。rsync対象外
 ```
 
@@ -54,6 +55,10 @@ key仕様（フラットkeyのみ。未知keyはscriptがerror〔backend config�
 | backup script配布先 | `<deploy_root>/<env>/bin/kakeiboot-backup.sh` |
 | config配布先 | `<deploy_root>/<env>/configs/<env>/` |
 | frontend配布先 | `<deploy_root>/<env>/frontend/dist/` |
+| promote配布元 binary | `<deploy_root>/stg/budget-book` |
+| promote配布元 backup script | `<deploy_root>/stg/bin/kakeiboot-backup.sh` |
+| promote配布元 frontend | `<deploy_root>/stg/frontend/dist/` |
+| 旧成果物退避dir（promote） | `<deploy_root>/prod/releases/<timestamp>` |
 | backup root | `<deploy_root>/backups/<env>` |
 | backup世代dir | `<deploy_root>/backups/<env>/<date>` |
 | backup images mirror | `<deploy_root>/backups/<env>/images/` |
@@ -83,7 +88,9 @@ transport = "local"
 
 | 操作 | コマンド |
 |---|---|
-| deploy | `mise run stg:deploy` / `mise run prod:deploy` |
+| deploy（stg） | `mise run stg:deploy`（build → repo成果物をstgへ配布 → restart → healthz） |
+| promote（stg→prod） | `mise run prod:promote`（stg運用dirの検証済み成果物をprodへ配布。詳細は「promote」節） |
+| configs配布 | `mise run prod:configs`（repo `configs/prod/` → prod運用dir。詳細は「configs」節） |
 | admin CLI | `mise run exec-stg -- admin user list` / `mise run exec-prod -- admin token issue --kind setup --note "..."` |
 | service操作 | `mise run stg:service -- status` / `mise run prod:service -- is-active` |
 | backup手動実行 | `mise run stg:backup` / `mise run prod:backup`（timerと同一のoneshot unit。完了まで待つ） |
@@ -93,9 +100,9 @@ transport = "local"
 処理本体は `scripts/deploy/kakeiboot_ops.py`（miseタスクはthin wrapper）:
 
 - 実行経路は `configs/deploy.toml` の `transport` に従う。`"ssh"` では全操作（rsync配布・mkdir・systemctl・healthz・file読取・binary実行）を `runtime_host` へのssh経由で実行する（rsyncは `-e "ssh -o BatchMode=yes -o ConnectTimeout=10"` + 宛先 `host:` 接頭、他は `ssh -o BatchMode=yes -o ConnectTimeout=10 <host> -- <command>` 形式。remote commandの引数はquote保持で組み立てる）。`"local"` では作業機上で直接実行する（local検証環境。`configs/deploy.local.toml` で上書きする運用）
-- healthz確認のportは `configs/<env>/app.toml` `[server] port` をscript起動時に読む（mise.toml・scriptへの直書きなし。listenは `hosts = ["::"]` だがhealthzは運用機上のlocalhost宛）
+- healthz確認のportは `configs/<env>/app.toml` `[server] port` をscript起動時に読む（mise.toml・scriptへの直書きなし。listenは `hosts = ["::"]` だがhealthzは運用機上のlocalhost宛）。deployはrepoのconfigsから解決し、promoteは運用dirに配布済みのconfigsから解決する（promoteの全挙動がrepo configと独立するため）
 - 各コマンドは実行前に `$ <command>` 形式で表示され、非零exitなら即停止して `error: <command> exited <code>` を出す（deploy失敗時は実行済みstep一覧も出力し、binary配布済み・restart前、等の状態が分かる）。command自体またはcwd（local実行時の運用dir）が存在しない場合もtracebackにならず `error: <command>: command or working directory not found` でexit 127（command-not-found code）で停止する
-- dry-run（実行予定の表示のみ・転送なし・exit 0）は全タスクで `mise run <task> -- --dry-run` 形式で使える（exec・serviceのdry-runでは実行予定の表示のみでbudget-book・systemctlは実行しない）:
+- dry-run（実行予定の表示のみ・転送なし・exit 0）は全タスクで `mise run <task> -- --dry-run` 形式で使える（exec・serviceのdry-runでは実行予定の表示のみでbudget-book・systemctlは実行しない。promoteのdry-runは配布stepを実行しないが、port解決〔運用dirconfigの読み取り・ssh時はremote cat 2回〕を読み取り専用のplan構築前段として実行する。ssh接続不能時にdry-runも失敗するのは事前発見として有益）:
 
 ```sh
 mise run stg:deploy -- --dry-run
@@ -109,23 +116,67 @@ mise run units:install -- --dry-run
 
 `--` はmise自身のflagとタスクへの引数の区切りとして1個だけ使う。`--` を挟まない `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈される
 
-- deploy・backup・backup-statusタスクでは `--` 以降のargsがコマンド末尾へ渡り `--dry-run` がscriptのdry-run flagになる（`mise run stg:deploy -- --dry-run` → `deploy --env stg --dry-run`）
+- deploy・promote・configs・backup・backup-statusタスクでは `--` 以降のargsがコマンド末尾へ渡り `--dry-run` がscriptのdry-run flagになる（`mise run stg:deploy -- --dry-run` → `deploy --env stg --dry-run`。`mise run prod:promote -- --dry-run`・`mise run prod:configs -- --preview`〔rsync自身のdry-runによる差分表示〕も同形）
 - exec・serviceタスクでは `--` 以降のargsが `${usage_args}` / `${usage_verb}` の位置へ展開される。タスクrun文字列に `--` を含めないため、`mise run exec-stg -- --dry-run admin user list` はscriptへ `exec --env stg --dry-run admin user list` として渡り、先頭の `--dry-run` がscriptのdry-run flagとして解釈され `admin user list` がbudget-bookへの引数になる（scriptを直接実行する場合は `--dry-run` を `--` より前に置く。`--` より後ろに置いた `--dry-run` はargparse REMAINDERの仕様で透過扱いになり、dry-runとして効かないまま実行される）
 
-### deploy（`stg:deploy` / `prod:deploy`）
+### deploy（`stg:deploy`・stg向け）
 
-作業repoの dev にコミット済みの状態から、miseタスク（build ののち script）が以下を一括実行する:
+作業repoの dev にコミット済みの状態から、miseタスク（build ののち script）が以下を一括実行する（prodへの直接deployは無い。prodへの配布はpromote経路のみ）:
 
 1. build（mise `build` タスク: backend binary と `frontend/dist/`）
 2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
-3. `systemctl --user restart kakeiboot-<env>`
-4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` は `configs/<env>/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
+3. `systemctl --user restart kakeiboot-stg`
+4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` はrepo `configs/stg/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
 
 rsyncの対象と除外:
 
-- 対象: backend binary（単file。`-a` で上書き）・backup script（`scripts/backup/kakeiboot-backup.sh` → `bin/kakeiboot-backup.sh`。実行権ごとcopy）・`configs/<env>/`（`--delete` で完全同期）・`frontend/dist/`（`--delete` で旧hash付きassetを掃除）
+- 対象: backend binary（単file。`-a` で上書き）・backup script（`scripts/backup/kakeiboot-backup.sh` → `bin/kakeiboot-backup.sh`。実行権ごとcopy）・`configs/stg/`（`--delete` で完全同期）・`frontend/dist/`（`--delete` で旧hash付きassetを掃除）
 - 除外: `var/`（runtimeデータ。`--delete` を運用dir全体に向けない）
 - rsyncは途中階層を作らないため、初回は `configs/`・`frontend/`・`bin/` の親dirを先に作成する（deployタスクが `bin/` の `mkdir -p` を含む）
+
+### promote（`prod:promote`）
+
+stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの現物**（binary・`frontend/dist/`・backup script）で、repoのbuild成果物は参照しない（miseタスクのdependsなし = buildしないことがpromoteの本体）。stgで実際に稼働している現物がそのままprodへ入るため、検証対象と配布対象の同一性が人間の規律ではなく経路構造で担保される（stg検証からpromoteまでの間の作業repo変更はprodへ影響しない）。
+
+標準手順: `mise run stg:deploy` → stg実機検証 → `mise run prod:backup`（rollback前提の直近backup取得）→ `mise run prod:promote`。
+
+処理（`scripts/deploy/kakeiboot_ops.py promote`。11 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
+
+1. stg前段チェック1: stg healthz（5回retry。portは **stg運用dir** の配布済み `configs/stg/app.toml` から解決）
+2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl --user show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。systemd user serviceは同一userで動くため`/proc/<pid>/exe`は読み取り可）
+3. binaryのsha256表示（stg側は失敗=停止。prod側はfile不在時 `prod: budget-book not deployed yet` を表示して続行 = 初回構築可能）
+4. configs乖離の補助表示（repo `configs/prod/` → prod運用dirへの転送なしpreview）
+5. 旧成果物退避: prod側binary存在時のみ `<deploy_root>/prod/releases/<UTC timestamp>/` へ binary・`bin/`・`frontend/` を運用機上copy（全操作を `&&` 連結で実行し・date・mkdir・cpのいずれかの失敗はstep全体の非零=promote停止。不在時はskip）
+6. `mkdir -p <deploy_root>/prod/{bin,frontend,configs/prod}`（rsyncは途中階層を作らないため前提dirを機構側で用意）
+7. rsync（運用機上）stg運用dir binary → prod binary（`-a --checksum -i`）
+8. rsync（運用機上）stg運用dir backup script → `prod/bin/`（`-a --checksum -i`）
+9. rsync（運用機上）stg運用dir `frontend/dist/` → `prod/frontend/dist/`（`-a --delete -i`）
+10. `systemctl --user restart kakeiboot-prod`
+11. healthz（portは **prod運用dir** の配布済み `configs/prod/app.toml` から解決）
+
+- **configsはpromoteの配布対象に含まない**（環境定義は設定変更時のみ明示更新する。毎回の置き換えは未検証変更の混入余地になる）。step4は乖離の注意喚起表示のみであり、乖離の事前確認の正経路は **`mise run prod:configs -- --preview`**（promote内の表示からコピー開始までに判断の余白がないため、独立した確認操作で判断する）
+- 前段チェック（step1-2）は「stg運用dirの現物がそのままprodへ入る」ことの機械確認であって、**stgで人間による検証（実機確認・MCP実操作等）が行われたことの担保ではない**。検証実施の判断は運用者に残る
+- **promote実行中は `stg:deploy` を並行実行しない**（配布元のstg運用dirが並行deployで書き換わると検証対象と配布対象の同一性が崩れる。単一運用者の手動運用が実態のため機械的排他〔flock等〕は設けない）
+- 途中失敗時は実行済みstep一覧が報告される。全stepは冪等（rsync収束・`mkdir -p`・退避はtimestamp付き別dirが新たに作られるのみ）のため、原因確認後に同じコマンドを再実行するのが原則（step数×失敗位置の部分復元手順は作らない）
+
+**退避とrollback**: step5で旧binary・`bin/`・`frontend/`（dist含む）を退避する（旧distは `--delete` 同期でprodから消え、stg運用dirにも現行しか残らないため退避が唯一の復元元）。rollback手順:
+
+1. `mise run prod:service -- stop`
+2. 退避dir（`releases/<timestamp>/`）の `budget-book`・`bin/`・`frontend/` を `<deploy_root>/prod/` へ戻す（運用機上copy。sshでの実行）
+3. `mise run prod:service -- start`（起動後healthzを確認）
+
+退避dirの自動世代管理（KEEP N・超過削除）は設けない（promoteは低頻度運用で増殖が遅く、管理機構に見合わない）。不要になった退避dirの削除は運用者の判断。migrationを含むpromoteの失敗でDBを旧状態へ戻す必要が生じた場合は、事前取得の `prod:backup` 世代から復元する（「復元」節。旧binary×新schemaのDB互換性は保証されない）。
+
+### configs（`prod:configs`）
+
+repo `configs/<env>/`（git管理の正本）を運用dir `configs/<env>/` へ配布する独立操作（`scripts/deploy/kakeiboot_ops.py configs --env <env>`。scriptは両env対応・miseタスクはprod側のみ）。手順は `mkdir -p` + `rsync -a --delete --checksum -i` の2 stepのみで、**restart・healthzを含まない**（backendはconfigを起動時に1回読み込みreload機構が無いため、configs操作がrestartを内蔵すると旧binary×新configsの組で起動する機会を機構的に増やす。反映はpromoteのrestartまたは明示的なservice操作が担う）:
+
+- 設定変更のみのrelease: `mise run prod:configs` → `mise run prod:service -- restart`
+- 設定変更を含む成果物release: `mise run prod:configs` → `mise run prod:promote`（promoteのrestartで新binary×新configsの組が揃うことが原則）
+
+原則どおりにいかない経路として、configs配布からpromoteのrestartまでの間に、`Restart=on-failure` による自動再起動や backup timer の起動で旧binaryが新configsを読んで起動しうる（互換性を壊すschema変更の場合はconfigs配布からpromote完了までの窓を最小化する運用・状況に応じてbackup timerの一時停止を検討する）。
+
+乖離の事前確認は `mise run prod:configs -- --preview`（rsync自身の `--dry-run` で転送なしの差分実体を表示。scriptの `--dry-run`〔plan表示のみ〕とは別物）。
 
 ### 運用 CLI（`exec-stg` / `exec-prod`）
 
@@ -155,7 +206,7 @@ backendが扱う永続データとその所在（configは相対path指定を運
 |---|---|---|
 | SQLite DB | `var/<env>/db.sqlite` | WAL + synchronous=NORMAL 運用（`backend/src/db.rs`）。書込直後は `db.sqlite-wal` / `db.sqlite-shm` が併存する |
 | 画像ファイル | `var/<env>/images/YYYY/MM/<ulid>.webp` | `[maintenance] image_root`。DBの `images.storage_path` と対応 |
-| config | `configs/<env>/{app,auth,mcp}.toml` | git管理。deploy時にrsync（`--delete`） |
+| config | `configs/<env>/{app,auth,mcp}.toml` | git管理。`stg:deploy`（stg）・`prod:configs`（prod）でrsync（`--delete`） |
 
 deployのrsyncは `var/` を対象外とするため、deployでruntimeデータが書き換わることはない（dbへのtouchはrestart時のmigration適用のみ）。
 
@@ -210,7 +261,7 @@ stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpacka
 
 ## prodの運用
 
-prodはstgと同じ体制で配備・稼働している（unit: enabled・active）。main branchでの運用開始時も `mise run prod:deploy` で main の成果物を prod 運用dirへ配備する。
+prodはstgと同じ体制で配備・稼働している（unit: enabled・active）。prodへの成果物配布は `mise run prod:promote`（stg運用dirの検証済み現物を配布。repoのbuildは介さない）。prod初回構築・新運用機への再構築時は **`prod:configs`（configs初回配布）→ `prod:promote`（成果物配布・restart・healthz）の順**で行う（promoteはconfigsを配布しないため初回はconfigsが必須。promote側もprod未配備〔binary不在〕を許容するため手順が成立する）。
 
 ## マシン起動時の自動起動（linger）
 

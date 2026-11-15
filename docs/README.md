@@ -37,7 +37,7 @@ docs 配下の恒久文書（仕様・運用手順・索引・参照資料・cha
 
 | ファイル | 目的 | 正本となる範囲 |
 |---|---|---|
-| [ops/ops_deploy.md](ops/ops_deploy.md) | stg・prod 運用環境の構成と運用操作（miseタスク・`scripts/deploy/kakeiboot_ops.py`） | 運用dir・systemd unit・portの構成（healthz portは `configs/<env>/app.toml` が正本）、deploy先の設定（configs/deploy.toml: deploy_root・transport〔ssh/local・TASK-118〕・runtime_host・local override）、運用操作の仕組み（transport切替・ssh実行形・dry-run直接実行）、deploy（`stg:deploy` / `prod:deploy`: build → rsync → restart・healthz確認。対象・除外含む）、admin CLI（`exec-stg` / `exec-prod`）、service操作（`stg:service` / `prod:service`）、backup unitのrender配布（`.in` 正本の `{{deploy_root}}` 置換と `units:install` による user config dirへの配布・scriptのpath相対導出 [TASK-119]）、データの所在とbackup・復元（WAL 運用の注意・online backup・復元手順・web の書き出し/取り込みとの責務分離・timer による自動 backup と世代管理 [TASK-83]）、prodの運用、linger によるマシン起動時の自動起動 |
+| [ops/ops_deploy.md](ops/ops_deploy.md) | stg・prod 運用環境の構成と運用操作（miseタスク・`scripts/deploy/kakeiboot_ops.py`） | 運用dir・systemd unit・portの構成（healthz portは `configs/<env>/app.toml` が正本）、deploy先の設定（configs/deploy.toml: deploy_root・transport〔ssh/local・TASK-118〕・runtime_host・local override）、運用操作の仕組み（transport切替・ssh実行形・dry-run直接実行）、deploy（`stg:deploy`: build → rsync → restart・healthz確認。対象・除外含む）、promote（`prod:promote`: stg運用dirの検証済み成果物をprodへ配布。stg前段チェック・sha256表示・configs乖離preview・旧成果物の `releases/` 退避とrollback手順 [TASK-189]）、configs配布（`prod:configs`: repo configs/prod → prod運用dir。restart不含・`--preview` で差分確認）、admin CLI（`exec-stg` / `exec-prod`）、service操作（`stg:service` / `prod:service`）、backup unitのrender配布（`.in` 正本の `{{deploy_root}}` 置換と `units:install` による user config dirへの配布・scriptのpath相対導出 [TASK-119]）、データの所在とbackup・復元（WAL 運用の注意・online backup・復元手順・web の書き出し/取り込みとの責務分離・timer による自動 backup と世代管理 [TASK-83]）、prodの運用、linger によるマシン起動時の自動起動 |
 
 ## dev
 

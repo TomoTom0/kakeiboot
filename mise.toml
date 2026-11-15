@@ -102,10 +102,13 @@ description = "stgへdeploy（build → 配布 → kakeiboot-stg再起動 → he
 depends = ["build"]
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env stg"
 
-[tasks."prod:deploy"]
-description = "prodへdeploy（build → 配布 → kakeiboot-prod再起動 → healthz確認。処理本体は scripts/deploy/kakeiboot_ops.py）"
-depends = ["build"]
-run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py deploy --env prod"
+[tasks."prod:promote"]
+description = "stg運用dirの検証済み成果物（binary・frontend・backup script）をprodへ配布（buildなし・configs対象外・stg前段チェック・旧成果物退避・restart・healthz。処理本体は scripts/deploy/kakeiboot_ops.py）"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py promote"
+
+[tasks."prod:configs"]
+description = "prodへconfigs配布（repo configs/prod → prod運用dir。restart不含。--previewで転送なし差分確認）"
+run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py configs --env prod"
 
 [tasks."exec-stg"]
 description = "stg運用dirでbudget-bookの任意subcommand（mise run exec-stg -- admin user list）"
