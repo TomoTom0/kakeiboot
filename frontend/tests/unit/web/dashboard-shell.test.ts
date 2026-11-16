@@ -399,15 +399,15 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // keys) and home is entered keys-less — home's FIRST load in the mode
     // is what the counts measure, exactly as the keyed home mounts did
     const trendCallsByPath: [string, number][] = [
-      ['/?week=2026-10-05', 1],
-      ['/?year=2026', 3],
-      ['/?from=2026-10-03&to=2026-10-15', 1],
+      ['/categories?week=2026-10-05', 1],
+      ['/categories?year=2026', 3],
+      ['/categories?from=2026-10-03&to=2026-10-15', 1],
     ]
     for (const [path, calls] of trendCallsByPath) {
       cleanup()
       mockFetch({ 'GET /api/auth/me': { body: ME } })
       const other = vi.spyOn(api, 'getAnalysisTrend')
-      const m = await mountApp(path.replace('/', '/categories'))
+      const m = await mountApp(path)
       other.mockClear()
       await m.router.push('/')
       await settle()
@@ -460,12 +460,18 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     const { wrapper } = await mountApp('/')
     ;(await import('@/web/stores/period')).usePeriodStore().setMonth('2026-11')
     await settle()
-    // the total tweens from October's 948 to 0 over ~300ms (TASK-161
-    // §2-2) — the cold mount landed it at once, the store move does not,
-    // so wait the tween out before reading the settled vocabulary
-    await new Promise((r) => setTimeout(r, 400))
+    // the total tweens from October's 948 to 0 (TASK-161 §2-2) — the cold
+    // mount landed it at once, the store move does not. Poll for the
+    // settled value instead of sleeping a fixed span: the assertion is
+    // about the end state, not the tween's duration, so a duration
+    // change must not break (or silently misread) this test
+    await vi.waitFor(
+      () => {
+        expect(wrapper.find('[data-test="period-total"]').text()).toBe('0円')
+      },
+      { timeout: 3_000, interval: 20 },
+    )
     await settle()
-    expect(wrapper.find('[data-test="period-total"]').text()).toBe('0円')
     expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
     expect(wrapper.find('[data-test="recent"] .empty-state').exists()).toBe(true)
     // November 2026 spans six overlapping weeks (10/26 .. 11/30 Mondays) —

@@ -56,6 +56,29 @@ function derivedRange(query: LocationQueryRaw): BrowsingPatch {
 
 /** Page writers submit only owned keys; undefined is an explicit deletion.
  * The logical query includes accepted, not yet committed FIFO elements. */
+/** Issue #9: the period keys a query actually hands to period.fromQuery —
+ * the same branch conditions as the store's import (an empty value, a
+ * malformed month, a from without its to import NOTHING, so they must not
+ * count as a keys-carrying entry either). Returns the one mode's keys
+ * fromQuery would apply, or null when it would apply none. */
+function importablePeriodKeys(query: LocationQueryRaw): Record<string, string> | null {
+  const s = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+  const month = s(query.month)
+  const week = s(query.week)
+  const year = s(query.year)
+  if (month && /^\d{4}-\d{2}$/.test(month)) return { month }
+  if (week && /^\d{4}-\d{2}-\d{2}$/.test(week) && !Number.isNaN(Date.parse(week))) return { week }
+  if (year && /^\d{4}$/.test(year)) return { year }
+  const from = s(query.from)
+  const to = s(query.to)
+  if (from && to) return { from, to }
+  return null
+}
+function samePeriodKeys(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => b[key] === a[key])
+}
+
 export function useBrowsingQuery(): Coordinator {
   const router = useRouter()
   function coordinator(): Coordinator {
@@ -145,7 +168,7 @@ export function useBrowsingUrlSync(): void {
       if (coldStart) coldStartConsumed.add(router)
       importing = true
       try {
-        const hasPeriodKeys = PERIOD_KEYS.some((key) => key in route.query)
+        const importable = importablePeriodKeys(route.query)
         // Issue #9, cold start on home: a restored tab's ?month= is stale
         // state, not an instruction — the period keys are NOT imported
         // and home starts from the current month (the write-back below
@@ -153,22 +176,52 @@ export function useBrowsingUrlSync(): void {
         // aimed at its own screen (receipts / axes / …), which imports
         // as before. Labels are not period keys and still restore.
         const coldHome = coldStart && route.name === 'home'
-        if (hasPeriodKeys && !coldHome) period.fromQuery(route.query)
+        // Issue #9 (review follow-up): keys identical to the committed
+        // snapshot are the sync's own write-back paint, not an explicit
+        // instruction — every home history entry carries them, so a
+        // browser/device BACK into home would otherwise always take the
+        // import path and resurrect the stale period regardless of the
+        // window. Painted keys go through the freshness rule below
+        // instead; keys that DIFFER from committed (a deep link, a
+        // stacked period entry) still import and restore.
+        const painted = importable !== null && samePeriodKeys(importable, committed.keys)
+        if (importable !== null && !coldHome && (route.name !== 'home' || !painted)) {
+          period.fromQuery(route.query)
+        }
         if ('labels' in route.query) {
           const labels = parseLabelQuery(firstString(route.query.labels) ?? '')
           if (period.labelColors.join(',') !== labels.join(',')) period.setLabelColors(labels)
         }
         // Issue #9, in-session home entry: beyond the fresh window the
         // standing period is stale — reset to the default (current
-        // month). A keys-carrying entry imports instead (above): the
+        // month). The entry counts as keys-less when it carries no
+        // importable keys (none at all, an empty / malformed value, a
+        // from without its to) or only the painted committed keys; an
+        // entry carrying explicit keys imports instead (above) and the
         // explicit keys win over the reset. The reset rides the regular
         // write-back below (committed picks it up; a replace, never a
         // user entry), and notifying under `importing` keeps this
         // boundary from enqueueing a second write for it.
-        if (!coldHome && route.name === 'home' && !hasPeriodKeys &&
+        if (!coldHome && route.name === 'home' && (importable === null || painted) &&
           Date.now() - activityAtEntry > HOME_FRESH_WINDOW_MS) {
           period.resetToDefault()
         }
+      } finally { importing = false }
+    }
+    // Issue #9 (review follow-up): landing on the login screen ends the
+    // session's period state — the standing period returns to the
+    // default and the cold start re-arms, so an SPA logout → login round
+    // trip (no reload) cannot carry the previous session's period into
+    // the next session's first home entry. The reset runs under
+    // `importing`, like the freshness reset above, so its notification
+    // is not mistaken for a write (and cannot be rolled back by the
+    // boundary's own restore). The period store is reached only from
+    // this sync — no store-to-store reference, no import cycle.
+    if (route.name === 'login') {
+      coldStartConsumed.delete(router)
+      importing = true
+      try {
+        period.resetToDefault()
       } finally { importing = false }
     }
     committed = snapshot()

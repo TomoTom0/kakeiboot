@@ -1237,6 +1237,12 @@ it('[covers:web-browse.url-ordered-system-write] scope all→period受付で確�
 // an entry carrying explicit period keys always imports them. Other
 // screens' cold-start import is unchanged. Time is the faked Date: the
 // period operations land at 2026-10-15T03:00Z and setSystemTime ages them.
+// Review follow-ups: keys identical to the committed snapshot are the
+// write-back's own paint (every home history entry carries them), so a
+// BACK into home goes through the freshness rule instead of the import
+// path; unimportable keys (an empty value, a from without its to) do not
+// count as keys-carrying either; and landing on the login screen resets
+// the period and re-arms the cold start (no carry-over across sessions).
 describe('home period freshness (Issue #9)', () => {
   it('[covers:web-shell.home-fresh-window] コールドスタートで /?month=2026-09 に着地してもホームは当月表示（他画面のコールドスタートは従来どおり取り込む）', async () => {
     const m = await mountApp('/?month=2026-09')
@@ -1290,5 +1296,78 @@ describe('home period freshness (Issue #9)', () => {
     await settle()
     expect(store.month).toBe('2026-05')
     expect(q(m).month).toBe('2026-05')
+  })
+
+  it('[covers:web-shell.home-fresh-window] バックでのホーム再訪: 書戻しで塗られたキー（committed と同一）は明示指定とみなさず、窓超過なら当月へリセット・窓以内なら期間維持', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
+    store.setMonth('2026-09') // the last period activity, at T0
+    await settle()
+    expect(q(m).month).toBe('2026-09')
+    await m.router.push('/receipts')
+    await settle()
+    expect(q(m).month).toBe('2026-09')
+
+    // inside the window (T0 + 5 min): the back entry's keys are the
+    // write-back's own paint (identical to committed) — September stays
+    vi.setSystemTime(new Date('2026-10-15T03:05:00Z'))
+    m.router.back()
+    await settle()
+    expect(store.month).toBe('2026-09')
+    expect(q(m).month).toBe('2026-09')
+
+    // beyond the window (T0 + 11 min): the same painted entry no longer
+    // resurrects September — the home entry resets to the current month
+    await m.router.forward()
+    await settle()
+    vi.setSystemTime(new Date('2026-10-15T03:11:00Z'))
+    m.router.back()
+    await settle()
+    expect(store.month).toBe('2026-10')
+    expect(q(m).month).toBe('2026-10')
+  })
+
+  it('[covers:web-shell.home-fresh-window] 取り込み不能な期間キー（空値・from のみ）はキー付き進入とみなさず、窓超過ならリセットする', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
+    store.setMonth('2026-09')
+    await settle()
+    vi.setSystemTime(new Date('2026-10-15T03:11:00Z'))
+    await m.router.push('/receipts')
+    await settle()
+    // an empty month value imports nothing — it must not suppress the reset
+    await m.router.push('/?month=')
+    await settle()
+    expect(store.month).toBe('2026-10')
+    expect(q(m).month).toBe('2026-10')
+
+    // a from without its to is equally unimportable
+    store.setMonth('2026-09')
+    await settle()
+    vi.setSystemTime(new Date('2026-10-15T03:22:00Z'))
+    await m.router.push('/receipts')
+    await settle()
+    await m.router.push('/?from=2026-09-01')
+    await settle()
+    expect(store.month).toBe('2026-10')
+    expect(q(m).month).toBe('2026-10')
+  })
+
+  it('[covers:web-shell.home-fresh-window] ログイン画面への着地で期間はデフォルトへ戻りコールドスタートも再武装する（前セッションの期間を持ち越さない）', async () => {
+    const m = await mountApp('/?month=2026-10')
+    const store = usePeriodStore()
+    store.setMonth('2026-09')
+    await settle()
+    expect(store.month).toBe('2026-09')
+    // the logout landing: the period is already back at the default
+    await m.router.push('/login')
+    await settle()
+    expect(store.month).toBe('2026-10')
+    // the next session's first home landing is a cold start again — a
+    // keyed URL no longer imports (it would have, mid-session)
+    await m.router.push('/?month=2026-05')
+    await settle()
+    expect(store.month).toBe('2026-10')
+    expect(q(m).month).toBe('2026-10')
   })
 })

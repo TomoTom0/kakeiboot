@@ -1706,8 +1706,22 @@ test.describe('trend window (390x780)', () => {
     await page.setViewportSize({ width: 360, height: 780 })
     logPageIssues(page, 'trend-gridline')
     await installApiStub(page)
-    await page.goto('/?year=2026')
+    // Issue #9: a keyed HOME url is no longer a cold-start import, so the
+    // year mode is taken in on /categories (its cold start still imports)
+    // and home is entered keys-less through the brand — inside the fresh
+    // window the standing year period rides along, and it is HOME's year
+    // window that slides below, exactly as the old direct load measured
+    await page.goto('/categories?year=2026')
     await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await expect
+      .poll(() => barKeys(page), { timeout: 3_000 })
+      .toEqual(Array.from({ length: 12 }, (_, i) => `bar-2026-${String(i + 1).padStart(2, '0')}`))
+    await page.locator('a.topbar-brand').click()
+    // mid-swap the crossfade keeps both surfaces in the DOM — wait for the
+    // swap to settle on the one Home node before measuring (the url-period
+    // test's pattern)
+    await expect(page.locator('[data-test="period-total"]')).toHaveCount(1)
+    expect(new URL(page.url()).pathname).toBe('/')
     await expect
       .poll(() => barKeys(page), { timeout: 3_000 })
       .toEqual(Array.from({ length: 12 }, (_, i) => `bar-2026-${String(i + 1).padStart(2, '0')}`))
@@ -2272,8 +2286,29 @@ test.describe('trend fit at the 2-column boundary (768x780)', () => {
     // max-width: 899px band's] - 24rem col-side - 0.75rem gap — the shell
     // padding is a pre-TASK-105 constant the implementation keeps, so the
     // width expectation is computed from the effective content width)
-    await page.goto('/?year=2026')
+    // Issue #9: a keyed HOME url is no longer a cold-start import — the
+    // year mode is taken in on /categories and home is entered keys-less
+    // through the brand (inside the fresh window the year period rides
+    // along). The bar keys are asserted to BE the 2026 year window: in
+    // month mode the trailing 12 bars would also count 12 while never
+    // exercising the dense year window this test exists for
+    await page.goto('/categories?year=2026')
     await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.locator('a.topbar-brand').click()
+    await expect(page.locator('[data-test="period-total"]')).toHaveCount(1)
+    expect(new URL(page.url()).pathname).toBe('/')
+    const yearKeys = Array.from({ length: 12 }, (_, i) => `bar-2026-${String(i + 1).padStart(2, '0')}`)
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            Array.from(document.querySelectorAll('[data-test="trend"] [data-test^="bar-"]')).map((el) =>
+              el.getAttribute('data-test'),
+            ),
+          ),
+        { timeout: 3_000 },
+      )
+      .toEqual(yearKeys)
     await page.waitForLoadState('networkidle')
     const m = await page.evaluate(() => {
       const card = document.querySelector('[data-test="trend-card"]')!
@@ -2359,7 +2394,7 @@ test.describe('browsing url sync + topbar back (390x780)', () => {
     await expect(page).not.toHaveURL(/\/categories/)
   })
 
-  test('[covers:web-browse.url-restore] 直リンクの labels= と期間は Home でも復元される（analysis へ label_colors 付きで流れる・URL の keys は保たれる）', async ({ page }) => {
+  test('[covers:web-browse.url-restore] 直リンクの labels= は Home でも復元されるが期間は Home のコールドスタートでは復元されない（当月で始まり URL の month は書き換わる）・Categories では期間も復元される', async ({ page }) => {
     logPageIssues(page, 'url-restore')
     await installApiStub(page)
     const apiUrls: string[] = []
@@ -2369,14 +2404,33 @@ test.describe('browsing url sync + topbar back (390x780)', () => {
     await page.goto('/?labels=red&month=2026-09')
     await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
     await page.waitForLoadState('networkidle')
-    // the analysis query carries both the deep-linked month and the label filter
+    // Issue #9: the label filter restores on Home as before, but the
+    // period key of a cold-start home landing is stale state, not an
+    // instruction — the analysis runs for the CURRENT month (the stub
+    // clock pins today to 2026-10-15) with the label filter applied,
+    // and no request ever asks for the deep-linked 2026-09
     expect(
-      apiUrls.some((u) => u.includes('month=2026-09') && u.includes('label_colors=red')),
+      apiUrls.some((u) => u.includes('month=2026-10') && u.includes('label_colors=red')),
       JSON.stringify(apiUrls),
     ).toBe(true)
-    // the URL keeps both keys (no rewrite drops them)
+    expect(apiUrls.some((u) => u.includes('month=2026-09')), JSON.stringify(apiUrls)).toBe(false)
+    // the URL keeps the label key; the month key is rewritten to the
+    // current month (not dropped, not left stale)
     expect(new URL(page.url()).searchParams.get('labels')).toBe('red')
-    expect(new URL(page.url()).searchParams.get('month')).toBe('2026-09')
+    expect(new URL(page.url()).searchParams.get('month')).toBe('2026-10')
+    // the other browsing screens' cold start is unchanged: on Categories
+    // the deep-linked period AND labels both restore
+    const seen = apiUrls.length
+    await page.goto('/categories?labels=blue&year=2026')
+    await expect(page.locator('[data-test="trend-card"]')).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    const catUrls = apiUrls.slice(seen)
+    expect(
+      catUrls.some((u) => u.includes('year=2026') && u.includes('label_colors=blue')),
+      JSON.stringify(catUrls),
+    ).toBe(true)
+    expect(new URL(page.url()).searchParams.get('labels')).toBe('blue')
+    expect(new URL(page.url()).searchParams.get('year')).toBe('2026')
   })
 
   test('[covers:web-shell.topbar-back] tabbar外画面のtopbar ‹ は44px・brand直後・表題直前で親sectionへ戻る（manage→データtab・search→ホーム）', async ({ page }) => {
