@@ -291,7 +291,11 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // week mode: 7 day bars as buttons; the 10-10 bar routes to that day
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const week = await mountApp('/?week=2026-10-05')
+    // Issue #9: a keyed home URL is no longer a cold-start import — the
+    // week is set through the store after a plain mount
+    const week = await mountApp('/')
+    ;(await import('@/web/stores/period')).usePeriodStore().setWeek('2026-10-05')
+    await settle()
     const bar = week.wrapper.find('[data-test="bar-2026-10-10"]')
     expect(bar.element.tagName).toBe('BUTTON')
     expect(bar.classes()).toContain('bar-btn')
@@ -390,6 +394,10 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // 3 calls); the month window adds the ±1-month move windows (4 prefetches
     // + display = 5); the inactive week/range windows' adjacent key equals
     // their own display key, so no prefetch issues for them
+    // Issue #9: a keyed home URL is no longer a cold-start import, so the
+    // modes land on /categories instead (its cold start still imports the
+    // keys) and home is entered keys-less — home's FIRST load in the mode
+    // is what the counts measure, exactly as the keyed home mounts did
     const trendCallsByPath: [string, number][] = [
       ['/?week=2026-10-05', 1],
       ['/?year=2026', 3],
@@ -399,7 +407,10 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       cleanup()
       mockFetch({ 'GET /api/auth/me': { body: ME } })
       const other = vi.spyOn(api, 'getAnalysisTrend')
-      const m = await mountApp(path)
+      const m = await mountApp(path.replace('/', '/categories'))
+      other.mockClear()
+      await m.router.push('/')
+      await settle()
       expect(m.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
       expect(other).toHaveBeenCalledTimes(calls)
     }
@@ -407,7 +418,9 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // tab returns (the mode change must re-run the load)
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const back = await mountApp('/?from=2026-10-01&to=2026-10-31')
+    const back = await mountApp('/')
+    ;(await import('@/web/stores/period')).usePeriodStore().setRange('2026-10-01', '2026-10-31')
+    await settle()
     expect(back.wrapper.find('[data-test="week-card"]').exists()).toBe(false)
     await back.wrapper.find('[data-test="filter-period"]').trigger('click')
     await settle()
@@ -442,7 +455,16 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
   // "future" labeling or grey-out is added
   it('[covers:web-shell.period-uncapped-step] 未来月は既存の空表現のまま（0円・記録なし・recent 空状態・週行0円・barなし）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const { wrapper } = await mountApp('/?month=2026-11')
+    // Issue #9: a keyed home URL is no longer a cold-start import — the
+    // future month is set through the store after a plain mount
+    const { wrapper } = await mountApp('/')
+    ;(await import('@/web/stores/period')).usePeriodStore().setMonth('2026-11')
+    await settle()
+    // the total tweens from October's 948 to 0 over ~300ms (TASK-161
+    // §2-2) — the cold mount landed it at once, the store move does not,
+    // so wait the tween out before reading the settled vocabulary
+    await new Promise((r) => setTimeout(r, 400))
+    await settle()
     expect(wrapper.find('[data-test="period-total"]').text()).toBe('0円')
     expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
     expect(wrapper.find('[data-test="recent"] .empty-state').exists()).toBe(true)
@@ -653,7 +675,11 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // buckets; the span rules live in trendGranularity/spanGranularity)
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const range = await mountApp('/?from=2026-10-03&to=2026-10-15')
+    // Issue #9: a keyed home URL is no longer a cold-start import — the
+    // range is set through the store after a plain mount
+    const range = await mountApp('/')
+    ;(await import('@/web/stores/period')).usePeriodStore().setRange('2026-10-03', '2026-10-15')
+    await settle()
     expect(range.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(13)
     expect(
       range.wrapper

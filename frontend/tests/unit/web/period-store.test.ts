@@ -278,3 +278,38 @@ describe('period store operation notifications (TASK-174 D1)', () => {
     off()
   })
 })
+
+// Issue #9: lastActivityAt — the freshness clock the browsing URL sync
+// compares a home entry against (HOME_FRESH_WINDOW_MS). It starts at the
+// store's creation and moves ONLY with a notified operation (any cause:
+// user / import / system); a no-op call that notifies nothing leaves it
+// untouched, so an idle period ages from its last real change.
+describe('period store last activity (Issue #9)', () => {
+  const T0 = new Date('2026-10-15T03:00:00Z').getTime()
+
+  it('[covers:web-shell.home-fresh-window] lastActivityAt は生成時刻で初期化され通知を伴う操作（user/import/system）ごとに更新され無変化の呼出では動かない', () => {
+    const p = usePeriodStore()
+    expect(p.lastActivityAt).toBe(T0)
+
+    // a user operation moves the clock to the operation's time
+    vi.setSystemTime(new Date(T0 + 5 * 60 * 1000))
+    p.setMonth('2026-05')
+    expect(p.lastActivityAt).toBe(T0 + 5 * 60 * 1000)
+
+    // a no-op (the same month re-selected) notifies nothing and the
+    // clock stays — the period keeps aging from its last real change
+    vi.setSystemTime(new Date(T0 + 9 * 60 * 1000))
+    p.setMonth('2026-05')
+    expect(p.lastActivityAt).toBe(T0 + 5 * 60 * 1000)
+
+    // import and system operations count as activity too
+    p.fromQuery({ month: '2026-09' })
+    expect(p.lastActivityAt).toBe(T0 + 9 * 60 * 1000)
+    vi.setSystemTime(new Date(T0 + 12 * 60 * 1000))
+    p.resetToDefault()
+    expect(p.lastActivityAt).toBe(T0 + 12 * 60 * 1000)
+    vi.setSystemTime(new Date(T0 + 15 * 60 * 1000))
+    p.setLabelColors(['red'])
+    expect(p.lastActivityAt).toBe(T0 + 15 * 60 * 1000)
+  })
+})

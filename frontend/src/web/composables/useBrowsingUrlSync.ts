@@ -4,7 +4,7 @@ import { formatLabelQuery, parseLabelQuery, type LabelColor } from '@/shared/lab
 import { browsingNavigation, type WriteOwner } from './browsingNavigation'
 import { firstString } from './receiptContext'
 import { monthEnd, shiftDate } from './period'
-import { usePeriodStore, type PeriodOperation } from '../stores/period'
+import { usePeriodStore, HOME_FRESH_WINDOW_MS, type PeriodOperation } from '../stores/period'
 import { useSessionStore } from '../stores/session'
 
 const PERIOD_KEYS = ['month', 'week', 'year', 'from', 'to']
@@ -25,6 +25,12 @@ interface Coordinator {
   onBoundary(fn: () => void): () => void
 }
 const coordinators = new WeakMap<Router, Coordinator>()
+/** Issue #9: routers whose session cold start has already been consumed.
+ * The cold start is a property of the session (the router's lifetime),
+ * not of one shell mount — a shell dispose/remount on the same router
+ * (TASK-174 D3-2) must still import the late committed URL, so the flag
+ * lives here, keyed by router, instead of in the composable's closure. */
+const coldStartConsumed = new WeakSet<Router>()
 
 function apply(query: LocationQueryRaw, patch: BrowsingPatch): LocationQueryRaw {
   const next = { ...query }
@@ -126,15 +132,42 @@ export function useBrowsingUrlSync(): void {
   function baseline(rollback: boolean, complete = true): void {
     if (!alive || navigation.pending) return
     const route = router.currentRoute.value
+    // Issue #9: the freshness clock is read BEFORE this boundary's own
+    // restore / import can count as fresh activity.
+    const activityAtEntry = period.lastActivityAt
     if (rollback) restore(committed)
     logical = { ...route.query }
     if (route.meta.browsingSync) {
+      // The session's first sync baseline is its cold start; consume it
+      // here (not on a non-sync landing like /login) so the first BROWSING
+      // screen decides the rule below.
+      const coldStart = !coldStartConsumed.has(router)
+      if (coldStart) coldStartConsumed.add(router)
       importing = true
       try {
-        if (PERIOD_KEYS.some((key) => key in route.query)) period.fromQuery(route.query)
+        const hasPeriodKeys = PERIOD_KEYS.some((key) => key in route.query)
+        // Issue #9, cold start on home: a restored tab's ?month= is stale
+        // state, not an instruction — the period keys are NOT imported
+        // and home starts from the current month (the write-back below
+        // replaces them with the store's keys). A period deep link is
+        // aimed at its own screen (receipts / axes / …), which imports
+        // as before. Labels are not period keys and still restore.
+        const coldHome = coldStart && route.name === 'home'
+        if (hasPeriodKeys && !coldHome) period.fromQuery(route.query)
         if ('labels' in route.query) {
           const labels = parseLabelQuery(firstString(route.query.labels) ?? '')
           if (period.labelColors.join(',') !== labels.join(',')) period.setLabelColors(labels)
+        }
+        // Issue #9, in-session home entry: beyond the fresh window the
+        // standing period is stale — reset to the default (current
+        // month). A keys-carrying entry imports instead (above): the
+        // explicit keys win over the reset. The reset rides the regular
+        // write-back below (committed picks it up; a replace, never a
+        // user entry), and notifying under `importing` keeps this
+        // boundary from enqueueing a second write for it.
+        if (!coldHome && route.name === 'home' && !hasPeriodKeys &&
+          Date.now() - activityAtEntry > HOME_FRESH_WINDOW_MS) {
+          period.resetToDefault()
         }
       } finally { importing = false }
     }

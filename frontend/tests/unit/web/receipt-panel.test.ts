@@ -55,7 +55,7 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
       global: { plugins: [pinia, router] },
     })
     await settle()
-    return { wrapper, recorded, last: () => recorded.at(-1)! }
+    return { wrapper, recorded, pinia, last: () => recorded.at(-1)! }
   }
 
   const withRole = (role: 'owner' | 'editor' | 'viewer'): Me => ({
@@ -115,8 +115,13 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     expect(list).not.toHaveBeenCalled()
   })
 
-  it('[covers:web-receipts.payment-tag-link] 支払方法タグは /receipts?payment_method=&<購入月> へのリンク', async () => {
-    const { wrapper } = await mountPanel(withRole('viewer'), 101)
+  it('[covers:web-receipts.payment-tag-link] 支払方法タグは /receipts?payment_method=&<現在の共有期間> へのリンク（購入月は載らない・Issue #9）', async () => {
+    const { wrapper, pinia } = await mountPanel(withRole('viewer'), 101)
+    // Issue #9: the link carries the CURRENT shared period — with the
+    // store moved off the receipt's purchase month (2026-10), the tag
+    // must follow the store (2026-08), never the purchase month
+    usePeriodStore(pinia).setMonth('2026-08')
+    await settle()
     const tag = wrapper.find('[data-test="payment-method"]')
     expect(tag.exists()).toBe(true)
     expect(tag.element.tagName).toBe('A')
@@ -127,7 +132,7 @@ describe('ReceiptPanel labels slot (TASK-17 interface)', () => {
     const url = new URL(tag.attributes('href')!, 'http://localhost')
     expect(url.pathname).toBe('/receipts')
     expect(url.searchParams.get('payment_method')).toBe('cash')
-    expect(url.searchParams.get('month')).toBe('2026-10') // the purchase month
+    expect(url.searchParams.get('month')).toBe('2026-08') // the current shared period, not the purchase month
   })
 })
 
@@ -152,17 +157,21 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     return JSON.parse(JSON.stringify(await api.getReceipt(1, receiptId))) as ReceiptView
   }
 
-  it('[covers:web-receipts.item-category-link][covers:web-receipts.item-category-inline] 品目カテゴリは閲覧モードで購入月つきのカテゴリ詳細へリンク（inline muted・単独行なし）・未分類/未知パスは span・修正モードではリンクにならない', async () => {
-    const { wrapper, router } = await mountReadonly(101)
-    // 牛乳 (1001) / パン (1002): 食費/食料品 -> /categories/1/2 + the purchase month
+  it('[covers:web-receipts.item-category-link][covers:web-receipts.item-category-inline] 品目カテゴリは閲覧モードで現在の共有期間つきのカテゴリ詳細へリンク（inline muted・単独行なし）・未分類/未知パスは span・修正モードではリンクにならない', async () => {
+    const { wrapper, router, pinia } = await mountReadonly(101)
+    // Issue #9: the link query is the CURRENT shared period — move the
+    // store off the purchase month (2026-10) so the two are told apart
+    usePeriodStore(pinia).setMonth('2026-08')
+    await settle()
+    // 牛乳 (1001) / パン (1002): 食費/食料品 -> /categories/1/2 + the current period
     const link = wrapper.find('[data-test="item-cat-1001"]')
     expect(link.exists()).toBe(true)
     expect(link.element.tagName).toBe('A')
     expect(link.classes()).toContain('cat-link')
     const u = new URL(link.attributes('href')!, 'http://localhost')
     expect(u.pathname).toBe('/axes/category/1/2')
-    expect(Object.fromEntries(u.searchParams)).toEqual({ month: '2026-10' })
-    expect(wrapper.find('[data-test="item-cat-1002"]').attributes('href')).toBe('/axes/category/1/2?month=2026-10')
+    expect(Object.fromEntries(u.searchParams)).toEqual({ month: '2026-08' })
+    expect(wrapper.find('[data-test="item-cat-1002"]').attributes('href')).toBe('/axes/category/1/2?month=2026-08')
     await link.trigger('click')
     await settle()
     expect(router.currentRoute.value.path).toBe('/axes/category/1/2')
@@ -211,12 +220,16 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     ranged.wrapper.unmount()
   })
 
-  it('[covers:web-receipts.store-links] 店名は店詳細・店カテゴリは店一覧の絞り込みへ、店不明は span のまま', async () => {
-    const { wrapper, router } = await mountReadonly(101)
+  it('[covers:web-receipts.store-links] 店名は店詳細・店カテゴリは店一覧の絞り込みへ、店不明は span のまま（リンク query は現在の共有期間・Issue #9）', async () => {
+    const { wrapper, router, pinia } = await mountReadonly(101)
+    // Issue #9: the links carry the current shared period, not the
+    // receipt's purchase month — move the store off 2026-10 to prove it
+    usePeriodStore(pinia).setMonth('2026-08')
+    await settle()
     const store = wrapper.find('[data-test="store-name"] a')
     expect(store.exists()).toBe(true)
     expect(store.classes()).toContain('store-link')
-    expect(store.attributes('href')).toBe('/axes/store/1?month=2026-10')
+    expect(store.attributes('href')).toBe('/axes/store/1?month=2026-08')
     await store.trigger('click')
     await settle()
     expect(router.currentRoute.value.path).toBe('/axes/store/1')
@@ -228,7 +241,7 @@ describe('ReceiptPanel detail links (TASK-74 §4-8)', () => {
     expect(cat.classes()).not.toContain('tag-link')
     const cu = new URL(cat.attributes('href')!, 'http://localhost')
     expect(cu.pathname).toBe('/stores')
-    expect(Object.fromEntries(cu.searchParams)).toEqual({ store_category: 'スーパー', month: '2026-10' })
+    expect(Object.fromEntries(cu.searchParams)).toEqual({ store_category: 'スーパー', month: '2026-08' })
     wrapper.unmount()
 
     // エーマート: a resolved store without a category — no tag at all
