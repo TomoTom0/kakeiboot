@@ -67,7 +67,7 @@ STG_DEPLOY_LEGACY = [
     f"rsync -a scripts/backup/kakeiboot-backup.sh {DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
     f"rsync -a --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
     f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
-    "systemctl --user restart kakeiboot-stg",
+    "systemctl restart kakeiboot-stg",
     "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; "
     "sleep 1; done; exit 1'",
 ]
@@ -229,7 +229,7 @@ class TestTransportLocal(unittest.TestCase):
 
         self.assertEqual(
             build_service_commands(local_cfg(), "stg", ["status"]),
-            [["systemctl", "--user", "status", "kakeiboot-stg"]],
+            [["systemctl", "status", "kakeiboot-stg"]],
         )
         self.assertEqual(
             build_backup_commands(local_cfg(), "prod"),
@@ -380,7 +380,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_prints_plan_without_executing(self) -> None:
         cmds = [
             ["rsync", "-a", "target/debug/budget-book", f"{DEPLOY_ROOT}/stg/budget-book"],
-            ["systemctl", "--user", "restart", "kakeiboot-stg"],
+            ["systemctl", "restart", "kakeiboot-stg"],
         ]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(__import__("kakeiboot_ops").subprocess, "run") as run:
@@ -393,7 +393,7 @@ class TestDryRun(unittest.TestCase):
             out.getvalue().splitlines(),
             [
                 f"$ rsync -a target/debug/budget-book {DEPLOY_ROOT}/stg/budget-book",
-                "$ systemctl --user restart kakeiboot-stg",
+                "$ systemctl restart kakeiboot-stg",
             ],
         )
 
@@ -870,7 +870,7 @@ class TestPromotePlan(unittest.TestCase):
             ["rsync", "-a", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
         # step 10/11: restart prod, then healthz on the prod runtime-dir port
-        self.assertEqual(restart, ["systemctl", "--user", "restart", "kakeiboot-prod"])
+        self.assertEqual(restart, ["systemctl", "restart", "kakeiboot-prod"])
         self.assertEqual(healthz_prod, healthz_command(40283))
 
     # [covers:deploy-ops.promote-configs-preview]
@@ -925,7 +925,7 @@ class TestPromoteStgPrecheck(unittest.TestCase):
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
         self.assertEqual(cmds[1][:2], ["sh", "-c"])
         script = cmds[1][2]
-        self.assertIn("systemctl --user show kakeiboot-stg", script)
+        self.assertIn("systemctl show kakeiboot-stg", script)
         self.assertIn("MainPID", script)
         self.assertIn("/proc/$pid/exe", script)
         self.assertIn("sha256sum", script)
@@ -973,7 +973,7 @@ class TestPromoteRestartHealthz(unittest.TestCase):
         from kakeiboot_ops import build_promote_commands
 
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
-        self.assertEqual(cmds[9], ["systemctl", "--user", "restart", "kakeiboot-prod"])
+        self.assertEqual(cmds[9], ["systemctl", "restart", "kakeiboot-prod"])
         self.assertEqual(cmds[10], healthz_command(40283))
 
 
@@ -1000,7 +1000,7 @@ class TestPromoteShellSteps(unittest.TestCase):
         return build_promote_commands(self.cfg, 40282, 40283)
 
     def write_stub_systemctl(self, body: str) -> None:
-        # leads PATH: `systemctl --user show kakeiboot-stg -p MainPID --value`
+        # leads PATH: `systemctl show kakeiboot-stg -p MainPID --value`
         # resolves to this stub, whose stdout stands in for the real answer.
         stub_dir = self.root / "stub-bin"
         stub_dir.mkdir()

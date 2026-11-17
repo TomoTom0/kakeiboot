@@ -1,6 +1,6 @@
 # stg・prod 運用環境（kakeiboot）
 
-作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・promote・configs配布・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd user service が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
+作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・promote・configs配布・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd system service（kakeiboot-stg / kakeiboot-prod）が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
 
 ## 構成
 
@@ -26,7 +26,7 @@
 
 - backendはconfig内の相対path（`var/...`・`frontend/dist`等）を config dirの2階層上（= 運用dir自身）をrootとして解決する（`backend/src/config.rs`）。このため `configs/<env>/` の階層は上記構成から変えないこと
 - migrations は binary に埋め込み（`sqlx::migrate!`）のため配布不要。tool description等もcompile時埋込み
-- unit file: `~/.config/systemd/user/kakeiboot-{stg,prod}.service`。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
+- unit file: `/etc/systemd/system/kakeiboot-{stg,prod}.service`（system service。実行userは stg=muse-agent・prod=tomo。tomo / muse-agent の双方が polkit ルールにより自分の身分で操作できる）。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
 - backup用unit file: `~/.config/systemd/user/kakeiboot-backup@.{service,timer}`（template 1組で stg/prod 両用）。repo正本は `scripts/systemd/kakeiboot-backup@.service.in`（`{{deploy_root}}` placeholder入り。timerはpathを含まないためrender対象外）で、`mise run units:install` が `configs/deploy.toml` の `deploy_root` 値でrenderした実体をuser config dir（無ければ作成）へ配布する（`ExecStart` = `<deploy_root>/<env>/bin/kakeiboot-backup.sh <env>`）。user configのためdeploy対象外（導入手順は「backupの導入・検証」節）
 - `Environment=` の設定は不要（port・path等は configs/<env>/*.toml が正本。`RUST_LOG` を設定すれば `[log] filter` を上書きできる）
 
@@ -125,7 +125,7 @@ mise run units:install -- --dry-run
 
 1. build（mise `build` タスク: backend binary と `frontend/dist/`）
 2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
-3. `systemctl --user restart kakeiboot-stg`
+3. `systemctl restart kakeiboot-stg`
 4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` はrepo `configs/stg/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
 
 rsyncの対象と除外:
@@ -143,7 +143,7 @@ stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの�
 処理（`scripts/deploy/kakeiboot_ops.py promote`。11 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
 
 1. stg前段チェック1: stg healthz（5回retry。portは **stg運用dir** の配布済み `configs/stg/app.toml` から解決）
-2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl --user show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。systemd user serviceは同一userで動くため`/proc/<pid>/exe`は読み取り可）
+2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。stgはsystem service（User=muse-agent）として稼働し、現行のssh運用者も同一userのため`/proc/<pid>/exe`は読み取り可）
 3. binaryのsha256表示（stg側は失敗=停止。prod側はfile不在時 `prod: budget-book not deployed yet` を表示して続行 = 初回構築可能）
 4. configs乖離の補助表示（repo `configs/prod/` → prod運用dirへの転送なしpreview）
 5. 旧成果物退避: prod側binary存在時のみ `<deploy_root>/prod/releases/<UTC timestamp>/` へ binary・`bin/`・`frontend/` を運用機上copy（全操作を `&&` 連結で実行し・date・mkdir・cpのいずれかの失敗はstep全体の非零=promote停止。不在時はskip）
@@ -151,7 +151,7 @@ stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの�
 7. rsync（運用機上）stg運用dir binary → prod binary（`-a --checksum -i`）
 8. rsync（運用機上）stg運用dir backup script → `prod/bin/`（`-a --checksum -i`）
 9. rsync（運用機上）stg運用dir `frontend/dist/` → `prod/frontend/dist/`（`-a --delete -i`）
-10. `systemctl --user restart kakeiboot-prod`
+10. `systemctl restart kakeiboot-prod`
 11. healthz（portは **prod運用dir** の配布済み `configs/prod/app.toml` から解決）
 
 - **configsはpromoteの配布対象に含まない**（環境定義は設定変更時のみ明示更新する。毎回の置き換えは未検証変更の混入余地になる）。step4は乖離の注意喚起表示のみであり、乖離の事前確認の正経路は **`mise run prod:configs -- --preview`**（promote内の表示からコピー開始までに判断の余白がないため、独立した確認操作で判断する）
@@ -190,7 +190,7 @@ mise run exec-stg -- admin user show <user>
 
 ### service操作（`stg:service` / `prod:service`）
 
-`systemctl --user <verb> kakeiboot-<env>` に対応する:
+`systemctl <verb> kakeiboot-<env>` に対応する:
 
 ```sh
 mise run stg:service -- status
@@ -265,4 +265,4 @@ prodはstgと同じ体制で配備・稼働している（unit: enabled・active
 
 ## マシン起動時の自動起動（linger）
 
-user service をマシン起動時（ログイン前）に起動するには linger が必要。`loginctl enable-linger tomo` 済み（確認: `loginctl show-user tomo --property=Linger` → `Linger=yes`）。backup timer（`kakeiboot-backup@<env>.timer`）も同じく linger が必要（timer発火がloginに依存しない。lingerが無いとbackupが静止する）。
+stg・prod の system service は enable 済みのためマシン起動時に自動起動し、linger は不要。linger が必要なのは tomo の user timer である backup timer（`kakeiboot-backup@<env>.timer`）で、timer発火がloginに依存しないために要る（lingerが無いとbackupが静止する）。`loginctl enable-linger tomo` 済み（確認: `loginctl show-user tomo --property=Linger` → `Linger=yes`）。
