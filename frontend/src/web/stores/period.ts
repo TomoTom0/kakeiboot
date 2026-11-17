@@ -14,6 +14,14 @@ export interface PeriodOperation {
 
 export type PeriodMode = 'month' | 'week' | 'year' | 'range'
 
+/** Issue #9: how long a home entry may be away from the last period
+ * activity and still inherit the standing period ("ごく短時間" — a quick
+ * hop to another screen and back). Beyond this window the home screen
+ * starts from the current month instead of resurrecting the old period.
+ * Defined here, next to the activity clock it is compared against; the
+ * browsing URL sync is its only consumer. */
+export const HOME_FRESH_WINDOW_MS = 10 * 60 * 1000
+
 // The period the dashboard-style screens (home / receipts / categories /
 // stores) look at. Shared so switching screens keeps the same period. TASK-17 adds
 // the label filter as a second shared dimension: Home / Categories / Stores
@@ -148,6 +156,13 @@ export const usePeriodStore = defineStore('web-period', () => {
   const canNext = computed(() => (mode.value === 'year' ? year.value < 9999 : true))
   const canPrev = computed(() => (mode.value === 'year' ? year.value > 1900 : true))
 
+  // Issue #9: the last time the period actually changed (a notified
+  // operation — user / import / system — or the store's creation). The
+  // browsing URL sync reads it on a home entry: a period left untouched
+  // for longer than HOME_FRESH_WINDOW_MS is stale state, not a choice to
+  // carry back into the home screen. In-memory only, never persisted.
+  const lastActivityAt = ref(Date.now())
+
   // Notify only after a complete public operation, never during apply*.
   let operationId = 0
   const subscribers = new Set<(operation: PeriodOperation) => void>()
@@ -160,6 +175,7 @@ export const usePeriodStore = defineStore('web-period', () => {
   }
   function notify(before: string, cause: PeriodOperation['cause']): void {
     if (before === stateKey()) return
+    lastActivityAt.value = Date.now()
     const operation: PeriodOperation = {
       operationId: ++operationId, cause,
       keys: { ...urlQuery.value }, labels: [...labelColors.value],
@@ -336,6 +352,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     urlQuery,
     canNext,
     canPrev,
+    lastActivityAt,
     subscribeOperations,
     step,
     setMonth,
