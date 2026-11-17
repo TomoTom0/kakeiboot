@@ -34,6 +34,9 @@ function hold(router: Router): () => void {
 }
 
 it('[covers:web-browse.url-ordered-system-write] pending B→C→reset keeps B and replaces only C', async () => {
+  // Issue #9: the cold start on home no longer imports ?month=2026-08 —
+  // the initial entry is completed to the current month (2026-10), so the
+  // second back below lands there instead of on 2026-08
   const { router } = await mountApp('/?month=2026-08&keep=yes#anchor')
   const release = hold(router)
   const period = usePeriodStore()
@@ -50,7 +53,7 @@ it('[covers:web-browse.url-ordered-system-write] pending B→C→reset keeps B a
   expect(period.month).toBe('2026-09')
   router.back()
   await settle()
-  expect(period.month).toBe('2026-08')
+  expect(period.month).toBe('2026-10')
 })
 
 it('[covers:web-browse.url-queue-boundary] ledger reset waits for a stale-owned success then corrects the new baseline', async () => {

@@ -98,13 +98,12 @@ onMounted(() => {
   void catalog.load().catch(() => {})
 })
 
-/** Link query of the receipt's purchase month (D28 §5-1: a receipt without
- * a purchase date keeps the current period — urlQuery's three forms). */
-const linkQuery = computed<Record<string, string>>(() =>
-  receipt.value?.purchased_on
-    ? { month: receipt.value.purchased_on.slice(0, 7) }
-    : { ...period.urlQuery },
-)
+/** Link query: the CURRENT shared period, like every other cross-screen
+ * link. The detail is a feed context, not a period operation — the links
+ * used to carry the receipt's purchase month (D28 §5-1), and the
+ * destination's URL import then wrote that month into the shared period
+ * store, silently re-perioding every browsing screen (Issue #9). */
+const linkQuery = computed<Record<string, string>>(() => ({ ...period.urlQuery }))
 
 /** Read-mode item rows, each with its category's hierarchy-route target
  * (TASK-74 §4-8): null keeps the plain span — 未分類, a path the active

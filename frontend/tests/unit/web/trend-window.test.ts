@@ -1519,7 +1519,11 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
 
   it('[covers:web-home.trend-window] 年モードは12本のまま12か月分ページ送り（bar-2025-01〜12・連結は24本→トリムで12本）・週・期間モードは前次buttonなし（窓は選択期間・7本日棒のまま）', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const year = await mountApp('/?year=2026')
+    // Issue #9: a keyed home URL is no longer a cold-start import — the
+    // modes are set through the store's own APIs after a plain mount
+    const year = await mountApp('/')
+    usePeriodStore().setMode('year')
+    await settle()
     const ykeys = () => year.wrapper.findAll('[data-test="trend-card"] .bar-col').map((b) => b.attributes('data-test'))
     expect(ykeys()).toEqual([
       'bar-2026-01',
@@ -1560,13 +1564,18 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     for (const path of ['/?week=2026-10-05', '/?from=2026-10-03&to=2026-10-15']) {
       cleanup()
       mockFetch({ 'GET /api/auth/me': { body: ME } })
-      const other = await mountApp(path)
+      const other = await mountApp('/')
+      if (path.startsWith('/?week')) usePeriodStore().setWeek('2026-10-05')
+      else usePeriodStore().setRange('2026-10-03', '2026-10-15')
+      await settle()
       expect(other.wrapper.find('[data-test="trend-prev"]').exists()).toBe(false)
       expect(other.wrapper.find('[data-test="trend-next"]').exists()).toBe(false)
     }
     cleanup()
     mockFetch({ 'GET /api/auth/me': { body: ME } })
-    const week = await mountApp('/?week=2026-10-05')
+    const week = await mountApp('/')
+    usePeriodStore().setWeek('2026-10-05')
+    await settle()
     expect(week.wrapper.findAll('[data-test="trend-card"] .bar-col')).toHaveLength(7)
   })
 
