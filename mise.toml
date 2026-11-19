@@ -130,11 +130,13 @@ description = "kakeiboot-prodのsystemd user service操作（mise run prod:servi
 usage = "arg \"<verb...>\""
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod ${usage_verb}"
 
-# backup (TASK-83): daily systemd user timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
+# backup (TASK-83): daily systemd timer kakeiboot-backup@<env> + bin/kakeiboot-backup.sh
 # （deployで配布）。詳細は docs/ops/ops_deploy.md。
 # unit fileは .in 正本を render して配布（TASK-119）: units:install が
 # kakeiboot-backup@.service.in の {{deploy_root}} を configs/deploy.toml で置換し、
-# render済みserviceとtimerを user config dir へrsync・daemon-reload する（env非依存）。
+# render済みservice・timer・polkit rule（両運用者の backup unit 操作を許可）を
+# system unit として /etc/systemd/system/ と /etc/polkit-1/rules.d/ へ sudo install し・
+# daemon-reload と両env timer有効化まで行う（env非依存・/etcへの書込のためsudo権限必要）。
 
 [tasks."stg:backup"]
 description = "stg backup手動即時実行（timerと同一oneshot unit。完了まで待つ）"
@@ -153,5 +155,5 @@ description = "prod backup状態確認（last_success・世代dir一覧・timer�
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py backup-status --env prod"
 
 [tasks."units:install"]
-description = "backup unitをuser config dirへ配布（.in正本をdeploy_rootでrender → rsync → daemon-reload。unitはenv非依存のため接頭はunits:）"
+description = "backup unitをsystem unitとして配布（.in正本をdeploy_rootでrender → sudo install（service・timer・polkit rule）→ daemon-reload → 両env timer有効化。unitはenv非依存のため接頭はunits:・/etc書込のためsudo権限必要）"
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py install-units"

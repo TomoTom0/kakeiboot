@@ -467,10 +467,18 @@ class TestHealthz(unittest.TestCase):
 
 
 # TASK-119 shared fixtures (design: tmp/tasks/tm-119/design_backup_paths.md v2).
+# The backup units are system units now (2026-11-17 gt430 system-service
+# conversion; install-units matches the host conversion script's end state):
+# /etc destinations + the target-side staging dir, asserted as literals so the
+# tests do not import the values they check.
 SYSTEMD_DIR = REPO_ROOT / "scripts" / "systemd"
 UNIT_IN_PATH = SYSTEMD_DIR / "kakeiboot-backup@.service.in"
 UNIT_TIMER_PATH = SYSTEMD_DIR / "kakeiboot-backup@.timer"
-USER_UNIT_DIR = f"{Path.home()}/.config/systemd/user"
+SYSTEM_UNIT_DIR = "/etc/systemd/system"
+POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
+POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
+UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install"
+SUDO_INSTALL = ["sudo", "install", "-o", "root", "-g", "root", "-m", "644"]
 
 # Same shape as the repo .in source (D-2): leading no-direct-scp comment,
 # {{deploy_root}} placeholders, %i template instances the render must preserve.
@@ -481,6 +489,7 @@ UNIT_IN_FIXTURE = (
     "\n"
     "[Service]\n"
     "Type=oneshot\n"
+    "User=tomo\n"
     "WorkingDirectory={{deploy_root}}/%i\n"
     "ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i\n"
     "Nice=10\n"
@@ -586,6 +595,9 @@ class TestUnitTemplateSource(unittest.TestCase):
         )
         self.assertIn("WorkingDirectory={{deploy_root}}/%i", text)
         self.assertIn("ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i", text)
+        # system form only: the fixed run user lives in the template itself
+        # (the unit no longer exists in user scope where the user was implicit)
+        self.assertIn("User=tomo", text)
 
     def test_plain_service_file_is_gone(self) -> None:
         # leaving both would reintroduce a second (unrendered) source of truth
@@ -639,6 +651,7 @@ class TestRenderUnit(unittest.TestCase):
         self.assertNotIn("{{", rendered)
         self.assertIn(f"WorkingDirectory={DEPLOY_ROOT}/%i\n", rendered)
         self.assertIn(f"ExecStart={DEPLOY_ROOT}/%i/bin/kakeiboot-backup.sh %i\n", rendered)
+        self.assertIn("User=tomo\n", rendered)
 
     # [covers:deploy-ops.render-unit-rejects-leftover-placeholder]
     def test_leftover_placeholder_raises_config_error(self) -> None:
@@ -659,51 +672,146 @@ class TestRenderUnit(unittest.TestCase):
             render_unit(text, DEPLOY_ROOT)
 
 
-# [covers:deploy-ops.install-units-plan] mkdir user unit dir -> render ->
-# rsync (service, timer) -> daemon-reload; destination is the home-expanded
-# user unit dir; no --env argument
+# [covers:deploy-ops.install-units-plan] system-form plan: stage on the target
+# -> sudo install service+timer+polkit rule under /etc -> system daemon-reload
+# -> enable --now both timers; no user-scope remnant; no --env argument
 class TestInstallUnitsPlan(unittest.TestCase):
-    RENDERED_SRC = "/tmp/kakeiboot-units-render/kakeiboot-backup@.service"
+    STAGED_DIR = "/tmp/kakeiboot-units-render"
 
-    def test_local_plan_uses_home_expanded_destination(self) -> None:
+    def test_local_plan_installs_system_units_with_sudo(self) -> None:
         from kakeiboot_ops import build_install_units_commands
 
-        cmds = build_install_units_commands(local_cfg(), self.RENDERED_SRC)
-        self.assertEqual(len(cmds), 4)
-        mkdir, service_rsync, timer_rsync, reload_cmd = cmds
-        # review L-4: rsync does not create the destination dir -- a fresh
-        # runtime host has no ~/.config/systemd/user yet, so mkdir -p leads
-        self.assertEqual(mkdir, ["mkdir", "-p", USER_UNIT_DIR])
-        self.assertEqual(service_rsync[0], "rsync")
-        self.assertEqual(service_rsync[-2], self.RENDERED_SRC)
-        self.assertEqual(service_rsync[-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.service")
-        self.assertEqual(timer_rsync[0], "rsync")
-        self.assertEqual(timer_rsync[-2], "scripts/systemd/kakeiboot-backup@.timer")
-        self.assertEqual(timer_rsync[-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.timer")
-        for cmd in (mkdir, service_rsync, timer_rsync):
-            # local rsync does not go through a shell: a literal `~` would create
-            # a real directory named "~" (D-2 step 3) -- the path must be expanded
-            self.assertNotIn("~", " ".join(cmd))
-        self.assertEqual(reload_cmd, ["systemctl", "--user", "daemon-reload"])
-
-    def test_ssh_plan_prefixes_host_and_wraps_reload(self) -> None:
-        from kakeiboot_ops import build_install_units_commands
-
-        cmds = build_install_units_commands(ssh_cfg(), self.RENDERED_SRC)
-        mkdir, service_rsync, timer_rsync, reload_cmd = cmds
-        self.assertEqual(
+        cmds = build_install_units_commands(local_cfg(), self.STAGED_DIR)
+        self.assertEqual(len(cmds), 8)
+        (
             mkdir,
-            ["ssh", *SSH_OPTIONS, "gt430", "--", f"mkdir -p {USER_UNIT_DIR}"],
-        )
-        self.assertEqual(service_rsync[service_rsync.index("-e") + 1], SSH_RSYNC_E)
+            stage_rsync,
+            service_install,
+            timer_install,
+            rule_install,
+            reload_cmd,
+            enable_stg,
+            enable_prod,
+        ) = cmds
+        # the target-side staging dir may not exist on a fresh runtime host, so
+        # mkdir -p leads; sudo install reads a path on the target, so the staged
+        # dir (rendered service + timer + polkit rule) is copied there first
+        self.assertEqual(mkdir, ["mkdir", "-p", UNIT_STAGE_DIR])
+        self.assertEqual(stage_rsync[0], "rsync")
+        self.assertEqual(stage_rsync[-2], f"{self.STAGED_DIR}/")
+        self.assertEqual(stage_rsync[-1], f"{UNIT_STAGE_DIR}/")
+        # /etc writes are root:root 644 via sudo install -- never rsync or --user
         self.assertEqual(
-            service_rsync[-1], f"gt430:{USER_UNIT_DIR}/kakeiboot-backup@.service"
+            service_install,
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.service",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service",
+            ],
         )
-        self.assertEqual(timer_rsync[-1], f"gt430:{USER_UNIT_DIR}/kakeiboot-backup@.timer")
+        self.assertEqual(
+            timer_install,
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.timer",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.timer",
+            ],
+        )
+        self.assertEqual(
+            rule_install,
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/{POLKIT_RULE_NAME}",
+                f"{POLKIT_RULES_DIR}/{POLKIT_RULE_NAME}",
+            ],
+        )
+        self.assertEqual(reload_cmd, ["sudo", "systemctl", "daemon-reload"])
+        self.assertEqual(
+            enable_stg,
+            ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@stg.timer"],
+        )
+        self.assertEqual(
+            enable_prod,
+            ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@prod.timer"],
+        )
+        for cmd in cmds:
+            # system form only: the user unit dir and --user must be gone
+            joined = " ".join(cmd)
+            self.assertNotIn("--user", joined)
+            self.assertNotIn(".config/systemd/user", joined)
+            self.assertNotIn(str(Path.home()), joined)
+
+    def test_ssh_plan_prefixes_host_and_wraps_sudo_steps(self) -> None:
+        from kakeiboot_ops import build_install_units_commands
+
+        cmds = build_install_units_commands(ssh_cfg(), self.STAGED_DIR)
+        (
+            mkdir,
+            stage_rsync,
+            service_install,
+            _timer_install,
+            _rule_install,
+            reload_cmd,
+            enable_stg,
+            enable_prod,
+        ) = cmds
+        self.assertEqual(mkdir, ["ssh", *SSH_OPTIONS, "gt430", "--", f"mkdir -p {UNIT_STAGE_DIR}"])
+        self.assertEqual(stage_rsync[stage_rsync.index("-e") + 1], SSH_RSYNC_E)
+        self.assertEqual(stage_rsync[-1], f"gt430:{UNIT_STAGE_DIR}/")
+        # sudo runs on the runtime host (the operator's own sudo rights), not here
+        self.assertEqual(
+            service_install,
+            [
+                "ssh",
+                *SSH_OPTIONS,
+                "gt430",
+                "--",
+                f"sudo install -o root -g root -m 644 "
+                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.service "
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service",
+            ],
+        )
         self.assertEqual(
             reload_cmd,
-            ["ssh", *SSH_OPTIONS, "gt430", "--", "systemctl --user daemon-reload"],
+            ["ssh", *SSH_OPTIONS, "gt430", "--", "sudo systemctl daemon-reload"],
         )
+        self.assertEqual(
+            enable_stg,
+            [
+                "ssh",
+                *SSH_OPTIONS,
+                "gt430",
+                "--",
+                "sudo systemctl enable --now kakeiboot-backup@stg.timer",
+            ],
+        )
+        self.assertEqual(
+            enable_prod,
+            [
+                "ssh",
+                *SSH_OPTIONS,
+                "gt430",
+                "--",
+                "sudo systemctl enable --now kakeiboot-backup@prod.timer",
+            ],
+        )
+
+    def test_polkit_rule_covers_both_operators_and_all_instances(self) -> None:
+        # the rule is generated in the tool (no extra template file): both
+        # operators manage every backup unit instance as themselves
+        from kakeiboot_ops import BACKUP_POLKIT_RULE
+
+        self.assertIn('action.id == "org.freedesktop.systemd1.manage-units"', BACKUP_POLKIT_RULE)
+        for unit in (
+            "kakeiboot-backup@stg.service",
+            "kakeiboot-backup@stg.timer",
+            "kakeiboot-backup@prod.service",
+            "kakeiboot-backup@prod.timer",
+        ):
+            self.assertIn(f'"{unit}"', BACKUP_POLKIT_RULE)
+        self.assertIn('subject.user == "tomo"', BACKUP_POLKIT_RULE)
+        self.assertIn('subject.user == "muse-agent"', BACKUP_POLKIT_RULE)
+        self.assertIn("return polkit.Result.YES;", BACKUP_POLKIT_RULE)
 
     def test_subcommand_parses_without_env(self) -> None:
         # the unit is one %i template shared by both envs: no --env argument (D-2)
@@ -714,7 +822,8 @@ class TestInstallUnitsPlan(unittest.TestCase):
 
 
 # [covers:deploy-ops.install-units-dry-run] --dry-run prints the rendered unit and
-# executes nothing; a (mocked) real run rsyncs twice, reloads, reports the deploy_root
+# the polkit rule, executes nothing; a (mocked) real run stages, sudo installs,
+# reloads, enables both timers, reports the deploy_root
 class TestInstallUnitsCli(unittest.TestCase):
     def make_config(self, tmp: str) -> Path:
         return write(
@@ -733,10 +842,22 @@ class TestInstallUnitsCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         printed = out.getvalue()
         self.assertNotIn("{{", printed)
+        self.assertIn("User=tomo", printed)
         self.assertIn("WorkingDirectory=/custom/root/%i", printed)
         self.assertIn("ExecStart=/custom/root/%i/bin/kakeiboot-backup.sh %i", printed)
+        # the polkit rule payload and the /etc-only sudo plan are both shown
+        self.assertIn(POLKIT_RULE_NAME, printed)
+        self.assertIn("polkit.addRule", printed)
+        self.assertIn(f"sudo install -o root -g root -m 644 {UNIT_STAGE_DIR}/", printed)
+        self.assertIn(f"{POLKIT_RULES_DIR}/{POLKIT_RULE_NAME}", printed)
+        self.assertIn("sudo systemctl daemon-reload", printed)
+        self.assertIn("sudo systemctl enable --now kakeiboot-backup@stg.timer", printed)
+        self.assertIn("sudo systemctl enable --now kakeiboot-backup@prod.timer", printed)
+        # system form only: the user unit dir and --user must be gone
+        self.assertNotIn(".config/systemd/user", printed)
+        self.assertNotIn("--user", printed)
 
-    def test_run_rsyncs_then_reloads_and_reports_deploy_root(self) -> None:
+    def test_run_stages_installs_reloads_and_enables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = self.make_config(tmp)
             with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
@@ -750,41 +871,76 @@ class TestInstallUnitsCli(unittest.TestCase):
                         rc = main(["install-units"])
         self.assertEqual(rc, 0)
         argvs = [call.args[0] for call in run.call_args_list]
-        self.assertEqual([argv[0] for argv in argvs], ["mkdir", "rsync", "rsync", "systemctl"])
-        self.assertEqual(argvs[0], ["mkdir", "-p", USER_UNIT_DIR])
-        # rsync 1 source is the rendered tempfile carrying the unit file name
-        self.assertEqual(Path(argvs[1][-2]).name, "kakeiboot-backup@.service")
-        self.assertEqual(argvs[1][-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.service")
-        self.assertEqual(argvs[2][-2], "scripts/systemd/kakeiboot-backup@.timer")
-        self.assertEqual(argvs[2][-1], f"{USER_UNIT_DIR}/kakeiboot-backup@.timer")
-        self.assertEqual(argvs[3], ["systemctl", "--user", "daemon-reload"])
+        self.assertEqual(
+            [argv[0] for argv in argvs],
+            ["mkdir", "rsync", "sudo", "sudo", "sudo", "sudo", "sudo", "sudo"],
+        )
+        self.assertEqual(argvs[0], ["mkdir", "-p", UNIT_STAGE_DIR])
+        # the staging rsync copies the tmp/units-* dir (service+timer+rule)
+        staged_src = argvs[1][-2]
+        self.assertTrue(staged_src.endswith("/"), "staged dir src must be a dir path")
+        self.assertIn("tmp/units-", staged_src)
+        self.assertEqual(argvs[1][-1], f"{UNIT_STAGE_DIR}/")
+        self.assertEqual(
+            argvs[2],
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.service",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service",
+            ],
+        )
+        self.assertEqual(
+            argvs[3],
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.timer",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.timer",
+            ],
+        )
+        self.assertEqual(
+            argvs[4],
+            [
+                *SUDO_INSTALL,
+                f"{UNIT_STAGE_DIR}/{POLKIT_RULE_NAME}",
+                f"{POLKIT_RULES_DIR}/{POLKIT_RULE_NAME}",
+            ],
+        )
+        self.assertEqual(argvs[5], ["sudo", "systemctl", "daemon-reload"])
+        self.assertEqual(
+            argvs[6], ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@stg.timer"]
+        )
+        self.assertEqual(
+            argvs[7], ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@prod.timer"]
+        )
         # D-4: the deploy_root value used for rendering stays in the output
         self.assertIn("/custom/root", out.getvalue())
 
     # [covers:deploy-ops.install-units-plan] (review: failure reporting parity
-    # with cmd_deploy -- install-units is a multi-step rsync+reload sequence,
-    # so a mid-plan failure must report which steps already ran)
+    # with cmd_deploy -- install-units is a multi-step stage+install+reload+enable
+    # sequence, so a mid-plan failure must report which steps already ran)
     def test_failure_lists_executed_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = self.make_config(tmp)
             with mock.patch("kakeiboot_ops.config_paths", return_value=[cfg_path]):
                 results = [
-                    subprocess.CompletedProcess(args=[], returncode=0),  # mkdir
-                    subprocess.CompletedProcess(args=[], returncode=0),  # rsync service
-                    subprocess.CompletedProcess(args=[], returncode=23),  # rsync timer fails
+                    subprocess.CompletedProcess(args=[], returncode=0),  # mkdir staging
+                    subprocess.CompletedProcess(args=[], returncode=0),  # rsync staged dir
+                    subprocess.CompletedProcess(args=[], returncode=1),  # sudo install fails
                 ]
                 with mock.patch.object(kakeiboot_ops.subprocess, "run", side_effect=results):
                     out, err = io.StringIO(), io.StringIO()
                     with redirect_stdout(out), redirect_stderr(err):
                         rc = main(["install-units"])
-        self.assertEqual(rc, 23)
+        self.assertEqual(rc, 1)
         err_text = err.getvalue()
         self.assertIn("steps executed before failure:", err_text)
-        # the two steps that ran before the failure are listed
-        self.assertIn(f"mkdir -p {USER_UNIT_DIR}", err_text)
-        self.assertIn(f"{USER_UNIT_DIR}/kakeiboot-backup@.service", err_text)
-        # the failed timer rsync and the never-reached daemon-reload are not
+        # the steps up to and including the failed sudo install are listed
+        # (same executed-count rule as cmd_deploy's recovery report)
+        self.assertIn(f"mkdir -p {UNIT_STAGE_DIR}", err_text)
+        self.assertIn(f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service", err_text)
+        # the never-reached daemon-reload / timer enables are not
         self.assertNotIn("daemon-reload", err_text)
+        self.assertNotIn("enable --now", err_text)
 
 
 # [covers:deploy-ops.units-install-task] mise task units:install wraps install-units
