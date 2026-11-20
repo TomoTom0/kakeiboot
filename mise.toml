@@ -121,12 +121,12 @@ usage = "arg \"<args...>\""
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py exec --env prod ${usage_args}"
 
 [tasks."stg:service"]
-description = "kakeiboot-stgのsystemd user service操作（mise run stg:service -- status）"
+description = "kakeiboot-stgのsystemd service操作（mise run stg:service -- status）"
 usage = "arg \"<verb...>\""
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env stg ${usage_verb}"
 
 [tasks."prod:service"]
-description = "kakeiboot-prodのsystemd user service操作（mise run prod:service -- is-active）"
+description = "kakeiboot-prodのsystemd service操作（mise run prod:service -- is-active）"
 usage = "arg \"<verb...>\""
 run = "uv run --no-project python scripts/deploy/kakeiboot_ops.py service --env prod ${usage_verb}"
 
