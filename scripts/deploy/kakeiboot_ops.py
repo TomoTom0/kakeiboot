@@ -26,12 +26,18 @@ Subcommands (env is an argument; the stg/prod task prefix maps to --env):
                  --delete; no restart/healthz). --preview adds rsync's own
                  --dry-run: the transfer-free itemized diff (drift check path).
   exec           ./budget-book <args...> --config-dir configs/<env> in the runtime dir
-  service        systemctl --user <verb...> kakeiboot-<env>
+  service        systemctl <verb...> kakeiboot-<env> (system unit)
   backup         systemctl --user start kakeiboot-backup@<env>.service
   backup-status  last_success marker, generation dirs, list-timers, last result
   install-units  render scripts/systemd/kakeiboot-backup@.service.in with deploy_root
                  -> rsync service + timer into the user unit dir -> daemon-reload
                  (no --env: the unit is one %i template shared by both envs)
+
+Unit scopes differ by design: the backend units (kakeiboot-<env>) are SYSTEM
+units (/etc/systemd/system/, User= is the operator account), so every backend
+systemctl call here is system-scope (no --user). Only the backup units
+(kakeiboot-backup@) are user units, so backup / backup-status / install-units
+keep `systemctl --user`.
 
 The healthz port is parsed at startup from configs/<env>/app.toml [server] port
 (no port literals here -- see configs-management rule). Every subcommand takes
@@ -218,7 +224,7 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[s
         ),
         rsync_exec(cfg, ["-a", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
         rsync_exec(cfg, ["-a", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
-        remote_exec(cfg, ["systemctl", "--user", "restart", f"kakeiboot-{env}"]),
+        remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
         remote_exec(cfg, healthz_command(port)),
     ]
 
@@ -250,11 +256,11 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     # passes); hash the running process's /proc/<pid>/exe and the
     # distribution source directly instead. A failing systemctl, empty/zero
     # MainPID, unreadable /proc (permission) or any hash mismatch leaves the
-    # && chain non-zero -- fail closed. The systemd user service runs as the
-    # same user, so /proc/<pid>/exe is readable (gt430 behavior stays on the
-    # on-device verification list).
+    # && chain non-zero -- fail closed. The backend is a system unit whose
+    # User= is the operator's own account, so /proc/<pid>/exe is readable
+    # (gt430 behavior stays on the on-device verification list).
     process_check = (
-        "pid=$(systemctl --user show kakeiboot-stg -p MainPID --value) "
+        "pid=$(systemctl show kakeiboot-stg -p MainPID --value) "
         '&& [ -n "$pid" ] && [ "$pid" != "0" ] '
         '&& a=$(sha256sum /proc/$pid/exe | cut -d" " -f1) '
         f'&& b=$(sha256sum {stg_bin} | cut -d" " -f1) '
@@ -309,7 +315,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
             cfg,
             ["rsync", "-a", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
-        remote_exec(cfg, ["systemctl", "--user", "restart", "kakeiboot-prod"]),
+        remote_exec(cfg, ["systemctl", "restart", "kakeiboot-prod"]),
         remote_exec(cfg, healthz_command(prod_port)),
     ]
 
@@ -350,7 +356,7 @@ def build_exec_command(cfg: DeployConfig, env: str, args: list[str]) -> tuple[li
 
 
 def build_service_commands(cfg: DeployConfig, env: str, verbs: list[str]) -> list[list[str]]:
-    return [remote_exec(cfg, ["systemctl", "--user", *verbs, f"kakeiboot-{env}"])]
+    return [remote_exec(cfg, ["systemctl", *verbs, f"kakeiboot-{env}"])]
 
 
 def build_backup_commands(cfg: DeployConfig, env: str) -> list[list[str]]:
@@ -662,7 +668,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_exec)
 
-    p = sub.add_parser("service", help="systemctl --user <verb...> kakeiboot-<env>")
+    p = sub.add_parser("service", help="systemctl <verb...> kakeiboot-<env>")
     add_env(p)
     p.add_argument("verbs", nargs=argparse.REMAINDER)
     p.set_defaults(func=cmd_service)

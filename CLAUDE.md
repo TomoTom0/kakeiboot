@@ -35,7 +35,7 @@ MCP経由（ChatGPT等）での操作・閲覧を主とし、web画面を補助�
 
 ## 運用
 
-- stg・prodの操作はmiseタスクで行う（作業repoのどこからでも、運用dirへのcd不要）: deployは `mise run stg:deploy`（stgのみ。prod直接deployは無い）、prodへの成果物配布は `mise run prod:promote`（stg運用dirの検証済み現物を配布）、configs配布は `mise run prod:configs`、admin CLIは `mise run exec-stg -- admin user list` 等、service操作は `mise run stg:service -- status` 等（prodも同様）。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、configs/deploy.toml の `transport` に従い運用機 gt430 へssh経由で実行する（gt430にrepo checkout・git操作は置かない）。実serverは configs/deploy.toml（deploy_root）配下の stg/prod 運用dir上の systemd user service（kakeiboot-stg/prod）。作業repoでのserver起動は dev（dev:backend・dev:frontend）まで。詳細は docs/ops/ops_deploy.md
+- stg・prodの操作はmiseタスクで行う（作業repoのどこからでも、運用dirへのcd不要）: deployは `mise run stg:deploy`（stgのみ。prod直接deployは無い）、prodへの成果物配布は `mise run prod:promote`（stg運用dirの検証済み現物を配布）、configs配布は `mise run prod:configs`、admin CLIは `mise run exec-stg -- admin user list` 等、service操作は `mise run stg:service -- status` 等（prodも同様）。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、configs/deploy.toml の `transport` に従い運用機 gt430 へssh経由で実行する（gt430にrepo checkout・git操作は置かない）。実serverは configs/deploy.toml（deploy_root）配下の stg/prod 運用dir上の systemd システムサービス（kakeiboot-stg/prod、/etc/systemd/system/、User=muse-agent。backup 用の kakeiboot-backup@ だけが user service）。作業repoでのserver起動は dev（dev:backend・dev:frontend）まで。詳細は docs/ops/ops_deploy.md
 
 ## タスク運用
 
