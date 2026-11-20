@@ -75,6 +75,7 @@ invite_ttl_hours = 168
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 register_ttl_hours = 168
+share_ttl_hours = 168
 
 [auth.rate_limit]
 webauthn_per_minute = 20

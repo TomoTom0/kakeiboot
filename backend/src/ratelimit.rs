@@ -217,7 +217,11 @@ pub async fn api_limit_guard(
 ) -> Response {
     let path = req.uri().path();
     let now = crate::auth::session::now_ms();
-    if !path.starts_with("/api/webauthn/") {
+    // Share-ticket acceptance (share design section 6-11) joins the
+    // token-acceptance frame without the webauthn class: info / accept are
+    // token-bearing endpoints, not WebAuthn ceremonies.
+    let share_token = path == "/api/share/info" || path == "/api/share/accept";
+    if !path.starts_with("/api/webauthn/") && !share_token {
         return next.run(req).await;
     }
     let ip = client_ip(
@@ -234,11 +238,12 @@ pub async fn api_limit_guard(
         );
         return too_many_requests(state.auth.rate_limit.token_accept_block_minutes * 60);
     }
-    if let Some(retry) = state.limits.check(Class::Webauthn, &ip, now) {
+    if !share_token && let Some(retry) = state.limits.check(Class::Webauthn, &ip, now) {
         warn_limited(Class::Webauthn, &ip, retry);
         return too_many_requests(retry);
     }
-    let token_accept = path == "/api/webauthn/register/info"
+    let token_accept = share_token
+        || path == "/api/webauthn/register/info"
         || path == "/api/webauthn/register/start"
         || path == "/api/webauthn/register/finish";
     if token_accept && let Some(retry) = state.limits.check(Class::TokenAccept, &ip, now) {

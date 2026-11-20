@@ -9,6 +9,7 @@ pub mod ledger;
 pub mod oauth;
 pub mod register_invitation;
 pub mod session;
+pub mod share_ticket;
 pub mod tokens;
 
 /// Audit actions that mark an authentication failure (spec_auth.md 2-4,

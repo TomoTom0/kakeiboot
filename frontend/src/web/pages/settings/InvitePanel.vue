@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { authApi, type IssuedInvitation } from '../../api/auth'
+import { computed, onMounted, ref } from 'vue'
+import { authApi, type IssuedInvitation, type ShareTicket } from '../../api/auth'
 import { charCount, errorMessage, formatDateTime } from '../../composables/format'
 import FormDialog from '../../components/FormDialog.vue'
 import { useSessionStore } from '../../stores/session'
@@ -15,8 +15,39 @@ import IconButton from '../../components/IconButton.vue'
 // review: joining an existing ledger is sharing and the word "invitation"
 // belongs to the registration-only card alone. The card itself always
 // renders: a user with no owned ledger gets the explanation instead.
+// Issuing goes through the share-ticket API (POST /api/share-tickets);
+// the caller's still-open tickets are listed from GET /api/share-tickets
+// and can be revoked (DELETE) — their plain URLs are never shown again.
 const session = useSessionStore()
 const busy = ref(false)
+
+const openTickets = ref<ShareTicket[]>([])
+const ticketsError = ref('')
+const revokingRef = ref<string | null>(null)
+
+async function loadTickets(): Promise<void> {
+  try {
+    openTickets.value = await authApi.listShareTickets()
+    ticketsError.value = ''
+  } catch (e) {
+    ticketsError.value = errorMessage(e)
+  }
+}
+
+onMounted(loadTickets)
+
+async function revokeTicket(ticket: ShareTicket): Promise<void> {
+  busy.value = true
+  try {
+    await authApi.deleteShareTicket(ticket.ticket_ref)
+    openTickets.value = openTickets.value.filter((t) => t.ticket_ref !== ticket.ticket_ref)
+    revokingRef.value = null
+  } catch (e) {
+    ticketsError.value = errorMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
 
 const ROLE_LABEL: Record<'editor' | 'viewer', string> = { editor: '編集', viewer: '閲覧のみ' }
 
@@ -65,12 +96,14 @@ async function issueInvite(): Promise<void> {
     // an empty memo falls back to the issuance datetime (TASK-46: the
     // backend accepts an absent note, the row still wants a label)
     const effectiveNote = note || formatDateTime(Date.now())
-    const res = await authApi.createInvitation(inviteRole.value, inviteLedgerId.value, effectiveNote)
+    const res = await authApi.createShareTicket(inviteRole.value, inviteLedgerId.value, effectiveNote)
     issued.value = [
       { note: effectiveNote, role: inviteRole.value, issuedAt: Date.now(), invitation: res, copied: false, copyFailed: false },
       ...issued.value,
     ]
     dialogOpen.value = false
+    // the new ticket joins the open-ticket list (without its plain URL)
+    void loadTickets()
   } catch (e) {
     dialogError.value = errorMessage(e)
   } finally {
@@ -239,6 +272,65 @@ async function copyUrl(row: IssuedRow): Promise<void> {
           </div>
         </li>
       </ul>
+      <div
+        v-if="openTickets.length > 0"
+        data-test="share-tickets"
+      >
+        <h3>発行済みの共有 URL</h3>
+        <p class="muted small">
+          発行済みの共有 URL は再表示できません（URL は発行時のみ表示されます）。
+        </p>
+        <ul class="rows">
+          <li
+            v-for="t in openTickets"
+            :key="t.ticket_ref"
+            class="row"
+            data-test="share-ticket-row"
+          >
+            <div class="row-main">
+              <strong>{{ t.inviter_note || t.ledger_name }}</strong>
+              <span class="badge">{{ ROLE_LABEL[t.role] }}</span>
+              <span class="muted small block">{{ t.ledger_name }} / 発行 {{ formatDateTime(t.created_at) }} / 期限 {{ formatDateTime(t.expires_at) }}</span>
+            </div>
+            <div class="actions">
+              <template v-if="revokingRef === t.ticket_ref">
+                <span class="small">失効しますか？</span>
+                <button
+                  class="btn btn-danger"
+                  :disabled="busy"
+                  data-test="share-ticket-revoke-confirm"
+                  @click="revokeTicket(t)"
+                >
+                  失効する
+                </button>
+                <button
+                  class="btn"
+                  :disabled="busy"
+                  @click="revokingRef = null"
+                >
+                  やめる
+                </button>
+              </template>
+              <IconButton
+                v-else
+                icon="trash"
+                variant="danger"
+                :label="`${t.inviter_note || t.ledger_name} の共有 URL を失効`"
+                test="share-ticket-revoke"
+                @click="revokingRef = t.ticket_ref"
+              />
+            </div>
+          </li>
+        </ul>
+      </div>
+      <p
+        v-if="ticketsError"
+        class="msg msg-error"
+        role="alert"
+        data-test="share-tickets-error"
+      >
+        {{ ticketsError }}
+      </p>
     </div>
     <p
       v-else

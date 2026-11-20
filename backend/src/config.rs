@@ -299,6 +299,9 @@ pub struct InvitationSettings {
     pub recovery_ttl_max_hours: i64,
     /// register invitation (web, any active user) TTL in hours (TASK-32).
     pub register_ttl_hours: i64,
+    /// ledger share ticket (web, ledger owner) TTL in hours (share design
+    /// section 3-1, D-J4: 168h, split from `invite_ttl_hours`).
+    pub share_ttl_hours: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,6 +441,7 @@ impl AuthSettings {
             || self.invitation.setup_ttl_hours <= 0
             || self.invitation.invite_ttl_hours <= 0
             || self.invitation.register_ttl_hours <= 0
+            || self.invitation.share_ttl_hours <= 0
         {
             return Err(ConfigError::Invalid(
                 "invitation TTLs must be positive and recovery default within its max".into(),
@@ -735,6 +739,7 @@ invite_ttl_hours = 168
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 register_ttl_hours = 168
+share_ttl_hours = 168
 
 [auth.rate_limit]
 webauthn_per_minute = 20

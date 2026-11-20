@@ -450,7 +450,10 @@ async fn invite_finish_joins_ledger_and_records_lineage() {
         .await
         .unwrap();
 
-    for (use_invited, want_default_is_invited) in [(true, true), (false, false)] {
+    // Share design section 5 (D-D1): `use_invited_ledger_as_default` is
+    // accepted for compatibility but ignored server-side — the default is
+    // always the invitee's personal ledger, whatever the flag says.
+    for use_invited in [true, false] {
         let token = issue_invite_token(&pool, owner_id, ledger, "editor", Some("family")).await;
         let mut invitee = Client::new();
         let resp = invitee
@@ -490,18 +493,21 @@ async fn invite_finish_joins_ledger_and_records_lineage() {
         assert_eq!(invite_note.as_deref(), Some("family"));
         assert_eq!(via.as_deref(), Some("invite"));
         assert_eq!(invited_by, Some(owner_id));
-        if want_default_is_invited {
-            assert_eq!(default_ledger, Some(ledger));
-        } else {
-            let personal = default_ledger.expect("default set");
-            assert_ne!(personal, ledger, "personal ledger is the default instead");
-            let name: String = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
-                .bind(personal)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            assert_eq!(name, "invitee-falseの家計簿", "personal ledger name");
-        }
+        let personal = default_ledger.expect("default set");
+        assert_ne!(
+            personal, ledger,
+            "personal ledger is the default even with use_invited={use_invited}"
+        );
+        let name: String = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+            .bind(personal)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            name,
+            format!("invitee-{use_invited}の家計簿"),
+            "personal ledger name"
+        );
         let roles: Vec<(i64, String)> = sqlx::query_as(
             "SELECT ledger_id, role FROM ledger_members m JOIN users u ON u.id = m.user_id WHERE u.display_name = ? AND m.ledger_id = ?",
         )

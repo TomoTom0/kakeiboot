@@ -1003,6 +1003,7 @@ pub struct CleanupReport {
     pub deleted_grants: u64,
     pub deleted_invitations: u64,
     pub deleted_register_invitations: u64,
+    pub deleted_share_tickets: u64,
     pub deleted_authz_requests: u64,
     pub deleted_subject_hashes: u64,
     pub nulled_recovery_ip_hashes: u64,
@@ -1183,6 +1184,14 @@ where
         );
         sweep!(
             tx,
+            deleted_share_tickets,
+            "DELETE FROM ledger_share_tickets WHERE (accepted_at IS NULL AND expires_at < ?)
+                OR (accepted_at IS NOT NULL AND accepted_at < ?)",
+            now - DAY_MS,
+            now - 30 * DAY_MS
+        );
+        sweep!(
+            tx,
             deleted_authz_requests,
             "DELETE FROM oauth_authorization_requests WHERE expires_at < ?",
             now
@@ -1235,6 +1244,7 @@ where
         deleted_grants = r.deleted_grants,
         deleted_invitations = r.deleted_invitations,
         deleted_register_invitations = r.deleted_register_invitations,
+        deleted_share_tickets = r.deleted_share_tickets,
         deleted_authz_requests = r.deleted_authz_requests,
         deleted_subject_hashes = r.deleted_subject_hashes,
         nulled_recovery_ip_hashes = r.nulled_recovery_ip_hashes,
