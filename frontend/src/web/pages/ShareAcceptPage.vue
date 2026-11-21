@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authApi, type ShareAcceptResult, type ShareInfo } from '../api/auth'
 import { ApiError } from '../api/http'
-import { errorMessage, formatDateTime } from '../composables/format'
+import { errorMessage, formatDate } from '../composables/format'
 import { useSessionStore } from '../stores/session'
 import AppIcon from '../components/AppIcon.vue'
 import BrandLogo from '@/shared/components/BrandLogo.vue'
@@ -25,7 +25,9 @@ const queryToken = typeof route.query.token === 'string' ? route.query.token : '
 if (queryToken) sessionStorage.setItem(SHARE_TOKEN_KEY, queryToken)
 const token = queryToken || sessionStorage.getItem(SHARE_TOKEN_KEY) || ''
 
-const ROLE_LABEL: Record<string, string> = { owner: 'オーナー', editor: '編集', viewer: '閲覧のみ' }
+// The role is told as what the recipient can do, not as a spec-sheet
+// label: editor -> 編集できます / viewer -> 見るだけです.
+const ROLE_CAPABILITY: Record<string, string> = { editor: '編集できます', viewer: '見るだけです' }
 
 const info = ref<ShareInfo | null>(null)
 const result = ref<ShareAcceptResult | null>(null)
@@ -105,7 +107,12 @@ async function goHome(): Promise<void> {
         :size="48"
       />
     </div>
-    <h1>家計簿への参加</h1>
+    <h1 v-if="info">
+      <span data-test="issuer">{{ info.issuer_display_name }}</span> さんが家計簿を共有しました
+    </h1>
+    <h1 v-else>
+      家計簿の共有
+    </h1>
     <div class="card auth-card">
       <p v-if="loading">
         読み込んでいます...
@@ -129,13 +136,13 @@ async function goHome(): Promise<void> {
         data-test="done"
       >
         <p v-if="result.outcome === 'joined'">
-          家計簿「{{ result.ledger.name }}」に参加しました。
+          家計簿『<strong>{{ result.ledger.name }}</strong>』に参加しました。
         </p>
         <p
           v-else
           data-test="already-member"
         >
-          家計簿「{{ result.ledger.name }}」には既に参加しています。
+          家計簿『<strong>{{ result.ledger.name }}</strong>』には既に参加しています。
         </p>
         <button
           class="btn btn-primary btn-block"
@@ -149,23 +156,12 @@ async function goHome(): Promise<void> {
         v-else-if="info"
         data-test="share-info"
       >
-        <p class="lead">
-          <strong data-test="ledger-name">{{ info.ledger_name }}</strong> への参加
+        <p class="share-ledger-name">
+          家計簿『<strong data-test="ledger-name">{{ info.ledger_name }}</strong>』
         </p>
-        <dl class="kv">
-          <dt>権限</dt>
-          <dd data-test="role">
-            {{ ROLE_LABEL[info.role] ?? info.role }}
-          </dd>
-          <dt>発行者</dt>
-          <dd data-test="issuer">
-            {{ info.issuer_display_name }}
-          </dd>
-          <dt>期限</dt>
-          <dd data-test="expires">
-            {{ formatDateTime(info.expires_at) }}
-          </dd>
-        </dl>
+        <p data-test="role">
+          {{ ROLE_CAPABILITY[info.role] ?? info.role }}
+        </p>
         <template v-if="info.already_member">
           <p data-test="already-member">
             既にこの家計簿に参加しています。
@@ -200,6 +196,12 @@ async function goHome(): Promise<void> {
             ログインして参加
           </button>
         </template>
+        <p
+          class="auth-note"
+          data-test="expires"
+        >
+          この招待は {{ formatDate(info.expires_at) }} まで有効です
+        </p>
       </div>
       <p
         v-if="error"

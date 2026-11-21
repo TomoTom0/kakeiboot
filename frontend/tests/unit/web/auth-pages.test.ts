@@ -333,23 +333,24 @@ describe('ShareAcceptPage', () => {
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
   })
 
-  it('[covers:web-share.join-flow] ログイン済みは家計簿・権限・発行者・期限と参加ボタンを出し、accept で参加完了・token 退避を消す', async () => {
+  it('[covers:web-share.join-flow] ログイン済みは招待文と家計簿名・できること・期限を優先順に出し、accept で参加完了・token 退避を消す', async () => {
     const f = mockFetch({
       'POST /api/share/info': { body: SHARE_INFO },
       'POST /api/share/accept': { body: { ledger: { id: 3, name: '家族', role: 'editor' }, outcome: 'joined' } },
       'GET /api/auth/me': { body: ME },
     })
     const { wrapper } = await mountApp('/share?token=T')
-    expect(wrapper.find('h1').text()).toBe('家計簿への参加')
+    expect(wrapper.find('h1').text()).toBe('太郎 さんが家計簿を共有しました')
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
-    expect(wrapper.find('[data-test="role"]').text()).toBe('編集')
+    expect(wrapper.find('[data-test="role"]').text()).toBe('編集できます')
     expect(wrapper.find('[data-test="issuer"]').text()).toBe('太郎')
-    expect(wrapper.find('[data-test="expires"]').text()).toContain('2026/10/24 00:00')
+    expect(wrapper.find('[data-test="expires"]').text()).toContain('この招待は 2026/10/24 まで有効です')
+    expect(wrapper.find('[data-test="expires"]').text()).not.toContain('00:00')
     expect(wrapper.find('[data-test="join-as"]').text()).toContain('花子 として参加します')
     await wrapper.find('[data-test="accept"]').trigger('click')
     await settle()
     expect(f.to('POST', '/api/share/accept')[0]!.body).toEqual({ token: 'T' })
-    expect(wrapper.find('[data-test="done"]').text()).toContain('家計簿「家族」に参加しました')
+    expect(wrapper.find('[data-test="done"]').text()).toContain('家計簿『家族』に参加しました')
     expect(wrapper.find('[data-test="go-home"]').exists()).toBe(true)
     expect(sessionStorage.getItem('kb_share_token')).toBeNull()
     // the session reloads so the shell membership reflects the join
@@ -379,6 +380,7 @@ describe('ShareAcceptPage', () => {
   it('[covers:web-share.needs-login] 未ログインはログイン導線のみを出し登録への言及は置かず、チケットは消費しない', async () => {
     const f = mockFetch({ 'POST /api/share/info': { body: { ...SHARE_INFO, session: null } } })
     const { wrapper, router } = await mountApp('/share?token=T')
+    expect(wrapper.find('h1').text()).toBe('太郎 さんが家計簿を共有しました')
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('登録の招待')
