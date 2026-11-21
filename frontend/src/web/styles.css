@@ -2356,7 +2356,16 @@ button.share-account { cursor: pointer; }
 .share-actions .btn { min-height: 48px; }
 .share-slot { display: flex; align-items: center; min-height: 48px; }
 .share-slot .btn { flex: 1; }
-.share-waiting { opacity: 0.45; }
+/* the waiting add button is plainly inactive: neutral gray with full
+   opacity, not the primary green faded out (which still reads as a
+   button you could press) */
+.share-waiting { background: var(--bb-border); border-color: var(--bb-border); color: var(--bb-muted); box-shadow: none; }
+.share-waiting:disabled { opacity: 1; cursor: not-allowed; }
+/* before login the account bar is the primary action, so it carries
+   the primary green; after login the emphasis moves to the add button */
+.share-account-login { background: var(--bb-accent); border-color: var(--bb-accent); color: var(--bb-accent-fg); }
+.share-account-login:hover { background: var(--bb-accent-strong); border-color: var(--bb-accent-strong); }
+.share-account-login .share-account-guest { background: rgb(255 255 255 / 0.22); color: var(--bb-accent-fg); }
 .share-done { text-align: center; }
 .share-done-mark {
   display: grid;
