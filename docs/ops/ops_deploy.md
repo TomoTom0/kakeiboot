@@ -1,6 +1,6 @@
 # stg・prod 運用環境（kakeiboot）
 
-作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・promote・configs配布・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd システムサービス（kakeiboot-{stg,prod}。backup 用 unit だけが user service）が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
+作業repo（このrepoの作業copy）での実行は dev（`mise run dev:backend`・`dev:frontend`・test・browser撮影等）まで。stg・prodの運用操作（deploy・promote・configs配布・admin CLI・service操作）は作業repoのmiseタスクから行う。タスクは処理本体 `scripts/deploy/kakeiboot_ops.py` のthin wrapperで、実行経路（ssh / local）は `configs/deploy.toml` の `transport` に従う。現行は `transport = "ssh"`（運用機 gt430 へのssh経由。運用機にrepo checkout・git操作は置かない）。実serverは運用dir上の systemd system service（kakeiboot-stg / kakeiboot-prod）が担い、admin CLIはscriptが運用dirへcd（ssh時はremote cd）して実行する（運用dirはgit repoではない）。
 
 ## 構成
 
@@ -26,8 +26,8 @@
 
 - backendはconfig内の相対path（`var/...`・`frontend/dist`等）を config dirの2階層上（= 運用dir自身）をrootとして解決する（`backend/src/config.rs`）。このため `configs/<env>/` の階層は上記構成から変えないこと
 - migrations は binary に埋め込み（`sqlx::migrate!`）のため配布不要。tool description等もcompile時埋込み
-- unit file: `/etc/systemd/system/kakeiboot-{stg,prod}.service`（システムユニット。`User=muse-agent` で実行）。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
-- backup用unit file: `~/.config/systemd/user/kakeiboot-backup@.{service,timer}`（template 1組で stg/prod 両用）。repo正本は `scripts/systemd/kakeiboot-backup@.service.in`（`{{deploy_root}}` placeholder入り。timerはpathを含まないためrender対象外）で、`mise run units:install` が `configs/deploy.toml` の `deploy_root` 値でrenderした実体をuser config dir（無ければ作成）へ配布する（`ExecStart` = `<deploy_root>/<env>/bin/kakeiboot-backup.sh <env>`）。user configのためdeploy対象外（導入手順は「backupの導入・検証」節）
+- unit file: `/etc/systemd/system/kakeiboot-{stg,prod}.service`（system service。実行userは stg=muse-agent・prod=tomo。tomo / muse-agent の双方が polkit ルールにより自分の身分で操作できる）。`WorkingDirectory` = 運用dir、`ExecStart` = `<運用dir>/budget-book --config-dir configs/<env>`（miseタスク `exec-<env>` と同じdir・config-dir指定）、`Restart=on-failure`
+- backup用unit file: `/etc/systemd/system/kakeiboot-backup@.{service,timer}`（system unit・template 1組で stg/prod 両用・`User=tomo`）。repo正本は `scripts/systemd/kakeiboot-backup@.service.in`（`{{deploy_root}}` placeholder入り。timerはpathを含まないためrender対象外）で、`mise run units:install` が `configs/deploy.toml` の `deploy_root` 値でrenderした実体とtimer・polkit rule（`/etc/polkit-1/rules.d/49-dual-operator-kakeiboot-backup.rules`: tomo / muse-agent の双方が backup unit instance を自分の身分で操作できるようにする。gt430変換scriptと同等の内容をtool内で生成）を `sudo install -o root -g root -m 644` で配布し・`systemctl daemon-reload` → 両env timerの `enable --now` まで実行する（`ExecStart` = `<deploy_root>/<env>/bin/kakeiboot-backup.sh <env>`）。/etc配下への書込を伴うため**実行operatorにsudo権限が必要**（旧user config dir配布時は任意のoperatorが自分のdirへ書けた）。/etcへの配布のためdeploy対象外（導入手順は「backupの導入・検証」節）。なおgt430の現行backup unitはまだuser unitのまま（host変換script未適用）のため、それを操作するbackup・backup-status subcommandの `systemctl --user` は現行実態に合わせて残しており、host変換後にfollow-up PRでsystem側へ切り替える
 - `Environment=` の設定は不要（port・path等は configs/<env>/*.toml が正本。`RUST_LOG` を設定すれば `[log] filter` を上書きできる）
 
 ## deploy先の設定（configs/deploy.toml）
@@ -95,7 +95,7 @@ transport = "local"
 | service操作 | `mise run stg:service -- status` / `mise run prod:service -- is-active` |
 | backup手動実行 | `mise run stg:backup` / `mise run prod:backup`（timerと同一のoneshot unit。完了まで待つ） |
 | backup状態確認 | `mise run stg:backup-status` / `mise run prod:backup-status`（last_success・世代dir一覧・timer・前回実行結果。**週1回**確認する） |
-| backup unit配布 | `mise run units:install`（unit正本 `.in` を `deploy_root` でrenderしuser config dir作成・配布・`daemon-reload`まで。unitは `%i` template 1組でenv非依存のため接頭は `units:`。導入手順は「backupの導入・検証」節） |
+| backup unit配布 | `mise run units:install`（unit正本 `.in` を `deploy_root` でrenderし・system unit 2点とpolkit ruleを `/etc` へ `sudo install`・`daemon-reload`・両env timer有効化まで。sudo権限を持つoperatorが実行。unitは `%i` template 1組でenv非依存のため接頭は `units:`。導入手順は「backupの導入・検証」節） |
 
 処理本体は `scripts/deploy/kakeiboot_ops.py`（miseタスクはthin wrapper）:
 
@@ -112,7 +112,7 @@ mise run stg:service -- --dry-run status
 mise run units:install -- --dry-run
 ```
 
-`units:install --dry-run` はrender後のunit内容（`{{deploy_root}}` 置換済み）に続けて実行予定の `$ <command>` 行を表示し、dir作成・file作成・配布・reloadは行わない（renderに使う `deploy_root` 値も出力される。plan中のrender済みfile pathは表示用であり、実行時は `tmp/units-*` の一時dirにstagingされる）
+`units:install --dry-run` はrender後のunit内容（`{{deploy_root}}` 置換済み）と配布するpolkit rule内容に続けて実行予定の `$ <command>` 行を表示し、dir作成・file作成・配布・reload・timer有効化は行わない（renderに使う `deploy_root` 値も出力される。plan中のrender済みfile pathは表示用であり、実行時は `tmp/units-*` の一時dirにrender済みservice・timer・polkit ruleをstagingしてから `/etc` へ `sudo install` する）
 
 `--` はmise自身のflagとタスクへの引数の区切りとして1個だけ使う。`--` を挟まない `mise run exec-stg --dry-run -- admin user list` 形式は機能しない: タスク名の後ろの `--dry-run` はmise自身のdry-run flag（task実行予定の表示のみ・scriptは走らない。mise 2026.6.6実測）に解釈される
 
@@ -143,7 +143,7 @@ stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの�
 処理（`scripts/deploy/kakeiboot_ops.py promote`。11 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
 
 1. stg前段チェック1: stg healthz（5回retry。portは **stg運用dir** の配布済み `configs/stg/app.toml` から解決）
-2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。システムサービスは `User=muse-agent`（操作者と同一user）で動くため`/proc/<pid>/exe`は読み取り可）
+2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。stgはsystem service（User=muse-agent）として稼働し、現行のssh運用者も同一userのため`/proc/<pid>/exe`は読み取り可）
 3. binaryのsha256表示（stg側は失敗=停止。prod側はfile不在時 `prod: budget-book not deployed yet` を表示して続行 = 初回構築可能）
 4. configs乖離の補助表示（repo `configs/prod/` → prod運用dirへの転送なしpreview）
 5. 旧成果物退避: prod側binary存在時のみ `<deploy_root>/prod/releases/<UTC timestamp>/` へ binary・`bin/`・`frontend/` を運用機上copy（全操作を `&&` 連結で実行し・date・mkdir・cpのいずれかの失敗はstep全体の非零=promote停止。不在時はskip）
@@ -212,7 +212,9 @@ deployのrsyncは `var/` を対象外とするため、deployでruntimeデータ
 
 ### backup（自動backup・TASK-83）
 
-**毎日自動実行**: systemd user timer（`kakeiboot-backup@<env>.timer`）が **UTC 19:30（= JST 04:30 翌日）** に oneshot service `kakeiboot-backup@<env>` を起動し、運用dir配下の `bin/kakeiboot-backup.sh`（repo正本: `scripts/backup/`。deployで配布）がbackupを編成する。進捗・失敗はjournal（`journalctl --user -u kakeiboot-backup@<env>`）に出る。`Persistent=true`（停電・停止後の取り戻し）と `RandomizedDelaySec=15m`（stg/prodのIO競合緩和）付き。
+**毎日自動実行**: systemd timer（`kakeiboot-backup@<env>.timer`・system unit）が **UTC 19:30（= JST 04:30 翌日）** に oneshot service `kakeiboot-backup@<env>` を起動し、運用dir配下の `bin/kakeiboot-backup.sh`（repo正本: `scripts/backup/`。deployで配布）がbackupを編成する。進捗・失敗はjournal（`journalctl -u kakeiboot-backup@<env>`）に出る。`Persistent=true`（停電・停止後の取り戻し）と `RandomizedDelaySec=15m`（stg/prodのIO競合緩和）付き。
+
+（2026-11-19時点の過渡状態: `units:install` の配布形式はsystem unitへ変更済みだが・gt430の現行backup unitはまだuser unitのまま（host変換script未適用）。変換までの間は現行unitの確認・操作に `journalctl --user -u kakeiboot-backup@<env>`・`systemctl --user` を使う。host変換後に backup・backup-status subcommand（`mise run <env>:backup` / `<env>:backup-status` の `systemctl --user`）がsystem側へ追随するfollow-up PRを予定）
 
 scriptの処理（この順序で固定）:
 
@@ -253,9 +255,8 @@ stg→prodの順で、repoのdeploy・mise経由で行う（運用機へのpacka
 
 1. `mise run stg:deploy`（binary〔`admin backup` 入〕と `bin/kakeiboot-backup.sh` を配布。ssh経由）
 2. backup先dir作成（運用機上）: `ssh gt430 'mkdir -p <deploy_root>/backups/{stg,prod}'`（`{stg,prod}` はremote shellのbrace expansion。script側でも `$DEST` を作るが、明示手順として残す）
-3. unit配置: `mise run units:install`（repo正本 `scripts/systemd/kakeiboot-backup@.service.in` を `configs/deploy.toml` の `deploy_root` でrenderし、user config dirを作成の上render済みserviceとtimerをrsync・`systemctl --user daemon-reload` まで一括実行。`.in` は `{{deploy_root}}` placeholder入りのため直接scp禁止）。配布後は `ssh gt430 systemctl --user cat kakeiboot-backup@stg.service` で内容ベース確認: `WorkingDirectory=` / `ExecStart=` の2行が `<deploy_root>/%i`・`<deploy_root>/%i/bin/kakeiboot-backup.sh %i`（deploy.tomlの解決値）と一致すること・既存行に差分が無いこと（初回差し替え時の期待差分は `.in` 冒頭のcomment行のみ）
-4. timer有効化: `ssh gt430 systemctl --user enable --now kakeiboot-backup@stg.timer`（ssh非対話実行で `systemctl --user` がXDG_RUNTIME_DIR不在により失敗する環境では `ssh gt430 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user ...'` の形式を使う）
-5. 初回実行と確認: `mise run stg:backup` を実行し、(1) journal（`ssh gt430 journalctl --user -u kakeiboot-backup@stg`）に各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在（`mise run stg:backup-status`） (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）
+3. unit配置・有効化: `mise run units:install`（repo正本 `scripts/systemd/kakeiboot-backup@.service.in` を `configs/deploy.toml` の `deploy_root` でrenderし・render済みservice・timer・polkit rule（`/etc/polkit-1/rules.d/49-dual-operator-kakeiboot-backup.rules`）を `/etc/systemd/system/` 等へ `sudo install -o root -g root -m 644` で配布し・`systemctl daemon-reload`・両env timerの `systemctl enable --now` まで一括実行。`.in` は `{{deploy_root}}` placeholder入りのため直接scp禁止・/etc配下への書込のためsudo権限を持つoperatorが実行）。配布後は `ssh gt430 systemctl cat kakeiboot-backup@stg.service` で内容ベース確認: `WorkingDirectory=` / `ExecStart=` の2行が `<deploy_root>/%i`・`<deploy_root>/%i/bin/kakeiboot-backup.sh %i`（deploy.tomlの解決値）と一致すること・`User=tomo` 行があること・既存行に差分が無いこと（user unitからの差し替え時の期待差分は `.in` 冒頭のcomment行と `User=tomo` 行のみ）
+4. 初回実行と確認: `mise run stg:backup` を実行し、(1) journal（`ssh gt430 journalctl -u kakeiboot-backup@stg`）に各stepの対象・件数・所要が出る (2) 世代dir `backups/stg/<date>/db.sqlite` と `COMPLETED` が存在（`mise run stg:backup-status`） (3) `last_success` が更新、の3点を確認。失敗注入（backup先を読み取り専用にする等）でunit failedがjournalに残り`last_success`が更新されないこと・権限復旧後の再実行で回復することも確認する。復元手順を実際に実施してserverが起動し画像配信で404が出ないことを確認してから、prodへ同一手順（prod適用はユーザー承認を経る）
 
 なおweb設定画面のデータtabの書き出し・取り込み（`docs/spec/spec_mcp-tools.md` §12）は**利用者向けのデータ持ち出し・復帰**であり、運用backup（認証系・全ledgerを含む全体像・世代管理）の代替にはならない。
 
@@ -265,4 +266,4 @@ prodはstgと同じ体制で配備・稼働している（unit: enabled・active
 
 ## マシン起動時の自動起動（linger）
 
-user service をマシン起動時（ログイン前）に起動するには linger が必要。`loginctl enable-linger tomo` 済み（確認: `loginctl show-user tomo --property=Linger` → `Linger=yes`）。backup timer（`kakeiboot-backup@<env>.timer`）も同じく linger が必要（timer発火がloginに依存しない。lingerが無いとbackupが静止する）。
+stg・prod の system service は enable 済みのためマシン起動時に自動起動し、linger は不要。backup timer（`kakeiboot-backup@<env>.timer`）も `units:install` がsystem unitとして `enable --now` するためlinger不要となるが・gt430の現行分はまだ tomo の user timer（host変換script未適用）のため、変換まではlingerが必要（timer発火がloginに依存しないため。lingerが無いとbackupが静止する）。`loginctl enable-linger tomo` 済み（確認: `loginctl show-user tomo --property=Linger` → `Linger=yes`）。

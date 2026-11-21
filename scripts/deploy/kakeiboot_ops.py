@@ -26,18 +26,15 @@ Subcommands (env is an argument; the stg/prod task prefix maps to --env):
                  --delete; no restart/healthz). --preview adds rsync's own
                  --dry-run: the transfer-free itemized diff (drift check path).
   exec           ./budget-book <args...> --config-dir configs/<env> in the runtime dir
-  service        systemctl <verb...> kakeiboot-<env> (system unit)
+  service        systemctl <verb...> kakeiboot-<env>
   backup         systemctl --user start kakeiboot-backup@<env>.service
   backup-status  last_success marker, generation dirs, list-timers, last result
   install-units  render scripts/systemd/kakeiboot-backup@.service.in with deploy_root
-                 -> rsync service + timer into the user unit dir -> daemon-reload
-                 (no --env: the unit is one %i template shared by both envs)
-
-Unit scopes differ by design: the backend units (kakeiboot-<env>) are SYSTEM
-units (/etc/systemd/system/, User= is the operator account), so every backend
-systemctl call here is system-scope (no --user). Only the backup units
-(kakeiboot-backup@) are user units, so backup / backup-status / install-units
-keep `systemctl --user`.
+                 -> stage service + timer + polkit rule on the target ->
+                 sudo install into /etc/systemd/system + /etc/polkit-1/rules.d
+                 (root:root 644) -> system daemon-reload -> enable --now both
+                 backup timers (no --env: the unit is one %i template shared by
+                 both envs; /etc writes need a sudo-capable operator)
 
 The healthz port is parsed at startup from configs/<env>/app.toml [server] port
 (no port literals here -- see configs-management rule). Every subcommand takes
@@ -50,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -61,6 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_CONFIG = REPO_ROOT / "configs" / "deploy.toml"
 DEPLOY_LOCAL_CONFIG = REPO_ROOT / "configs" / "deploy.local.toml"
 UNIT_IN = REPO_ROOT / "scripts" / "systemd" / "kakeiboot-backup@.service.in"
+UNIT_TIMER = REPO_ROOT / "scripts" / "systemd" / "kakeiboot-backup@.timer"
 
 KNOWN_KEYS = frozenset({"deploy_root", "runtime_host", "transport"})
 TRANSPORTS = ("local", "ssh")
@@ -69,6 +68,44 @@ TRANSPORTS = ("local", "ssh")
 SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 SSH_RSYNC_E = "ssh " + " ".join(SSH_OPTIONS)
 ENVS = ("stg", "prod")
+
+# install-units destinations (system form, matching the gt430 host-side
+# conversion script for the 2026-11-17 system-service conversion): the backup
+# units live only as system units now, so the fixed run user (User=tomo) is in
+# the .in template and /etc writes go through `sudo install` (root:root 644 =
+# the systemd/polkit default). Standard system locations, not environment
+# settings -- deploy_root stays the single deploy.toml path source.
+SYSTEM_UNIT_DIR = "/etc/systemd/system"
+POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
+BACKUP_POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
+# Target-side staging dir PREFIX: `sudo install` reads a path on the target,
+# while the rendered service / timer / polkit rule are staged in this repo's
+# tmp/ tree (the repo is never checked out on the runtime host), so the staged
+# dir is copied there first (mkdir -p + rsync, same transport helpers as
+# deploy). The target staging dir is derived per invocation (this prefix + the
+# local staged dir's basename), NOT a shared fixed path: a fixed one survives
+# the first operator's run as a 0700 dir owned by them and blocks the other
+# operator's rsync.
+BACKUP_UNIT_STAGE_PREFIX = "/tmp/kakeiboot-units-install"
+
+# Polkit rule installed alongside the units (same content as the host
+# conversion script): both operators manage the backup unit instances as
+# themselves. Content is fixed (instance names + the two operator names), so it
+# is generated here instead of adding another template file.
+BACKUP_POLKIT_RULE = (
+    "// kakeiboot-backup@ の instance 群: 各運用者が自分の identity のまま "
+    "manage-units できるようにする。\n"
+    "polkit.addRule(function(action, subject) {\n"
+    '    if (action.id == "org.freedesktop.systemd1.manage-units") {\n'
+    '        var units = ["kakeiboot-backup@stg.service", "kakeiboot-backup@stg.timer", '
+    '"kakeiboot-backup@prod.service", "kakeiboot-backup@prod.timer"];\n'
+    '        if (units.indexOf(action.lookup("unit")) >= 0 '
+    '&& (subject.user == "tomo" || subject.user == "muse-agent")) {\n'
+    "            return polkit.Result.YES;\n"
+    "        }\n"
+    "    }\n"
+    "});\n"
+)
 
 
 class ConfigError(Exception):
@@ -256,9 +293,10 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     # passes); hash the running process's /proc/<pid>/exe and the
     # distribution source directly instead. A failing systemctl, empty/zero
     # MainPID, unreadable /proc (permission) or any hash mismatch leaves the
-    # && chain non-zero -- fail closed. The backend is a system unit whose
-    # User= is the operator's own account, so /proc/<pid>/exe is readable
-    # (gt430 behavior stays on the on-device verification list).
+    # && chain non-zero -- fail closed. kakeiboot-stg is a system service
+    # whose User= matches the ssh operator on the current route, so
+    # /proc/<pid>/exe is readable; an operator different from the unit's
+    # run user fails closed here on /proc permission instead.
     process_check = (
         "pid=$(systemctl show kakeiboot-stg -p MainPID --value) "
         '&& [ -n "$pid" ] && [ "$pid" != "0" ] '
@@ -413,34 +451,67 @@ def render_unit(text: str, deploy_root: str) -> str:
     return rendered
 
 
-def build_install_units_commands(cfg: DeployConfig, rendered_src: str) -> list[list[str]]:
-    """install-units plan: mkdir user unit dir, rsync rendered service + timer, reload.
+def sudo_install(src: str, dst: str) -> list[str]:
+    """Place one file as root:root mode 644 (the systemd/polkit default)."""
+    return ["sudo", "install", "-o", "root", "-g", "root", "-m", "644", src, dst]
 
-    The destination is the home-expanded absolute path (Path.home()): local
-    rsync does not go through a shell, so a literal `~` would create a real
-    directory named `~` instead of the user config dir. The dir itself may not
-    exist on a fresh runtime host, so mkdir -p leads the plan (remote_exec, so
-    ssh mode creates it on the host). The timer carries no paths and is copied
-    as-is; daemon-reload also goes through remote_exec.
 
-    Path.home() is the OPERATOR's home on this machine, resolved here before
-    any transport handling — with transport="ssh" the same value is reused for
-    the remote side. That silently assumes the ssh alias's login user on the
-    runtime host is the same user as on this machine (the current operation
-    relies on this identity); a differing login user would rsync into a wrong
-    remote path instead of failing.
+def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[list[str]]:
+    """install-units plan (system form): stage on the target, sudo install
+    units + polkit rule, system daemon-reload, enable both timers, cleanup.
+
+    The backup units follow the 2026-11-17 gt430 system-service conversion:
+    they exist only as system units now, so the destination is
+    /etc/systemd/system (service + timer) and /etc/polkit-1/rules.d (the
+    dual-operator rule), and every /etc write needs root -- each file goes
+    through `sudo install -o root -g root -m 644` instead of rsync. sudo
+    install reads a path on the TARGET, while staged_dir is this repo's tmp/
+    staging tree holding the three files (rendered service, timer copy,
+    generated polkit rule); the plan therefore mkdir -p's a target staging
+    dir and rsyncs the staged dir there first (remote_exec / rsync_exec, the
+    same transport helpers every other subcommand uses). That target staging
+    dir is per invocation (BACKUP_UNIT_STAGE_PREFIX + the local staged dir's
+    basename): a shared fixed path would survive the first operator's run as
+    a 0700 dir owned by them and block the other operator's rsync. The plan
+    ends with rm -rf of the per-invocation dir so nothing is left behind.
+
+    daemon-reload and the timer enables are system-scope systemctl under sudo
+    as well; enable --now runs for both env timers, matching the host
+    conversion script's end state. No --env: one %i template serves both envs.
     """
-    unit_dir = f"{Path.home()}/.config/systemd/user"
+    stage = f"{BACKUP_UNIT_STAGE_PREFIX}-{Path(staged_dir).name}"
     return [
-        remote_exec(cfg, ["mkdir", "-p", unit_dir]),
-        rsync_exec(cfg, ["-a"], rendered_src, f"{unit_dir}/kakeiboot-backup@.service"),
-        rsync_exec(
+        remote_exec(cfg, ["mkdir", "-p", stage]),
+        rsync_exec(cfg, ["-a"], f"{staged_dir}/", f"{stage}/"),
+        remote_exec(
             cfg,
-            ["-a"],
-            "scripts/systemd/kakeiboot-backup@.timer",
-            f"{unit_dir}/kakeiboot-backup@.timer",
+            sudo_install(
+                f"{stage}/kakeiboot-backup@.service",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service",
+            ),
         ),
-        remote_exec(cfg, ["systemctl", "--user", "daemon-reload"]),
+        remote_exec(
+            cfg,
+            sudo_install(
+                f"{stage}/kakeiboot-backup@.timer",
+                f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.timer",
+            ),
+        ),
+        remote_exec(
+            cfg,
+            sudo_install(
+                f"{stage}/{BACKUP_POLKIT_RULE_NAME}",
+                f"{POLKIT_RULES_DIR}/{BACKUP_POLKIT_RULE_NAME}",
+            ),
+        ),
+        remote_exec(cfg, ["sudo", "systemctl", "daemon-reload"]),
+        *(
+            remote_exec(
+                cfg, ["sudo", "systemctl", "enable", "--now", f"kakeiboot-backup@{env}.timer"]
+            )
+            for env in ENVS
+        ),
+        remote_exec(cfg, ["rm", "-rf", stage]),
     ]
 
 
@@ -575,41 +646,54 @@ def cmd_backup_status(args: argparse.Namespace) -> int:
 
 
 def cmd_install_units(args: argparse.Namespace) -> int:
-    """Render the .in source and install both units into the user unit dir.
+    """Render the .in source and install the units + polkit rule as system files.
 
     The rendered text and the deploy_root it was rendered with go to stdout
-    first (which value produced the installed unit stays traceable). Dry-run
-    prints the rendered unit plus the plan and creates no file. A real run
-    stages the rendered service under the repo tmp/ tree (tempfile, removed on
-    exit) so the staged file keeps the real unit name for the rsync.
+    first (which value produced the installed unit stays traceable), followed
+    by the polkit rule content (both /etc payloads are reviewable from the
+    output alone). Dry-run prints both plus the plan and creates no file. A
+    real run stages the rendered service, the timer and the polkit rule under
+    the repo tmp/ tree (tempfile, removed on exit) so the staged files keep
+    their real names for the target-side staging rsync and the sudo installs.
     """
     cfg = load_config(config_paths())
     rendered = render_unit(UNIT_IN.read_text(encoding="utf-8"), cfg.deploy_root)
     print(f"# rendered from {UNIT_IN.relative_to(REPO_ROOT)} (deploy_root={cfg.deploy_root})")
     print(rendered, end="")
+    print(f"# polkit rule -> {POLKIT_RULES_DIR}/{BACKUP_POLKIT_RULE_NAME}")
+    print(BACKUP_POLKIT_RULE, end="")
     if args.dry_run:
         # Plan-only: the staged path below is a display placeholder; a real run
-        # stages the render in a fresh tmp/units-*/ dir (never this path).
-        staged_src = REPO_ROOT / "tmp" / "units-render" / "kakeiboot-backup@.service"
-        print("# dry-run plan only: a real run stages the rendered unit in a fresh tmp/units-* dir first")
-        run_commands(build_install_units_commands(cfg, str(staged_src)), dry_run=True, cwd=REPO_ROOT)
+        # stages the three files in a fresh tmp/units-*/ dir (never this path).
+        staged_dir = REPO_ROOT / "tmp" / "units-render"
+        print(
+            "# dry-run plan only: a real run stages the rendered unit, the timer "
+            "and the polkit rule in a fresh tmp/units-* dir first"
+        )
+        run_commands(build_install_units_commands(cfg, str(staged_dir)), dry_run=True, cwd=REPO_ROOT)
         return 0
     tmp_root = REPO_ROOT / "tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="units-", dir=tmp_root) as stage:
-        staged = Path(stage) / "kakeiboot-backup@.service"
-        staged.write_text(rendered, encoding="utf-8")
+        staged = Path(stage)
+        (staged / "kakeiboot-backup@.service").write_text(rendered, encoding="utf-8")
+        shutil.copyfile(UNIT_TIMER, staged / "kakeiboot-backup@.timer")
+        (staged / BACKUP_POLKIT_RULE_NAME).write_text(BACKUP_POLKIT_RULE, encoding="utf-8")
         cmds = build_install_units_commands(cfg, str(staged))
         executed, rc = run_commands(cmds, dry_run=False, cwd=REPO_ROOT)
     if rc != 0:
         # Same recovery report as cmd_deploy: install-units is a multi-step
-        # rsync+reload sequence, so a failure must list which steps already
-        # ran (e.g. the service landed but the timer did not).
+        # stage+install+reload+enable sequence, so a failure must list which
+        # steps already ran (e.g. the units landed but the polkit rule did not).
         print("steps executed before failure:", file=sys.stderr)
         for argv in cmds[:executed]:
             print(f"  - {shlex.join(argv)}", file=sys.stderr)
         return rc
-    print(f"units installed to {Path.home()}/.config/systemd/user/ (daemon-reload done)")
+    print(
+        f"units installed to {SYSTEM_UNIT_DIR}/ and "
+        f"{POLKIT_RULES_DIR}/{BACKUP_POLKIT_RULE_NAME} "
+        "(daemon-reload done, both timers enabled)"
+    )
     return 0
 
 
@@ -683,7 +767,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "install-units",
-        help="render the backup .in unit with deploy_root, rsync service+timer to the user unit dir, daemon-reload",
+        help="render the backup .in unit with deploy_root, sudo install service+timer+polkit "
+        "rule as system units, daemon-reload, enable --now both timers",
     )
     p.add_argument(
         "--dry-run",
