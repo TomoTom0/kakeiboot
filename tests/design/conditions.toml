@@ -8863,7 +8863,7 @@ source = "docs/spec/spec_auth.md §2-1A（照会は家計簿名・role・発行�
 source_lines = "frontend/tests/unit/web/auth-pages.test.ts:336"
 description = "ログイン済みの受諾画面は招待文・家計簿名・できること・参加先の本人を優先順に示し（期限は最下部に日付のみ小さく）、参加ボタンで accept して完了表示になり、退避した token を消して所属を再取得する"
 given = "session 付きの share/info が {ledger_name: '家族', role: 'editor', issuer_display_name: '太郎', expires_at, session: {display_name: '花子'}, already_member: false} を返し、参加ボタンを押して accept が {ledger: {id: 3, name: '家族', role: 'editor'}, outcome: 'joined'} を返す"
-expect_return_shape = "見出しは招待文「太郎 さんが家計簿を共有しました」で、家計簿はマーク付きのパネルとして出て（種別「家計簿」＋名前「家族」）、権限は項目表ではなく役割のバッジ「編集」で添えられ、ログイン中のアカウントが「花子」「ログイン中」とアバター付きの行で表示され、期限は最下部に「2026/10/24 まで有効」と日付のみ（時刻なし）小さく静かに出る。accept の body は {token} で、完了表示「家計簿『家族』を追加しました」とホームへの導線が出て、kb_share_token は削除され、GET /api/auth/me が1回再取得される"
+expect_return_shape = "見出しは招待文「太郎 さんが家計簿を共有しました」で、家計簿はマーク付きのパネルとして出て（種別「家計簿」＋名前「家族」）、権限は項目表ではなく家計簿マークに重ねたバッジ「編集」で示され、ログイン中のアカウントが「花子」「ログイン中」とアバター付きの行で表示され、期限は最下部に「2026/10/24 まで有効」と日付のみ（時刻なし）小さく静かに出る。accept の body は {token} で、完了表示「家計簿『家族』を追加しました」とホームへの導線が出て、kb_share_token は削除され、GET /api/auth/me が1回再取得される"
 
 [[condition]]
 id = "web-share.needs-login"

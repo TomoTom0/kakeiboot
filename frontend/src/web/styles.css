@@ -2316,23 +2316,25 @@ button.row-seg:focus-visible {
   background: var(--ledger-teal);
   color: #fff;
 }
-.share-ledger-body { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; min-width: 0; }
+.share-ledger-visual { position: relative; flex: none; }
 /* the name is one unit: it wraps at spaces / punctuation, and only ever
    breaks inside a word when the alternative is overflowing the card */
 .share-ledger-name { font-size: 1.3rem; font-weight: 700; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
+/* the role rides on the ledger mark's corner instead of taking a row */
 .share-role {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  margin-top: 0.35rem;
-  padding: 0.15rem 0.6rem;
+  position: absolute;
+  right: -8px;
+  bottom: -7px;
+  padding: 0 0.45rem;
   border: 1px solid var(--bb-border);
   border-radius: 999px;
-  background: var(--bb-surface);
-  font-size: 0.8rem;
-  font-weight: 600;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(31 41 55 / 0.14);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
 }
-.share-role .icon { color: var(--bb-accent); }
 .share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0; }
 .share-join-as-name { font-weight: 600; }
 .share-join-as-avatar { width: 30px; height: 30px; font-size: 0.8rem; }

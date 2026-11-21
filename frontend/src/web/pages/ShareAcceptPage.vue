@@ -167,27 +167,23 @@ async function goHome(): Promise<void> {
         data-test="share-info"
       >
         <div class="share-ledger">
-          <span
-            class="share-ledger-mark"
-            aria-hidden="true"
-          ><AppIcon
-            name="book"
-            :size="28"
-          /></span>
-          <div class="share-ledger-body">
-            <strong
-              class="share-ledger-name"
-              data-test="ledger-name"
-            >{{ info.ledger_name }}</strong>
+          <span class="share-ledger-visual">
+            <span
+              class="share-ledger-mark"
+              aria-hidden="true"
+            ><AppIcon
+              name="book"
+              :size="28"
+            /></span>
             <span
               class="share-role"
               data-test="role"
-            ><AppIcon
-              v-if="info.role === 'editor'"
-              name="pencil"
-              :size="13"
-            />{{ ROLE_LABEL[info.role] ?? info.role }}</span>
-          </div>
+            >{{ ROLE_LABEL[info.role] ?? info.role }}</span>
+          </span>
+          <strong
+            class="share-ledger-name"
+            data-test="ledger-name"
+          >{{ info.ledger_name }}</strong>
         </div>
         <template v-if="info.already_member">
           <p data-test="already-member">
