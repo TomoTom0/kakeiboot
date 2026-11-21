@@ -344,7 +344,7 @@ describe('ShareAcceptPage', () => {
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
     expect(wrapper.find('[data-test="role"]').text()).toBe('編集')
     expect(wrapper.find('[data-test="issuer"]').text()).toBe('太郎')
-    expect(wrapper.find('[data-test="expires"]').text()).toContain('この招待は 2026/10/24 まで有効です')
+    expect(wrapper.find('[data-test="expires"]').text()).toContain('2026/10/24 まで有効')
     expect(wrapper.find('[data-test="expires"]').text()).not.toContain('00:00')
     expect(wrapper.find('[data-test="join-as"]').text()).toContain('花子')
     expect(wrapper.find('[data-test="join-as"]').text()).toContain('ログイン中')
@@ -378,12 +378,13 @@ describe('ShareAcceptPage', () => {
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
   })
 
-  it('[covers:web-share.needs-login] 未ログインはログイン導線のみを出し登録への言及は置かず、チケットは消費しない', async () => {
+  it('[covers:web-share.needs-login] 未ログインはログインと無効状態の追加ボタンを固定配置で出し登録への言及は置かず、チケットは消費しない', async () => {
     const f = mockFetch({ 'POST /api/share/info': { body: { ...SHARE_INFO, session: null } } })
     const { wrapper, router } = await mountApp('/share?token=T')
     expect(wrapper.find('h1').text()).toBe('太郎 さんが家計簿を共有しました')
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="accept-waiting"]').element as HTMLButtonElement).disabled).toBe(true)
     expect(wrapper.text()).not.toContain('登録の招待')
     expect(wrapper.text()).not.toContain('アカウントをお持ちでない場合')
     await wrapper.find('[data-test="login"]').trigger('click')

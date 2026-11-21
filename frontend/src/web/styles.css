@@ -2317,7 +2317,6 @@ button.row-seg:focus-visible {
   color: #fff;
 }
 .share-ledger-body { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; min-width: 0; }
-.share-ledger-kind { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; color: var(--bb-muted); }
 /* the name is one unit: it wraps at spaces / punctuation, and only ever
    breaks inside a word when the alternative is overflowing the card */
 .share-ledger-name { font-size: 1.3rem; font-weight: 700; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
@@ -2334,10 +2333,21 @@ button.row-seg:focus-visible {
   font-weight: 600;
 }
 .share-role .icon { color: var(--bb-accent); }
-.share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
+.share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0; }
 .share-join-as-name { font-weight: 600; }
 .share-join-as-avatar { width: 30px; height: 30px; font-size: 0.8rem; }
-.share-expiry { margin-top: 1.1rem; }
+.share-expiry { margin-top: 1rem; font-size: 0.8rem; }
+/* this page skips the tagline and tightens the top: logo, title, card */
+.share-auth { padding-top: 1.75rem; }
+.share-auth .auth-logo { margin-bottom: 1.25rem; }
+/* the action zone is two fixed slots so the add button never moves:
+   slot 1 is the account row or the login button, slot 2 is always the
+   add button (waiting, disabled, until login) */
+.share-actions { display: flex; flex-direction: column; gap: 0.6rem; }
+.share-actions .btn { min-height: 48px; }
+.share-slot { display: flex; align-items: center; min-height: 48px; }
+.share-slot .btn { flex: 1; }
+.share-waiting { opacity: 0.45; }
 .share-done { text-align: center; }
 .share-done-mark {
   display: grid;

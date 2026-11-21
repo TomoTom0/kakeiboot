@@ -96,16 +96,13 @@ async function goHome(): Promise<void> {
 </script>
 
 <template>
-  <section class="auth">
+  <section class="auth share-auth">
     <div class="auth-logo">
       <BrandLogo
         variant="full"
         :height="34"
       />
     </div>
-    <p class="auth-tagline">
-      レシートを送るだけの家計簿
-    </p>
     <h1
       v-if="info"
       class="share-title"
@@ -178,7 +175,6 @@ async function goHome(): Promise<void> {
             :size="28"
           /></span>
           <div class="share-ledger-body">
-            <span class="share-ledger-kind">家計簿</span>
             <strong
               class="share-ledger-name"
               data-test="ledger-name"
@@ -205,19 +201,34 @@ async function goHome(): Promise<void> {
             ホームへ
           </button>
         </template>
-        <template v-else-if="info.session">
-          <p
-            class="share-join-as"
-            data-test="join-as"
-          >
-            <span
-              class="avatar share-join-as-avatar"
-              aria-hidden="true"
-            >{{ initialOf(info.session.display_name) }}</span>
-            <span class="share-join-as-name">{{ info.session.display_name }}</span>
-            <span class="muted small">ログイン中</span>
-          </p>
+        <div
+          v-else
+          class="share-actions"
+        >
+          <div class="share-slot">
+            <p
+              v-if="info.session"
+              class="share-join-as"
+              data-test="join-as"
+            >
+              <span
+                class="avatar share-join-as-avatar"
+                aria-hidden="true"
+              >{{ initialOf(info.session.display_name) }}</span>
+              <span class="share-join-as-name">{{ info.session.display_name }}</span>
+              <span class="muted small">ログイン中</span>
+            </p>
+            <button
+              v-else
+              class="btn btn-primary btn-block"
+              data-test="login"
+              @click="goLogin"
+            >
+              ログインする
+            </button>
+          </div>
           <button
+            v-if="info.session"
             class="btn btn-primary btn-block"
             :disabled="busy"
             data-test="accept"
@@ -225,21 +236,20 @@ async function goHome(): Promise<void> {
           >
             この家計簿を追加する
           </button>
-        </template>
-        <template v-else>
           <button
-            class="btn btn-primary btn-block"
-            data-test="login"
-            @click="goLogin"
+            v-else
+            class="btn btn-primary btn-block share-waiting"
+            disabled
+            data-test="accept-waiting"
           >
-            ログインして追加する
+            この家計簿を追加する
           </button>
-        </template>
+        </div>
         <p
           class="auth-note share-expiry"
           data-test="expires"
         >
-          この招待は {{ formatDate(info.expires_at) }} まで有効です
+          {{ formatDate(info.expires_at) }} まで有効
         </p>
       </div>
       <p
