@@ -347,7 +347,6 @@ describe('ShareAcceptPage', () => {
     expect(wrapper.find('[data-test="expires"]').text()).toContain('2026/10/24 まで有効')
     expect(wrapper.find('[data-test="expires"]').text()).not.toContain('00:00')
     expect(wrapper.find('[data-test="join-as"]').text()).toContain('花子')
-    expect(wrapper.find('[data-test="join-as"]').text()).toContain('ログイン中')
     await wrapper.find('[data-test="accept"]').trigger('click')
     await settle()
     expect(f.to('POST', '/api/share/accept')[0]!.body).toEqual({ token: 'T' })

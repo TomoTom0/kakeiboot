@@ -2322,6 +2322,9 @@ button.row-seg:focus-visible {
 .share-ledger-name { font-size: 1.3rem; font-weight: 700; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
 /* the role rides on the ledger mark's corner instead of taking a row */
 .share-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
   position: absolute;
   right: -8px;
   bottom: -7px;
@@ -2335,10 +2338,14 @@ button.row-seg:focus-visible {
   line-height: 1.6;
   white-space: nowrap;
 }
-.share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0; }
-.share-join-as-name { font-weight: 600; }
-.share-join-as-avatar { width: 30px; height: 30px; font-size: 0.8rem; }
-.share-expiry { margin-top: 1rem; font-size: 0.8rem; }
+/* slot 1 is the same account bar before and after login: the bar
+   itself is the login action until it shows the signed-in account */
+.share-account { display: flex; align-items: center; gap: 0.6rem; width: 100%; min-height: 48px; margin: 0; padding: 0.45rem 0.9rem; border: 1px solid var(--bb-border); border-radius: 12px; background: var(--bb-surface); box-sizing: border-box; font: inherit; color: var(--bb-text); text-align: left; }
+button.share-account { cursor: pointer; }
+.share-account-avatar { width: 30px; height: 30px; font-size: 0.8rem; flex: none; }
+.share-account-guest { display: inline-flex; align-items: center; justify-content: center; background: var(--bb-border); color: var(--bb-muted); }
+.share-account-name { font-weight: 600; }
+.share-expiry { margin-top: 1rem; font-size: 0.8rem; text-align: right; }
 /* this page skips the tagline and tightens the top: logo, title, card */
 .share-auth { padding-top: 1.75rem; }
 .share-auth .auth-logo { margin-bottom: 1.25rem; }

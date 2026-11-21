@@ -178,7 +178,11 @@ async function goHome(): Promise<void> {
             <span
               class="share-role"
               data-test="role"
-            >{{ ROLE_LABEL[info.role] ?? info.role }}</span>
+            ><AppIcon
+              v-if="info.role === 'editor'"
+              name="pencil"
+              :size="10"
+            />{{ ROLE_LABEL[info.role] ?? info.role }}</span>
           </span>
           <strong
             class="share-ledger-name"
@@ -204,23 +208,29 @@ async function goHome(): Promise<void> {
           <div class="share-slot">
             <p
               v-if="info.session"
-              class="share-join-as"
+              class="share-account"
               data-test="join-as"
             >
               <span
-                class="avatar share-join-as-avatar"
+                class="avatar share-account-avatar"
                 aria-hidden="true"
               >{{ initialOf(info.session.display_name) }}</span>
-              <span class="share-join-as-name">{{ info.session.display_name }}</span>
-              <span class="muted small">ログイン中</span>
+              <span class="share-account-name">{{ info.session.display_name }}</span>
             </p>
             <button
               v-else
-              class="btn btn-primary btn-block"
+              class="share-account share-account-login"
               data-test="login"
               @click="goLogin"
             >
-              ログインする
+              <span
+                class="avatar share-account-avatar share-account-guest"
+                aria-hidden="true"
+              ><AppIcon
+                name="user"
+                :size="16"
+              /></span>
+              <span class="share-account-name">ログインする</span>
             </button>
           </div>
           <button
