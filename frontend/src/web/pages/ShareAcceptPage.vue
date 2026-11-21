@@ -114,14 +114,14 @@ async function goHome(): Promise<void> {
       class="msg msg-error"
       data-test="no-token"
     >
-      共有 URL が確認できません。元の共有 URL から開き直してください。
+      共有 URL が確認できませんので、元の共有 URL から開き直してください。
     </p>
     <p
       v-else-if="invalid"
       class="msg msg-error"
       data-test="invalid"
     >
-      共有 URL が無効か、期限切れか、使用済みです。発行した人に新しい URL を依頼してください。元の共有 URL から開き直してください。
+      共有 URL が無効か、期限切れか、使用済みです。
     </p>
     <div
       v-else-if="result"
@@ -199,9 +199,6 @@ async function goHome(): Promise<void> {
         >
           ログインして参加
         </button>
-        <p class="auth-note">
-          アカウントをお持ちでない場合は、登録の招待を別途受け取ってください。
-        </p>
       </template>
     </div>
     <p

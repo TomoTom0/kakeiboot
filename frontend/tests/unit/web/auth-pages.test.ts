@@ -323,13 +323,13 @@ describe('ShareAcceptPage', () => {
     expect(f.to('POST', '/api/share/info')).toHaveLength(0)
   })
 
-  it('[covers:web-share.invalid-token] invalid_token は再発行依頼と開き直しの案内のみ', async () => {
+  it('[covers:web-share.invalid-token] invalid_token は一文の無効表示のみ', async () => {
     mockFetch({ 'POST /api/share/info': { status: 400, body: { error: 'invalid_token' } } })
     const { wrapper } = await mountApp('/share?token=T')
     const text = wrapper.find('[data-test="invalid"]').text()
-    expect(text).toContain('共有 URL が無効か、期限切れか、使用済みです')
-    expect(text).toContain('発行した人に新しい URL を依頼してください')
-    expect(text).toContain('元の共有 URL から開き直してください')
+    expect(text).toBe('共有 URL が無効か、期限切れか、使用済みです。')
+    expect(text).not.toContain('依頼してください')
+    expect(text).not.toContain('開き直してください')
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
   })
 
@@ -376,12 +376,13 @@ describe('ShareAcceptPage', () => {
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
   })
 
-  it('[covers:web-share.needs-login] 未ログインはログイン導線と未登録者向けの一文を出し、チケットは消費しない', async () => {
+  it('[covers:web-share.needs-login] 未ログインはログイン導線のみを出し登録への言及は置かず、チケットは消費しない', async () => {
     const f = mockFetch({ 'POST /api/share/info': { body: { ...SHARE_INFO, session: null } } })
     const { wrapper, router } = await mountApp('/share?token=T')
     expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
     expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('アカウントをお持ちでない場合は、登録の招待を別途受け取ってください')
+    expect(wrapper.text()).not.toContain('登録の招待')
+    expect(wrapper.text()).not.toContain('アカウントをお持ちでない場合')
     await wrapper.find('[data-test="login"]').trigger('click')
     await settle()
     expect(router.currentRoute.value.path).toBe('/login')
