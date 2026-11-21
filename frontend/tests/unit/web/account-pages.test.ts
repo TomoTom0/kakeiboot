@@ -34,7 +34,12 @@ const PASSKEYS = [
 ]
 
 function home(extra: Record<string, Handler | Handler[]> = {}) {
-  return mockFetch({ 'GET /api/auth/me': { body: ME }, 'GET /api/passkeys': { body: PASSKEYS }, ...extra })
+  return mockFetch({
+    'GET /api/auth/me': { body: ME },
+    'GET /api/passkeys': { body: PASSKEYS },
+    'GET /api/share-tickets': { body: [] },
+    ...extra,
+  })
 }
 
 async function clickDelete(wrapper: Awaited<ReturnType<typeof mountApp>>['wrapper'], id: number) {
@@ -165,6 +170,7 @@ describe('SettingsPage', () => {
     const f = mockFetch({
       'GET /api/auth/me': { body: me },
       'GET /api/passkeys': { body: PASSKEYS },
+      'GET /api/share-tickets': { body: [] },
       'PUT /api/auth/me/default-ledger': [
         { body: { ledger: { id: 2, name: '実家', role: 'editor' } } },
         { status: 404, body: { error: 'not_found' } },
@@ -207,6 +213,7 @@ describe('SettingsPage', () => {
     mockFetch({
       'GET /api/auth/me': { body: { ...me, default_ledger_id: 3 } },
       'GET /api/passkeys': { body: PASSKEYS },
+      'GET /api/share-tickets': { body: [] },
     })
     const b = await mountApp('/settings/general')
     expect(b.wrapper.find('[data-test="row-menu-3"]').exists()).toBe(false)
@@ -355,7 +362,7 @@ describe('SettingsPage', () => {
 
   it('[covers:web-settings.issue-url-icons] 共有URL・登録URLの発行 button は icon-only（aria-label+title・動作不変）', async () => {
     const f = home({
-      'POST /api/invitations': { status: 201, body: { url: 'https://h/register?token=X', expires_at: 0 } },
+      'POST /api/share-tickets': { status: 201, body: { url: 'https://h/share?token=X', expires_at: 0 } },
       'POST /api/register-invitations': { status: 201, body: { url: 'https://h/register?token=R', expires_at: 0 } },
     })
     const { wrapper } = await mountApp('/settings/auth')
@@ -380,7 +387,7 @@ describe('SettingsPage', () => {
     await wrapper.find('[data-test="register-invite-note"]').setValue('妹')
     await wrapper.find('[data-test="register-invite-submit"]').trigger('click')
     await settle()
-    expect(f.to('POST', '/api/invitations')).toHaveLength(1)
+    expect(f.to('POST', '/api/share-tickets')).toHaveLength(1)
     expect(f.to('POST', '/api/register-invitations')).toHaveLength(1)
   })
 
@@ -392,6 +399,7 @@ describe('SettingsPage', () => {
     mockFetch({
       'GET /api/auth/me': { body: ME },
       'GET /api/passkeys': { body: [] },
+      'GET /api/share-tickets': { body: [] },
     })
     const { wrapper } = await mountApp('/settings/general')
     // open the ledger rename editor through the row menu
@@ -434,9 +442,9 @@ describe('SettingsPage', () => {
 
   it('[covers:web-settings.invite-issue] 共有 dialog から発行（メモ既定は発行日時）・owner の家計簿が無ければ説明文（TASK-46/78）', async () => {
     const f = home({
-      'POST /api/invitations': {
+      'POST /api/share-tickets': {
         status: 201,
-        body: { url: 'https://h/register?token=X', expires_at: Date.UTC(2026, 9, 16, 15, 0) },
+        body: { url: 'https://h/share?token=X', expires_at: Date.UTC(2026, 9, 16, 15, 0) },
       },
     })
     const { wrapper } = await mountApp('/settings/auth')
@@ -461,13 +469,13 @@ describe('SettingsPage', () => {
     await settle()
     // TASK-78: the chosen ledger_id always rides along (ME: ledger 1, the
     // owner membership that is also the default)
-    expect(f.to('POST', '/api/invitations')[0]!.body).toEqual({ role: 'viewer', ledger_id: 1, inviter_note: '妹' })
+    expect(f.to('POST', '/api/share-tickets')[0]!.body).toEqual({ role: 'viewer', ledger_id: 1, inviter_note: '妹' })
     expect(wrapper.find('[data-test="invite-dialog"]').exists()).toBe(false)
     // the issued row shows the URL and the JST expiry (passkey-row style)
     const row = wrapper.find('[data-test="invite-issued"] [data-test="invite-issued-row"]')
     expect(row.exists()).toBe(true)
     expect(row.text()).toContain('妹')
-    expect(row.find('[data-test="invite-issued-url"]').text()).toBe('https://h/register?token=X')
+    expect(row.find('[data-test="invite-issued-url"]').text()).toBe('https://h/share?token=X')
     expect(row.text()).toContain('2026/10/17 00:00')
     cleanup()
 
@@ -478,10 +486,59 @@ describe('SettingsPage', () => {
         body: { ...ME, ledgers: [{ ...ME.ledgers[0]!, role: 'editor' as const }, { ...ME.ledgers[1]! }] },
       },
       'GET /api/passkeys': { body: PASSKEYS },
+      'GET /api/share-tickets': { body: [] },
     })
     const b = await mountApp('/settings/auth')
     expect(b.wrapper.find('[data-test="invite"]').exists()).toBe(false)
     expect(b.wrapper.find('[data-test="invite-forbidden"]').exists()).toBe(true)
+  })
+
+  it('[covers:web-settings.share-tickets-list] open チケット一覧（平文 URL は再表示されない）と失効', async () => {
+    const ticket = {
+      ticket_ref: 'abcd1234',
+      ledger_id: 1,
+      ledger_name: '家計',
+      role: 'viewer' as const,
+      created_at: Date.UTC(2026, 9, 16, 15, 0),
+      expires_at: Date.UTC(2026, 9, 23, 15, 0),
+      inviter_note: '妹',
+    }
+    const f = home({
+      'GET /api/share-tickets': { body: [ticket] },
+      'DELETE /api/share-tickets/abcd1234': { status: 204 },
+    })
+    const { wrapper } = await mountApp('/settings/auth')
+    const list = wrapper.find('[data-test="share-tickets"]')
+    expect(list.exists()).toBe(true)
+    expect(list.text()).toContain('再表示できません')
+    const row = list.find('[data-test="share-ticket-row"]')
+    expect(row.text()).toContain('妹')
+    expect(row.text()).toContain('家計')
+    expect(row.text()).toContain('閲覧のみ')
+    expect(row.text()).toContain('2026/10/17 00:00')
+    expect(row.text()).toContain('2026/10/24 00:00')
+    expect(row.text()).not.toContain('token=')
+
+    // revoke follows the passkey-row delete pattern: icon button, then an
+    // inline confirm; the row leaves the list only after the DELETE lands
+    const revoke = row.find('[data-test="share-ticket-revoke"]')
+    expect(revoke.text()).toBe('')
+    expect(revoke.attributes('aria-label')).toContain('失効')
+    await revoke.trigger('click')
+    await settle()
+    expect(row.text()).toContain('失効しますか？')
+    expect(f.to('DELETE', '/api/share-tickets/abcd1234')).toHaveLength(0)
+    await row.find('[data-test="share-ticket-revoke-confirm"]').trigger('click')
+    await settle()
+    expect(f.to('DELETE', '/api/share-tickets/abcd1234')).toHaveLength(1)
+    expect(wrapper.find('[data-test="share-ticket-row"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="share-tickets"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-settings.register-invite-no-share] 登録の招待カードは家計簿を共有しない旨を示す', async () => {
+    home()
+    const { wrapper } = await mountApp('/settings/auth')
+    expect(wrapper.find('[data-test="register-invite"]').text()).toContain('家計簿は共有されません')
   })
 
   it('[covers:web-settings.invite-select-ledger] 選択肢は owner の家計簿のみ・初期選択は既定（owner のとき）・既定が owner でなければ先頭（TASK-78）', async () => {
@@ -497,7 +554,7 @@ describe('SettingsPage', () => {
     const f = mockFetch({
       'GET /api/auth/me': { body: me },
       'GET /api/passkeys': { body: PASSKEYS },
-      'POST /api/invitations': { status: 201, body: { url: 'https://h/register?token=Y', expires_at: 0 } },
+      'POST /api/share-tickets': { status: 201, body: { url: 'https://h/register?token=Y', expires_at: 0 } },
     })
     const { wrapper } = await mountApp('/settings/auth')
     await wrapper.find('[data-test="invite-issue"]').trigger('click')
@@ -512,7 +569,7 @@ describe('SettingsPage', () => {
     await select.setValue(1)
     await wrapper.find('[data-test="invite-dialog"] [data-test="invite-submit"]').trigger('click')
     await settle()
-    expect((f.to('POST', '/api/invitations')[0]!.body as { ledger_id: number }).ledger_id).toBe(1)
+    expect((f.to('POST', '/api/share-tickets')[0]!.body as { ledger_id: number }).ledger_id).toBe(1)
     await wrapper.unmount()
     cleanup()
 
@@ -521,6 +578,7 @@ describe('SettingsPage', () => {
     mockFetch({
       'GET /api/auth/me': { body: { ...me, default_ledger_id: 3 } },
       'GET /api/passkeys': { body: PASSKEYS },
+      'GET /api/share-tickets': { body: [] },
     })
     const b = await mountApp('/settings/auth')
     await b.wrapper.find('[data-test="invite-issue"]').trigger('click')
@@ -534,6 +592,7 @@ describe('SettingsPage', () => {
     mockFetch({
       'GET /api/auth/me': { body: ME },
       'GET /api/passkeys': { body: PASSKEYS },
+      'GET /api/share-tickets': { body: [] },
       'POST /api/register-invitations': { status: 201, body: { url: 'https://h/register?token=R', expires_at: 0 } },
     })
     const { wrapper } = await mountApp('/settings/auth')
@@ -575,7 +634,7 @@ describe('SettingsPage', () => {
 
   it('[covers:web-settings.form-dialog] Escape・外側押下・submit 成功・やめるで閉じ、開いた時は先頭 field・閉じたらトリガへ focus（TASK-46）', async () => {
     home({
-      'POST /api/invitations': { status: 201, body: { url: 'https://h/register?token=X', expires_at: 0 } },
+      'POST /api/share-tickets': { status: 201, body: { url: 'https://h/share?token=X', expires_at: 0 } },
     })
     const { wrapper } = await mountApp('/settings/auth', { attach: true })
     const trigger = wrapper.find('[data-test="invite-issue"]')

@@ -33,6 +33,13 @@ async function finish(credential: AssertionJson): Promise<void> {
   // route flip in the same frame, and the router guard sees session.me and
   // skips its own /me round trip.
   await session.loadMe()
+  // A share ticket stashed by /share (kb_share_token) sends the login back
+  // to the accept screen, where joining still needs its own explicit
+  // [参加する] press. The OAuth `req` round trip above wins over this.
+  if (!req && sessionStorage.getItem('kb_share_token')) {
+    await router.replace('/share')
+    return
+  }
   await router.replace('/')
 }
 

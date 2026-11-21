@@ -18,7 +18,7 @@ use sqlx::{Connection, SqlitePool};
 
 use crate::auth::invitation::{self, InvitationKind};
 use crate::auth::tokens::{normalize_account_number, to_hex};
-use crate::auth::{audit, register_invitation, session};
+use crate::auth::{audit, register_invitation, session, share_ticket};
 use crate::config::{Config, ResolvedAuth};
 
 // ---------------------------------------------------------------------------
@@ -1096,8 +1096,16 @@ async fn token_list(
         Some(TokenKind::Register) => Vec::new(),
         _ => invitation::list(pool, kind.and_then(|k| k.to_invitation_kind()), user).await?,
     };
-    // merged view, newest first (both tables share the created_at clock)
-    let mut merged: Vec<(i64, String)> = Vec::with_capacity(rows.len() + register_rows.len());
+    // Share tickets join the merged list only in the unfiltered view
+    // (they have no TokenKind of their own; --kind / --user stay scoped to
+    // the invitation tables, as with register rows).
+    let share_rows = match (kind, user) {
+        (None, None) => share_ticket::list(pool).await?,
+        _ => Vec::new(),
+    };
+    // merged view, newest first (all tables share the created_at clock)
+    let mut merged: Vec<(i64, String)> =
+        Vec::with_capacity(rows.len() + register_rows.len() + share_rows.len());
     for r in &rows {
         merged.push((
             r.created_at,
@@ -1132,6 +1140,25 @@ async fn token_list(
             ),
         ));
     }
+    for r in &share_rows {
+        merged.push((
+            r.created_at,
+            format!(
+                "{prefix} share ledger={ledger} role={role} issued_by={issuer} created={created} expires={expires} used={used} note=inviter: {note}",
+                prefix = &to_hex(&r.token_hash)[..8],
+                ledger = r.ledger_id,
+                role = r.role,
+                issuer = r.created_by,
+                created = ms_to_jst(r.created_at),
+                expires = ms_to_jst(r.expires_at),
+                used = r
+                    .accepted_at
+                    .map(ms_to_jst)
+                    .unwrap_or_else(|| "unused".into()),
+                note = r.inviter_note.as_deref().unwrap_or("-"),
+            ),
+        ));
+    }
     merged.sort_by_key(|(created_at, _)| std::cmp::Reverse(*created_at));
     for (_, line) in &merged {
         writeln!(out, "{line}")?;
@@ -1156,19 +1183,24 @@ async fn token_revoke(
     }
     let inv = invitation::hashes_by_prefix(pool, &upper).await?;
     let reg = register_invitation::hashes_by_prefix(pool, &upper).await?;
-    let hash = match (inv.as_slice(), reg.as_slice()) {
-        ([h], []) => {
+    let share = share_ticket::hashes_by_prefix(pool, &upper).await?;
+    let hash = match (inv.as_slice(), reg.as_slice(), share.as_slice()) {
+        ([h], [], []) => {
             invitation::revoke_by_hash(pool, h, now).await?;
             h.clone()
         }
-        ([], [h]) => {
+        ([], [h], []) => {
             register_invitation::revoke_by_hash(pool, h, now).await?;
             h.clone()
         }
-        ([], []) => anyhow::bail!("no token matches prefix {token_id:?}"),
-        (i, r) => anyhow::bail!(
+        ([], [], [h]) => {
+            share_ticket::revoke_by_hash(pool, h, now).await?;
+            h.clone()
+        }
+        ([], [], []) => anyhow::bail!("no token matches prefix {token_id:?}"),
+        (i, r, s) => anyhow::bail!(
             "prefix {token_id:?} matches {} tokens; use more characters",
-            i.len() + r.len()
+            i.len() + r.len() + s.len()
         ),
     };
     writeln!(out, "deleted token {}", &to_hex(&hash)[..8])?;

@@ -53,6 +53,7 @@
 | `backend/tests/auth_register.rs` | 結合 | 登録フロー（setup/invite/recovery）の token 検証・kind 別完了 tx・ceremony 1回限り |
 | `backend/tests/auth_login_session.rs` | 結合 | ログイン（不正・counter 逆行）・web session・CSRF・同一 credential の並行ログイン（test hook で BEGIN IMMEDIATE 直前に停止: counter 巻き戻り防止・停止中の user 無効化。`test-hooks` feature 必須のケースあり） [TASK-147] |
 | `backend/tests/auth_passkeys.rs` | 結合 | パスキー管理（追加は step-up 不要 [TASK-46]・削除は step-up 必須）・step-up 再認証（counter 鮮度・tx 集約・ceremony 1 回限り [TASK-154]）・web からの招待発行（owner 検証・ledger 指定 [TASK-78]） |
+| `backend/tests/share_tickets.rs` | 結合 | 家計簿共有の参加チケット（発行は owner のみ・info は消費しない・accept は所属付与のみで格上げのみ／格下げなし・一覧と失効・期限切れは invalid_token・POST /api/invitations の互換委譲・旧 invite の share_migrated） |
 | `backend/tests/admin_cli.rs` | 結合 | 運用者 CLI Phase A（user/token/passkey/disable・audit） |
 | `backend/tests/oauth_flow.rs` | 結合 | OAuth メタデータ・authorize・同意・decision（CIMD/JWKS はローカルモック） |
 | `backend/tests/oauth_token.rs` | 結合 | 認可コード交換・client 認証（private_key_jwt・JWKS キャッシュ）・revoke |

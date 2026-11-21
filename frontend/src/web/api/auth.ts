@@ -46,6 +46,39 @@ export interface RegisterInfo {
   ledger_name?: string | null
   role?: LedgerRole | null
   user_display_name?: string | null
+  /** Legacy invite only: ledger sharing has moved to share tickets
+   * (/share), so an already-registered visitor is pointed at a fresh
+   * share URL instead of this registration form. */
+  share_migrated?: boolean
+}
+
+/** POST /api/share/info: what a share ticket joins, and who is asking.
+ * `session` is the caller's own display name when logged in (null when
+ * not); `already_member` says the caller already belongs to the ledger. */
+export interface ShareInfo {
+  ledger_name: string
+  role: 'editor' | 'viewer'
+  issuer_display_name: string
+  expires_at: number
+  session: { display_name: string } | null
+  already_member: boolean
+}
+
+export interface ShareAcceptResult {
+  ledger: { id: number; name: string; role: LedgerRole }
+  outcome: 'joined' | 'already_member'
+}
+
+/** One open share ticket of the caller (GET /api/share-tickets). The plain
+ * token is never in here — it was shown once at issue time. */
+export interface ShareTicket {
+  ticket_ref: string
+  ledger_id: number
+  ledger_name: string
+  role: 'editor' | 'viewer'
+  created_at: number
+  expires_at: number
+  inviter_note: string | null
 }
 
 export interface ConsentInfo {
@@ -95,11 +128,8 @@ export const authApi = {
       displayName === undefined ? { token } : { token, display_name: displayName },
       pre,
     ),
-  registerFinish: (body: {
-    credential: AttestationJson
-    label?: string
-    use_invited_ledger_as_default?: boolean
-  }) => request<Record<string, never>>('POST', '/api/webauthn/register/finish', body, pre),
+  registerFinish: (body: { credential: AttestationJson; label?: string }) =>
+    request<Record<string, never>>('POST', '/api/webauthn/register/finish', body, pre),
   loginStart: (req?: string) =>
     request<RequestChallengeJson>('POST', '/api/webauthn/login/start', req ? { req } : {}, pre),
   loginFinish: (credential: AssertionJson) =>
@@ -122,14 +152,22 @@ export const authApi = {
   renamePasskey: (id: number, label: string) =>
     request<Record<string, never>>('PATCH', `/api/passkeys/${id}`, { label }),
   deletePasskey: (id: number) => request<void>('DELETE', `/api/passkeys/${id}`),
-  // TASK-78: the target ledger is chosen at issue time (owned ledgers only;
-  // the backend checks ownership). The note is capped at 200 chars.
-  createInvitation: (role: 'editor' | 'viewer', ledgerId: number, inviterNote?: string) =>
+  // Ledger share tickets: the membership half of sharing, split from
+  // registration. info is auth-optional (it reports the caller's session
+  // when one exists); accept needs the session and is the only call that
+  // consumes the ticket. Both take the plain token in the POST body only.
+  shareInfo: (token: string) => request<ShareInfo>('POST', '/api/share/info', { token }, pre),
+  shareAccept: (token: string) =>
+    request<ShareAcceptResult>('POST', '/api/share/accept', { token }, pre),
+  createShareTicket: (role: 'editor' | 'viewer', ledgerId: number, inviterNote?: string) =>
     request<IssuedInvitation>(
       'POST',
-      '/api/invitations',
+      '/api/share-tickets',
       inviterNote ? { role, ledger_id: ledgerId, inviter_note: inviterNote } : { role, ledger_id: ledgerId },
     ),
+  listShareTickets: () => request<ShareTicket[]>('GET', '/api/share-tickets'),
+  deleteShareTicket: (ticketRef: string) =>
+    request<void>('DELETE', `/api/share-tickets/${encodeURIComponent(ticketRef)}`),
   // Registration-only invitation (TASK-32): any active user, the note is
   // mandatory, no ledger join. Separate endpoint from /api/invitations.
   createRegisterInvitation: (inviterNote: string) =>

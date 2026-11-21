@@ -24,7 +24,7 @@ budget-book の永続データ構造の正本。テーブル構成・制約・dr
 | 検索・集計 | receipt_items_fts / v_item_facts | 品目の全文検索索引、集計用ファクトビュー |
 | 監査 | audit_events | 変更前後の記録 |
 
-migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql` / `0011_register_invitations.sql` / `0012_revoke_superseded_refresh_children.sql`。
+migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.sql` / `0003_catalog.sql` / `0004_images_receipts.sql` / `0005_drafts.sql` / `0006_search.sql` / `0007_audit.sql` / `0008_ledger_ui.sql` / `0009_labels.sql` / `0010_drafts_batch.sql` / `0011_register_invitations.sql` / `0012_revoke_superseded_refresh_children.sql` / `0013_ledger_share_tickets.sql`。
 
 - 0001 はユーザー・家計簿（users のアカウント特定用の列を含む）。
 - 0002 は認証・認可・招待（WebAuthn、web セッション、invitations、OAuth、アカウント特定・回復依頼のテーブル、`oauth_grants.active_ledger_id` の越境防止トリガと ledger_members の所属変更トリガ）。0001 の users / ledgers / ledger_members を参照するため 0001 の後に置く。
@@ -33,6 +33,7 @@ migration は次の粒度で分割する: `0001_users_ledgers.sql` / `0002_auth.
 - 0010 は一括作成（`drafts.batch_id` の追加と部分索引 `drafts_batch`。TASK-18）。
 - 0011 は登録招待（`register_invitations`。CREATE TABLE のみ。TASK-32）。
 - 0012 は既存データ補正のみ（猶予内再発行で差し替えられたが失効していなかった旧の子 refresh 行に `revoked_at` を設定。テーブル変更なし。TASK-140）。
+- 0013 は家計簿の参加チケット（`ledger_share_tickets`。CREATE TABLE のみ）。
 
 ## 3. SQLite 共通規則
 
@@ -365,6 +366,7 @@ ledger 作成時に投入する。2階層（大分類 / 小分類）。小分類
 | 認証系（auth code / access・refresh token / session / jti / ceremony） | 期限 + 1日で削除（jti・ceremony は期限で削除）。ただし失効済み（`revoked_at` 非NULL）の refresh token は、属する grant が有効（未失効かつ絶対期限内）な間は残し、grant が失効・絶対期限切れ（または grant 行なし）になってから期限 + 1日の規則で削除する（差し替え済みの旧の子の提示を reuse として検知し続けるため。TASK-140）。grant は失効・期限切れから30日で削除（CASCADE でトークンも削除） |
 | invitations | 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
 | register_invitations | invitations と同じ規則: 未使用は期限 + 1日で削除。使用済みは使用から30日で削除 |
+| ledger_share_tickets | invitations と同じ規則: 未受諾は期限 + 1日で削除。受諾済みは受諾から30日で削除 |
 | oauth_authorization_requests | 期限（10分）で削除 |
 | user_subject_hashes | `last_seen_at` から400日で削除 |
 | recovery_requests | `ip_hash` は作成24時間後に NULL 化。open は作成から90日で自動 `rejected`。close から180日で削除（候補は CASCADE） |
@@ -395,6 +397,8 @@ DELETE FROM invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
                            OR (used_at IS NOT NULL AND used_at < :now - 30*86400000);
 DELETE FROM register_invitations WHERE (used_at IS NULL AND expires_at < :now - 86400000)
                                    OR (used_at IS NOT NULL AND used_at < :now - 30*86400000);
+DELETE FROM ledger_share_tickets WHERE (accepted_at IS NULL AND expires_at < :now - 86400000)
+                                   OR (accepted_at IS NOT NULL AND accepted_at < :now - 30*86400000);
 DELETE FROM oauth_authorization_requests WHERE expires_at < :now;
 DELETE FROM user_subject_hashes WHERE last_seen_at < :now - 400*86400000;
 UPDATE recovery_requests SET ip_hash = NULL WHERE ip_hash IS NOT NULL AND created_at < :now - 86400000;
@@ -512,6 +516,7 @@ GROUP BY 1, 2;
 | web_sessions | cookie はランダム32byte、DB は SHA-256 hash。idle 期限・絶対期限・`revoked_at`。`auth_at` は最後のパスキー認証時刻（ログイン時 = `created_at`、step-up で更新） |
 | invitations | setup / invite / recovery の1回限り token（hash 保存）。kind ごとに必須列を CHECK で固定。setup は `operator_note` 必須、`inviter_note` は invite のみ。未使用の recovery token は user ごとに1本（部分 UNIQUE。失効は行削除）。使用は `used_at` の条件付き UPDATE で二重使用を防ぐ |
 | register_invitations | web から発行される登録専用の1回限り token（hash 保存）。`created_by`（発行者・CASCADE）・`inviter_note` 必須。未使用は発行者ごとに5本（アプリ側検証）。失効は行削除。使用は `used_at` の条件付き UPDATE |
+| ledger_share_tickets | web から発行される家計簿参加専用の1回限り token（hash 保存）。対象 `ledger_id`・`role`（editor / viewer）・`created_by`（発行者・CASCADE）を持つ。アカウントは作らない。消費は参加受諾時の `accepted_at` の条件付き UPDATE のみで、照会・開封では消費しない。失効は行削除 |
 | oauth_clients | CIMD 文書キャッシュ（PK = client_id URL）。`expires_at` は Cache-Control 由来（上限あり） |
 | oauth_jwks_cache | client の JWKS キャッシュ。`kid` 不一致時は最短間隔で抑制しつつ即時再取得 |
 | oauth_authorization_requests | 検証済み authorize パラメータ（PK = request ID の hash）。TTL 10分。同意画面表示時に `user_id` を設定し、決定 POST のセッション user と一致を必須とする。同意 POST で削除 |
@@ -553,7 +558,7 @@ refresh rotation（`BEGIN IMMEDIATE` 内。client 認証と jti 登録は tx 前
 
 ## 15. DDL
 
-全 migration（0001〜0011）の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。0012 はデータ補正のみでスキーマを変えないため、連結表記に含めず末尾に別記する。
+全 migration（0001〜0013）の連結表記（0002 の `webauthn_ceremonies.authz_request_hash` は同じ migration 内で後に定義する `oauth_authorization_requests` を参照する。SQLite の FK は DML 時に検査されるため定義順の制約はない）。時刻列はすべて unix ms UTC（INTEGER）、金額はすべて円（INTEGER）。ledger 一致トリガは子テーブルの BEFORE INSERT と BEFORE UPDATE OF <参照列>, ledger_id の両方に展開して記載する。0012 はデータ補正のみでスキーマを変えないため、連結表記に含めず末尾に別記する。
 
 ### 0001 users / ledgers
 ```sql
@@ -1293,4 +1298,27 @@ WHERE used_at IS NULL AND revoked_at IS NULL
               WHERE tip.grant_id = oauth_refresh_tokens.grant_id
                 AND tip.used_at IS NULL AND tip.revoked_at IS NULL
                 AND tip.token_hash IN (SELECT child_hash FROM oauth_refresh_tokens WHERE child_hash IS NOT NULL));
+```
+
+### 0013 ledger share tickets
+
+```sql
+-- web-issued ledger-join tickets for already registered users. Separate
+-- from invitations (setup / invite / recovery) and register_invitations
+-- (identity only): accepting a ticket only adds a ledger_members row for
+-- the logged-in user; it never creates a user.
+CREATE TABLE ledger_share_tickets (
+  token_hash   BLOB    PRIMARY KEY,               -- SHA-256(plaintext token); plaintext is never stored
+  ledger_id    INTEGER NOT NULL REFERENCES ledgers(id) ON DELETE CASCADE,
+  role         TEXT    NOT NULL,                  -- editor / viewer (app-side enum; owner is never issued)
+  created_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- issuer (ledger owner)
+  inviter_note TEXT,                              -- issuer memo (optional, 200 chars max)
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  accepted_at  INTEGER,                           -- join confirmed at (never set by info / open)
+  accepted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL  -- accepting user
+) STRICT, WITHOUT ROWID;
+CREATE INDEX ledger_share_tickets_expires ON ledger_share_tickets(expires_at);
+CREATE INDEX ledger_share_tickets_issuer_open
+  ON ledger_share_tickets(created_by) WHERE accepted_at IS NULL;
 ```

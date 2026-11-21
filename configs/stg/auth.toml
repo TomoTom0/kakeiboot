@@ -53,6 +53,8 @@ recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 # register invitation (web, any active user): 168 hours (TASK-46).
 register_ttl_hours = 168
+# ledger share ticket (web, ledger owner): 168 hours (share design D-J4).
+share_ttl_hours = 168
 
 # --- rate limits (spec_auth.md section 10-1; limiter wiring is a later phase) ---
 

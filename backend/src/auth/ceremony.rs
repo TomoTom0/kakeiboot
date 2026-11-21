@@ -350,12 +350,18 @@ pub async fn register_finish(
             .clone()
             .ok_or(RegisterFinishError::Invariant)?;
         let handle = Uuid::from_slice(&handle).map_err(|_| RegisterFinishError::Invariant)?;
+        // Share design section 5 (D-D1): `use_invited_ledger_as_default`
+        // is accepted for request compatibility during the migration
+        // window but ignored server-side — a new user's default is always
+        // their personal ledger; the default changes only through
+        // PUT /api/auth/me/default-ledger.
+        let _ = use_invited_ledger_as_default;
         create_user_with_personal_ledger(
             &mut tx,
             &handle,
             &display_name,
             &reg.user_origin(),
-            use_invited_ledger_as_default,
+            false,
             max_ledger_name_chars,
             now,
         )
