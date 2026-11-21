@@ -106,69 +106,36 @@ async function goHome(): Promise<void> {
       />
     </div>
     <h1>家計簿への参加</h1>
-    <p v-if="loading">
-      確認しています...
-    </p>
-    <p
-      v-else-if="noToken"
-      class="msg msg-error"
-      data-test="no-token"
-    >
-      共有 URL が確認できませんので、元の共有 URL から開き直してください。
-    </p>
-    <p
-      v-else-if="invalid"
-      class="msg msg-error"
-      data-test="invalid"
-    >
-      共有 URL が無効か、期限切れか、使用済みです。
-    </p>
-    <div
-      v-else-if="result"
-      data-test="done"
-    >
-      <p v-if="result.outcome === 'joined'">
-        家計簿「{{ result.ledger.name }}」に参加しました。
+    <div class="card auth-card">
+      <p v-if="loading">
+        読み込んでいます...
       </p>
       <p
-        v-else
-        data-test="already-member"
+        v-else-if="noToken"
+        class="msg msg-error"
+        data-test="no-token"
       >
-        家計簿「{{ result.ledger.name }}」には既に参加しています。
+        共有 URL が確認できませんので、元の共有 URL から開き直してください。
       </p>
-      <button
-        class="btn btn-primary btn-block"
-        data-test="go-home"
-        @click="goHome"
+      <p
+        v-else-if="invalid"
+        class="msg msg-error"
+        data-test="invalid"
       >
-        ホームへ
-      </button>
-    </div>
-    <div
-      v-else-if="info"
-      data-test="share-info"
-    >
-      <dl class="kv">
-        <dt>家計簿</dt>
-        <dd data-test="ledger-name">
-          {{ info.ledger_name }}
-        </dd>
-        <dt>権限</dt>
-        <dd data-test="role">
-          {{ ROLE_LABEL[info.role] ?? info.role }}
-        </dd>
-        <dt>発行者</dt>
-        <dd data-test="issuer">
-          {{ info.issuer_display_name }}
-        </dd>
-        <dt>期限</dt>
-        <dd data-test="expires">
-          {{ formatDateTime(info.expires_at) }}
-        </dd>
-      </dl>
-      <template v-if="info.already_member">
-        <p data-test="already-member">
-          既にこの家計簿に参加しています。
+        共有 URL が無効か、期限切れか、使用済みです。
+      </p>
+      <div
+        v-else-if="result"
+        data-test="done"
+      >
+        <p v-if="result.outcome === 'joined'">
+          家計簿「{{ result.ledger.name }}」に参加しました。
+        </p>
+        <p
+          v-else
+          data-test="already-member"
+        >
+          家計簿「{{ result.ledger.name }}」には既に参加しています。
         </p>
         <button
           class="btn btn-primary btn-block"
@@ -177,37 +144,71 @@ async function goHome(): Promise<void> {
         >
           ホームへ
         </button>
-      </template>
-      <template v-else-if="info.session">
-        <p data-test="join-as">
-          {{ info.session.display_name }} として参加します
+      </div>
+      <div
+        v-else-if="info"
+        data-test="share-info"
+      >
+        <p class="lead">
+          <strong data-test="ledger-name">{{ info.ledger_name }}</strong> への参加
         </p>
-        <button
-          class="btn btn-primary btn-block"
-          :disabled="busy"
-          data-test="accept"
-          @click="accept"
-        >
-          参加する
-        </button>
-      </template>
-      <template v-else>
-        <button
-          class="btn btn-primary btn-block"
-          data-test="login"
-          @click="goLogin"
-        >
-          ログインして参加
-        </button>
-      </template>
+        <dl class="kv">
+          <dt>権限</dt>
+          <dd data-test="role">
+            {{ ROLE_LABEL[info.role] ?? info.role }}
+          </dd>
+          <dt>発行者</dt>
+          <dd data-test="issuer">
+            {{ info.issuer_display_name }}
+          </dd>
+          <dt>期限</dt>
+          <dd data-test="expires">
+            {{ formatDateTime(info.expires_at) }}
+          </dd>
+        </dl>
+        <template v-if="info.already_member">
+          <p data-test="already-member">
+            既にこの家計簿に参加しています。
+          </p>
+          <button
+            class="btn btn-primary btn-block"
+            data-test="go-home"
+            @click="goHome"
+          >
+            ホームへ
+          </button>
+        </template>
+        <template v-else-if="info.session">
+          <p data-test="join-as">
+            {{ info.session.display_name }} として参加します
+          </p>
+          <button
+            class="btn btn-primary btn-block"
+            :disabled="busy"
+            data-test="accept"
+            @click="accept"
+          >
+            参加する
+          </button>
+        </template>
+        <template v-else>
+          <button
+            class="btn btn-primary btn-block"
+            data-test="login"
+            @click="goLogin"
+          >
+            ログインして参加
+          </button>
+        </template>
+      </div>
+      <p
+        v-if="error"
+        class="msg msg-error"
+        role="alert"
+        data-test="error"
+      >
+        {{ error }}
+      </p>
     </div>
-    <p
-      v-if="error"
-      class="msg msg-error"
-      role="alert"
-      data-test="error"
-    >
-      {{ error }}
-    </p>
   </section>
 </template>
