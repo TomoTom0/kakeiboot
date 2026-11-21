@@ -2295,6 +2295,7 @@ button.row-seg:focus-visible {
    the recipient can do as a badge), the joining account is an avatar row,
    and the expiry stays a small .auth-note at the very bottom */
 .share-title { text-wrap: balance; }
+.share-nowrap { white-space: nowrap; }
 .share-ledger {
   display: flex;
   align-items: center;

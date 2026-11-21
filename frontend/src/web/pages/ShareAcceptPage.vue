@@ -111,7 +111,7 @@ async function goHome(): Promise<void> {
       v-if="info"
       class="share-title"
     >
-      <span data-test="issuer">{{ info.issuer_display_name }}</span> さんが家計簿を共有しました
+      <span data-test="issuer">{{ info.issuer_display_name }}</span> さんが<span class="share-nowrap">家計簿</span>を共有しました
     </h1>
     <h1
       v-else
