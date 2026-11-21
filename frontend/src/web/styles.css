@@ -2289,10 +2289,65 @@ button.row-seg:focus-visible {
 .auth-card h2 { margin-top: 1rem; }
 .actions-fill .btn { flex: 1; min-height: 48px; }
 .auth-note { margin-top: 1.5rem; font-size: 0.85rem; color: var(--bb-muted); }
-/* share accept (/share): the target ledger name is the hero of the card —
-   the largest text on the screen, above what the recipient can do and the
-   button; the expiry stays a small .auth-note at the very bottom */
-.share-ledger-name { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.25rem; }
+/* share accept (/share): the screen is composed, not written out — the
+   invitation sentence is the title (balanced wrapping, never an orphan
+   line), the ledger itself is a visual panel (ledger mark + name + what
+   the recipient can do as a badge), the joining account is an avatar row,
+   and the expiry stays a small .auth-note at the very bottom */
+.share-title { text-wrap: balance; }
+.share-ledger {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem;
+  margin-bottom: 1.1rem;
+  border-radius: var(--bb-radius-lg);
+  background: var(--bb-surface-2);
+  text-align: left;
+}
+.share-ledger-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 54px;
+  height: 54px;
+  border-radius: 15px;
+  background: var(--ledger-teal);
+  color: #fff;
+}
+.share-ledger-body { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; min-width: 0; }
+.share-ledger-kind { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; color: var(--bb-muted); }
+/* the name is one unit: it wraps at spaces / punctuation, and only ever
+   breaks inside a word when the alternative is overflowing the card */
+.share-ledger-name { font-size: 1.3rem; font-weight: 700; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
+.share-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+  background: var(--bb-surface);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.share-role .icon { color: var(--bb-accent); }
+.share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
+.share-join-as-avatar { width: 30px; height: 30px; font-size: 0.8rem; }
+.share-expiry { margin-top: 1.1rem; }
+.share-done { text-align: center; }
+.share-done-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0.5rem auto 1rem;
+  border-radius: 50%;
+  background: var(--bb-accent-soft);
+  color: var(--bb-accent);
+}
+.share-done .btn { margin-top: 1rem; }
 
 /* ------------------------------------------------------- usage (使い方) */
 

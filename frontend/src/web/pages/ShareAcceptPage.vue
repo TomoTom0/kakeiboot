@@ -29,6 +29,12 @@ const token = queryToken || sessionStorage.getItem(SHARE_TOKEN_KEY) || ''
 // label: editor -> 編集できます / viewer -> 見るだけです.
 const ROLE_CAPABILITY: Record<string, string> = { editor: '編集できます', viewer: '見るだけです' }
 
+// First character of a display name, for the avatar circle of the
+// "joining as" row (same initial-letter grammar as .avatar).
+function initialOf(name: string): string {
+  return [...name][0] ?? ''
+}
+
 const info = ref<ShareInfo | null>(null)
 const result = ref<ShareAcceptResult | null>(null)
 const loading = ref(true)
@@ -101,16 +107,16 @@ async function goHome(): Promise<void> {
     <p class="auth-tagline">
       レシートを送るだけの家計簿
     </p>
-    <div class="auth-hero">
-      <AppIcon
-        name="book"
-        :size="48"
-      />
-    </div>
-    <h1 v-if="info">
+    <h1
+      v-if="info"
+      class="share-title"
+    >
       <span data-test="issuer">{{ info.issuer_display_name }}</span> さんが家計簿を共有しました
     </h1>
-    <h1 v-else>
+    <h1
+      v-else
+      class="share-title"
+    >
       家計簿の共有
     </h1>
     <div class="card auth-card">
@@ -133,8 +139,16 @@ async function goHome(): Promise<void> {
       </p>
       <div
         v-else-if="result"
+        class="share-done"
         data-test="done"
       >
+        <span
+          class="share-done-mark"
+          aria-hidden="true"
+        ><AppIcon
+          name="check"
+          :size="30"
+        /></span>
         <p v-if="result.outcome === 'joined'">
           家計簿『<strong>{{ result.ledger.name }}</strong>』に参加しました。
         </p>
@@ -156,12 +170,30 @@ async function goHome(): Promise<void> {
         v-else-if="info"
         data-test="share-info"
       >
-        <p class="share-ledger-name">
-          家計簿『<strong data-test="ledger-name">{{ info.ledger_name }}</strong>』
-        </p>
-        <p data-test="role">
-          {{ ROLE_CAPABILITY[info.role] ?? info.role }}
-        </p>
+        <div class="share-ledger">
+          <span
+            class="share-ledger-mark"
+            aria-hidden="true"
+          ><AppIcon
+            name="book"
+            :size="28"
+          /></span>
+          <div class="share-ledger-body">
+            <span class="share-ledger-kind">家計簿</span>
+            <strong
+              class="share-ledger-name"
+              data-test="ledger-name"
+            >{{ info.ledger_name }}</strong>
+            <span
+              class="share-role"
+              data-test="role"
+            ><AppIcon
+              v-if="info.role === 'editor'"
+              name="pencil"
+              :size="13"
+            />{{ ROLE_CAPABILITY[info.role] ?? info.role }}</span>
+          </div>
+        </div>
         <template v-if="info.already_member">
           <p data-test="already-member">
             既にこの家計簿に参加しています。
@@ -175,7 +207,14 @@ async function goHome(): Promise<void> {
           </button>
         </template>
         <template v-else-if="info.session">
-          <p data-test="join-as">
+          <p
+            class="share-join-as"
+            data-test="join-as"
+          >
+            <span
+              class="avatar share-join-as-avatar"
+              aria-hidden="true"
+            >{{ initialOf(info.session.display_name) }}</span>
             {{ info.session.display_name }} として参加します
           </p>
           <button
@@ -197,7 +236,7 @@ async function goHome(): Promise<void> {
           </button>
         </template>
         <p
-          class="auth-note"
+          class="auth-note share-expiry"
           data-test="expires"
         >
           この招待は {{ formatDate(info.expires_at) }} まで有効です
