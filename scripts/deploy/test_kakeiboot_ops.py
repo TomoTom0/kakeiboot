@@ -470,14 +470,17 @@ class TestHealthz(unittest.TestCase):
 # The backup units are system units now (2026-11-17 gt430 system-service
 # conversion; install-units matches the host conversion script's end state):
 # /etc destinations + the target-side staging dir, asserted as literals so the
-# tests do not import the values they check.
+# tests do not import the values they check. The target staging dir is derived
+# per invocation from the local staged dir name (BACKUP_UNIT_STAGE_PREFIX +
+# the staged dir basename), so UNIT_STAGE_DIR below is the derived value for
+# the fixtures' "units-render" staged dir -- never a shared fixed path.
 SYSTEMD_DIR = REPO_ROOT / "scripts" / "systemd"
 UNIT_IN_PATH = SYSTEMD_DIR / "kakeiboot-backup@.service.in"
 UNIT_TIMER_PATH = SYSTEMD_DIR / "kakeiboot-backup@.timer"
 SYSTEM_UNIT_DIR = "/etc/systemd/system"
 POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
 POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
-UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install"
+UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install-units-render"
 SUDO_INSTALL = ["sudo", "install", "-o", "root", "-g", "root", "-m", "644"]
 
 # Same shape as the repo .in source (D-2): leading no-direct-scp comment,
@@ -676,13 +679,13 @@ class TestRenderUnit(unittest.TestCase):
 # -> sudo install service+timer+polkit rule under /etc -> system daemon-reload
 # -> enable --now both timers; no user-scope remnant; no --env argument
 class TestInstallUnitsPlan(unittest.TestCase):
-    STAGED_DIR = "/tmp/kakeiboot-units-render"
+    STAGED_DIR = "/tmp/units-render"
 
     def test_local_plan_installs_system_units_with_sudo(self) -> None:
         from kakeiboot_ops import build_install_units_commands
 
         cmds = build_install_units_commands(local_cfg(), self.STAGED_DIR)
-        self.assertEqual(len(cmds), 8)
+        self.assertEqual(len(cmds), 9)
         (
             mkdir,
             stage_rsync,
@@ -692,6 +695,7 @@ class TestInstallUnitsPlan(unittest.TestCase):
             reload_cmd,
             enable_stg,
             enable_prod,
+            cleanup,
         ) = cmds
         # the target-side staging dir may not exist on a fresh runtime host, so
         # mkdir -p leads; sudo install reads a path on the target, so the staged
@@ -734,6 +738,9 @@ class TestInstallUnitsPlan(unittest.TestCase):
             enable_prod,
             ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@prod.timer"],
         )
+        # the per-invocation target staging dir is removed once the installs
+        # and enables are done, so no 0700 dir survives for the next operator
+        self.assertEqual(cleanup, ["rm", "-rf", UNIT_STAGE_DIR])
         for cmd in cmds:
             # system form only: the user unit dir and --user must be gone
             joined = " ".join(cmd)
@@ -745,6 +752,7 @@ class TestInstallUnitsPlan(unittest.TestCase):
         from kakeiboot_ops import build_install_units_commands
 
         cmds = build_install_units_commands(ssh_cfg(), self.STAGED_DIR)
+        self.assertEqual(len(cmds), 9)
         (
             mkdir,
             stage_rsync,
@@ -754,6 +762,7 @@ class TestInstallUnitsPlan(unittest.TestCase):
             reload_cmd,
             enable_stg,
             enable_prod,
+            cleanup,
         ) = cmds
         self.assertEqual(mkdir, ["ssh", *SSH_OPTIONS, "gt430", "--", f"mkdir -p {UNIT_STAGE_DIR}"])
         self.assertEqual(stage_rsync[stage_rsync.index("-e") + 1], SSH_RSYNC_E)
@@ -794,6 +803,10 @@ class TestInstallUnitsPlan(unittest.TestCase):
                 "--",
                 "sudo systemctl enable --now kakeiboot-backup@prod.timer",
             ],
+        )
+        # the per-invocation target staging dir cleanup runs on the host too
+        self.assertEqual(
+            cleanup, ["ssh", *SSH_OPTIONS, "gt430", "--", f"rm -rf {UNIT_STAGE_DIR}"]
         )
 
     def test_polkit_rule_covers_both_operators_and_all_instances(self) -> None:
@@ -873,19 +886,22 @@ class TestInstallUnitsCli(unittest.TestCase):
         argvs = [call.args[0] for call in run.call_args_list]
         self.assertEqual(
             [argv[0] for argv in argvs],
-            ["mkdir", "rsync", "sudo", "sudo", "sudo", "sudo", "sudo", "sudo"],
+            ["mkdir", "rsync", "sudo", "sudo", "sudo", "sudo", "sudo", "sudo", "rm"],
         )
-        self.assertEqual(argvs[0], ["mkdir", "-p", UNIT_STAGE_DIR])
-        # the staging rsync copies the tmp/units-* dir (service+timer+rule)
+        # the staging rsync copies the tmp/units-* dir (service+timer+rule);
+        # the target stage dir is derived per invocation from that dir's name
+        # (the real run stages in a fresh tmp/units-* dir, not the fixture)
         staged_src = argvs[1][-2]
         self.assertTrue(staged_src.endswith("/"), "staged dir src must be a dir path")
         self.assertIn("tmp/units-", staged_src)
-        self.assertEqual(argvs[1][-1], f"{UNIT_STAGE_DIR}/")
+        expected_stage = f"/tmp/kakeiboot-units-install-{Path(staged_src.rstrip('/')).name}"
+        self.assertEqual(argvs[0], ["mkdir", "-p", expected_stage])
+        self.assertEqual(argvs[1][-1], f"{expected_stage}/")
         self.assertEqual(
             argvs[2],
             [
                 *SUDO_INSTALL,
-                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.service",
+                f"{expected_stage}/kakeiboot-backup@.service",
                 f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service",
             ],
         )
@@ -893,7 +909,7 @@ class TestInstallUnitsCli(unittest.TestCase):
             argvs[3],
             [
                 *SUDO_INSTALL,
-                f"{UNIT_STAGE_DIR}/kakeiboot-backup@.timer",
+                f"{expected_stage}/kakeiboot-backup@.timer",
                 f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.timer",
             ],
         )
@@ -901,7 +917,7 @@ class TestInstallUnitsCli(unittest.TestCase):
             argvs[4],
             [
                 *SUDO_INSTALL,
-                f"{UNIT_STAGE_DIR}/{POLKIT_RULE_NAME}",
+                f"{expected_stage}/{POLKIT_RULE_NAME}",
                 f"{POLKIT_RULES_DIR}/{POLKIT_RULE_NAME}",
             ],
         )
@@ -912,6 +928,8 @@ class TestInstallUnitsCli(unittest.TestCase):
         self.assertEqual(
             argvs[7], ["sudo", "systemctl", "enable", "--now", "kakeiboot-backup@prod.timer"]
         )
+        # the per-invocation target staging dir is removed after the enables
+        self.assertEqual(argvs[8], ["rm", "-rf", expected_stage])
         # D-4: the deploy_root value used for rendering stays in the output
         self.assertIn("/custom/root", out.getvalue())
 
@@ -935,8 +953,10 @@ class TestInstallUnitsCli(unittest.TestCase):
         err_text = err.getvalue()
         self.assertIn("steps executed before failure:", err_text)
         # the steps up to and including the failed sudo install are listed
-        # (same executed-count rule as cmd_deploy's recovery report)
-        self.assertIn(f"mkdir -p {UNIT_STAGE_DIR}", err_text)
+        # (same executed-count rule as cmd_deploy's recovery report); the
+        # target stage dir is derived from the fresh tmp/units-* dir, so only
+        # its per-invocation prefix is assertable here
+        self.assertIn("mkdir -p /tmp/kakeiboot-units-install-", err_text)
         self.assertIn(f"{SYSTEM_UNIT_DIR}/kakeiboot-backup@.service", err_text)
         # the never-reached daemon-reload / timer enables are not
         self.assertNotIn("daemon-reload", err_text)

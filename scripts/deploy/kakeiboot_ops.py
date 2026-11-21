@@ -78,11 +78,15 @@ ENVS = ("stg", "prod")
 SYSTEM_UNIT_DIR = "/etc/systemd/system"
 POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
 BACKUP_POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
-# Target-side staging dir: `sudo install` reads a path on the target, while the
-# rendered service / timer / polkit rule are staged in this repo's tmp/ tree
-# (the repo is never checked out on the runtime host), so the staged dir is
-# copied here first (mkdir -p + rsync, same transport helpers as deploy).
-BACKUP_UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install"
+# Target-side staging dir PREFIX: `sudo install` reads a path on the target,
+# while the rendered service / timer / polkit rule are staged in this repo's
+# tmp/ tree (the repo is never checked out on the runtime host), so the staged
+# dir is copied there first (mkdir -p + rsync, same transport helpers as
+# deploy). The target staging dir is derived per invocation (this prefix + the
+# local staged dir's basename), NOT a shared fixed path: a fixed one survives
+# the first operator's run as a 0700 dir owned by them and blocks the other
+# operator's rsync.
+BACKUP_UNIT_STAGE_PREFIX = "/tmp/kakeiboot-units-install"
 
 # Polkit rule installed alongside the units (same content as the host
 # conversion script): both operators manage the backup unit instances as
@@ -454,7 +458,7 @@ def sudo_install(src: str, dst: str) -> list[str]:
 
 def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[list[str]]:
     """install-units plan (system form): stage on the target, sudo install
-    units + polkit rule, system daemon-reload, enable both timers.
+    units + polkit rule, system daemon-reload, enable both timers, cleanup.
 
     The backup units follow the 2026-11-17 gt430 system-service conversion:
     they exist only as system units now, so the destination is
@@ -463,15 +467,19 @@ def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[lis
     through `sudo install -o root -g root -m 644` instead of rsync. sudo
     install reads a path on the TARGET, while staged_dir is this repo's tmp/
     staging tree holding the three files (rendered service, timer copy,
-    generated polkit rule); the plan therefore mkdir -p's BACKUP_UNIT_STAGE_DIR
-    on the target and rsyncs the staged dir there first (remote_exec /
-    rsync_exec, the same transport helpers every other subcommand uses).
+    generated polkit rule); the plan therefore mkdir -p's a target staging
+    dir and rsyncs the staged dir there first (remote_exec / rsync_exec, the
+    same transport helpers every other subcommand uses). That target staging
+    dir is per invocation (BACKUP_UNIT_STAGE_PREFIX + the local staged dir's
+    basename): a shared fixed path would survive the first operator's run as
+    a 0700 dir owned by them and block the other operator's rsync. The plan
+    ends with rm -rf of the per-invocation dir so nothing is left behind.
 
     daemon-reload and the timer enables are system-scope systemctl under sudo
     as well; enable --now runs for both env timers, matching the host
     conversion script's end state. No --env: one %i template serves both envs.
     """
-    stage = BACKUP_UNIT_STAGE_DIR
+    stage = f"{BACKUP_UNIT_STAGE_PREFIX}-{Path(staged_dir).name}"
     return [
         remote_exec(cfg, ["mkdir", "-p", stage]),
         rsync_exec(cfg, ["-a"], f"{staged_dir}/", f"{stage}/"),
@@ -503,6 +511,7 @@ def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[lis
             )
             for env in ENVS
         ),
+        remote_exec(cfg, ["rm", "-rf", stage]),
     ]
 
 
