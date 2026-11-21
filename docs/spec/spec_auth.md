@@ -60,7 +60,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 - 照会: `POST /api/share/info` は認証任意。open なチケットについて家計簿名・role・発行者表示名・期限と、セッションがある場合はその表示名と所属済みかを返す。不存在・期限切れ・受諾済みは同一視して 400 `invalid_token` とする。照会はチケットを消費しない。
 - 受諾: `POST /api/share/accept` は web セッション必須（未ログインは 401 で、チケットは消費しない）。ログインした本人が画面で「参加する」を押したときにだけ、`BEGIN IMMEDIATE` 内で `accepted_at` / `accepted_by` の条件付き UPDATE（`accepted_at IS NULL AND expires_at > now`）により消費し、同じ tx で `ledger_members` への所属付与と audit（`entity_type=share_ticket`、`action=share_accept`）を行う。消費点は受諾の1か所だけ。
 - 所属付与の規則: 既存メンバーでない場合はチケットの role で参加する。既存メンバーで既存 role がチケットより弱い場合は格上げのみ行い、強い場合は変更しない（格下げはしない）。既に自分が受諾済みのチケットの再送は `already_member` として冪等に成功する。受諾は `users.default_ledger_id` と grant の `active_ledger_id` を変更しない。受諾時点で発行者の権限は再検査しない（チケットは発行時点の owner の委任として期限まで有効）。
-- 対象者は登録済み user のみとする。未登録者向けに共有 URL から登録へ橋渡しする経路は持たない（登録は register / setup の招待で別に行う）。アカウントを持たない受領者には、受諾画面でその旨を表示し、チケットは消費しない。
+- 対象者は登録済み user のみとする。未登録者向けに共有 URL から登録へ橋渡しする経路は持たない（登録は register / setup の招待で別に行う）。受諾画面に登録への言及は置かず、アカウントを持たない受領者を画面から登録へ誘導しない。チケットは消費しない。
 - 一覧・失効: 発行者は `GET /api/share-tickets` で自分の未受諾チケットを一覧でき、`DELETE /api/share-tickets/{ticket_ref}`（ticket_ref は token hash の先頭8 hex。認証要素としては使わない）で失効（行削除 + audit）できる。平文 URL は発行時にしか表示されない。
 - 互換: `POST /api/invitations` は移行期間中、共有チケット発行へ委譲し `/share?token=…` 形式の URL を返す。旧形式 invite（`/register?token=…`）の受理は移行期間（新規 backend のデプロイから7日）だけ残し、その後は受理コードごと削除する。admin CLI の token 一覧・失効は `ledger_share_tickets` も横断対象とする。
 
