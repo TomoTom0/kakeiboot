@@ -2335,6 +2335,7 @@ button.row-seg:focus-visible {
 }
 .share-role .icon { color: var(--bb-accent); }
 .share-join-as { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
+.share-join-as-name { font-weight: 600; }
 .share-join-as-avatar { width: 30px; height: 30px; font-size: 0.8rem; }
 .share-expiry { margin-top: 1.1rem; }
 .share-done { text-align: center; }

@@ -13,7 +13,7 @@ import BrandLogo from '@/shared/components/BrandLogo.vue'
 // is read once, stashed in this tab's sessionStorage, and removed from
 // the URL with a history replace; afterwards it travels in POST bodies
 // only. Opening / info never consume the ticket: only the explicit
-// [参加する] press (accept) does, so the original URL stays the canonical
+// [この家計簿を追加する] press (accept) does, so the original URL stays the canonical
 // way back in — a closed tab just reopens it.
 const SHARE_TOKEN_KEY = 'kb_share_token'
 
@@ -25,9 +25,8 @@ const queryToken = typeof route.query.token === 'string' ? route.query.token : '
 if (queryToken) sessionStorage.setItem(SHARE_TOKEN_KEY, queryToken)
 const token = queryToken || sessionStorage.getItem(SHARE_TOKEN_KEY) || ''
 
-// The role is told as what the recipient can do, not as a spec-sheet
-// label: editor -> 編集できます / viewer -> 見るだけです.
-const ROLE_CAPABILITY: Record<string, string> = { editor: '編集できます', viewer: '見るだけです' }
+// The role is a plain label on a badge: editor -> 編集 / viewer -> 閲覧のみ.
+const ROLE_LABEL: Record<string, string> = { editor: '編集', viewer: '閲覧のみ' }
 
 // First character of a display name, for the avatar circle of the
 // "joining as" row (same initial-letter grammar as .avatar).
@@ -150,13 +149,13 @@ async function goHome(): Promise<void> {
           :size="30"
         /></span>
         <p v-if="result.outcome === 'joined'">
-          家計簿『<strong>{{ result.ledger.name }}</strong>』に参加しました。
+          家計簿『<strong>{{ result.ledger.name }}</strong>』を追加しました。
         </p>
         <p
           v-else
           data-test="already-member"
         >
-          家計簿『<strong>{{ result.ledger.name }}</strong>』には既に参加しています。
+          家計簿『<strong>{{ result.ledger.name }}</strong>』は追加済みです。
         </p>
         <button
           class="btn btn-primary btn-block"
@@ -191,12 +190,12 @@ async function goHome(): Promise<void> {
               v-if="info.role === 'editor'"
               name="pencil"
               :size="13"
-            />{{ ROLE_CAPABILITY[info.role] ?? info.role }}</span>
+            />{{ ROLE_LABEL[info.role] ?? info.role }}</span>
           </div>
         </div>
         <template v-if="info.already_member">
           <p data-test="already-member">
-            既にこの家計簿に参加しています。
+            この家計簿は追加済みです。
           </p>
           <button
             class="btn btn-primary btn-block"
@@ -215,7 +214,8 @@ async function goHome(): Promise<void> {
               class="avatar share-join-as-avatar"
               aria-hidden="true"
             >{{ initialOf(info.session.display_name) }}</span>
-            {{ info.session.display_name }} として参加します
+            <span class="share-join-as-name">{{ info.session.display_name }}</span>
+            <span class="muted small">ログイン中</span>
           </p>
           <button
             class="btn btn-primary btn-block"
@@ -223,7 +223,7 @@ async function goHome(): Promise<void> {
             data-test="accept"
             @click="accept"
           >
-            参加する
+            この家計簿を追加する
           </button>
         </template>
         <template v-else>
@@ -232,7 +232,7 @@ async function goHome(): Promise<void> {
             data-test="login"
             @click="goLogin"
           >
-            ログインして参加
+            ログインして追加する
           </button>
         </template>
         <p
