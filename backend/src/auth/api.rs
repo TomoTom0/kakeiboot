@@ -22,6 +22,7 @@ use super::invitation::{self, InvitationKind};
 use super::ledger;
 use super::register_invitation::{self, RegistrationToken};
 use super::session::{self, ValidSession};
+use super::share_ticket;
 use super::tokens::TOKEN_LEN;
 use crate::config::ResolvedAuth;
 
@@ -189,6 +190,16 @@ pub fn routes(state: AuthApiState) -> Router {
         )
         .route("/api/invitations", post(create_invitation))
         .route(
+            "/api/share-tickets",
+            post(create_share_ticket).get(list_share_tickets),
+        )
+        .route(
+            "/api/share-tickets/{ticket_ref}",
+            axum::routing::delete(delete_share_ticket),
+        )
+        .route("/api/share/info", post(share_info))
+        .route("/api/share/accept", post(share_accept))
+        .route(
             "/api/register-invitations",
             post(create_register_invitation),
         )
@@ -287,6 +298,21 @@ pub(crate) async fn require_session(
     Ok((s, token))
 }
 
+/// Validate the session cookie when one is present (share/info: auth is
+/// optional). A missing, malformed or invalid session is "no session",
+/// never an error.
+pub(crate) async fn optional_session(
+    state: &AuthApiState,
+    headers: &HeaderMap,
+) -> Option<ValidSession> {
+    let token = session::cookie_token(headers, session::COOKIE_SESSION)?;
+    let now = session::now_ms();
+    session::validate_session(&state.db, &token, now, &state.auth.session)
+        .await
+        .ok()
+        .flatten()
+}
+
 fn require_step_up(s: &ValidSession, state: &AuthApiState) -> Result<(), ApiError> {
     if session::step_up_ok(s, session::now_ms(), &state.auth.session) {
         Ok(())
@@ -382,6 +408,11 @@ async fn register_info(
                     "needs_display_name": true,
                     "ledger_name": ledger,
                     "role": inv.role,
+                    // share design section 9: legacy invite URLs keep
+                    // working during the migration window, but issuance
+                    // has moved to share tickets; the frontend uses this
+                    // flag for the migration guidance.
+                    "share_migrated": true,
                 })
             }
             InvitationKind::Recovery => {
@@ -790,81 +821,85 @@ struct CreateInvitationReq {
     inviter_note: Option<String>,
 }
 
-async fn create_invitation(
-    State(state): State<AuthApiState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateInvitationReq>,
+/// Resolve an explicitly named target ledger for share-ticket issuance:
+/// the issuer must own it (membership and ownership distinguish 404 from
+/// 403 — a non-member ledger is indistinguishable from a missing one).
+async fn resolve_owned_ledger(
+    state: &AuthApiState,
+    user_id: i64,
+    explicit: i64,
+) -> Result<i64, ApiError> {
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT m.role FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
+         WHERE m.ledger_id = ? AND m.user_id = ?",
+    )
+    .bind(explicit)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::sqlx)?;
+    match membership.as_deref() {
+        None => Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
+        Some("owner") => Ok(explicit),
+        Some(_) => Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required")),
+    }
+}
+
+/// The issuer's default ledger, owner only (the pre-TASK-78 invitation
+/// shape, kept for the `POST /api/invitations` compatibility input).
+async fn resolve_default_owned_ledger(state: &AuthApiState, user_id: i64) -> Result<i64, ApiError> {
+    let default_ledger: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT default_ledger_id FROM users WHERE id = ? AND disabled_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::sqlx)?;
+    let Some(Some(ledger_id)) = default_ledger else {
+        return Err(ApiError::bad_request("no_default_ledger"));
+    };
+    let role: Option<String> =
+        sqlx::query_scalar("SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?")
+            .bind(ledger_id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(ApiError::sqlx)?;
+    if role.as_deref() != Some("owner") {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required"));
+    }
+    Ok(ledger_id)
+}
+
+/// Issue one share ticket for an already-resolved owned ledger and build
+/// the 201 response. Shared by `POST /api/share-tickets` and the
+/// `POST /api/invitations` compatibility delegation (share design section
+/// 7-1): both return the `/share?token=…` URL, plaintext exactly once.
+async fn issue_share_ticket(
+    state: &AuthApiState,
+    user_id: i64,
+    ledger_id: i64,
+    role: &str,
+    inviter_note: Option<String>,
 ) -> Result<Response, ApiError> {
-    let (s, _) = require_session(&state, &headers).await?;
-    if !matches!(req.role.as_str(), "editor" | "viewer") {
+    if !matches!(role, "editor" | "viewer") {
         return Err(ApiError::bad_request("invalid_role"));
     }
-    if let Some(note) = req.inviter_note.as_deref()
+    if let Some(note) = inviter_note.as_deref()
         && note.trim().chars().count() > 200
     {
         return Err(ApiError::bad_request("inviter_note_too_long"));
     }
     let now = session::now_ms();
-    // Resolve the target ledger: an explicit ledger_id the issuer must own
-    // (TASK-78; membership and ownership distinguish 404 from 403 — a
-    // non-member ledger is indistinguishable from a missing one), else the
-    // inviter's default ledger (owner only, the pre-TASK-78 shape).
-    let ledger_id = match req.ledger_id {
-        Some(explicit) => {
-            let membership: Option<String> = sqlx::query_scalar(
-                "SELECT m.role FROM ledger_members m JOIN ledgers l ON l.id = m.ledger_id
-                 WHERE m.ledger_id = ? AND m.user_id = ?",
-            )
-            .bind(explicit)
-            .bind(s.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(ApiError::sqlx)?;
-            match membership.as_deref() {
-                None => return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
-                Some("owner") => explicit,
-                Some(_) => return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required")),
-            }
-        }
-        None => {
-            let default_ledger: Option<Option<i64>> = sqlx::query_scalar(
-                "SELECT default_ledger_id FROM users WHERE id = ? AND disabled_at IS NULL",
-            )
-            .bind(s.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(ApiError::sqlx)?;
-            let Some(Some(ledger_id)) = default_ledger else {
-                return Err(ApiError::bad_request("no_default_ledger"));
-            };
-            let role: Option<String> = sqlx::query_scalar(
-                "SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?",
-            )
-            .bind(ledger_id)
-            .bind(s.user_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(ApiError::sqlx)?;
-            if role.as_deref() != Some("owner") {
-                return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required"));
-            }
-            ledger_id
-        }
-    };
-    let ttl = state.auth.invitation.invite_ttl_hours * 3_600_000;
+    let ttl = state.auth.invitation.share_ttl_hours * 3_600_000;
     let expires_at = now + ttl;
-    let token = invitation::issue(
+    let token = share_ticket::issue(
         &state.db,
-        &invitation::NewInvitation {
-            kind: InvitationKind::Invite,
-            operator_note: None,
-            target_user_id: None,
-            created_by: Some(s.user_id),
-            ledger_id: Some(ledger_id),
-            role: Some(req.role.clone()),
-            inviter_note: req.inviter_note,
-            ttl_ms: ttl,
-        },
+        user_id,
+        ledger_id,
+        role,
+        inviter_note.as_deref(),
+        ttl,
         now,
     )
     .await
@@ -873,19 +908,231 @@ async fn create_invitation(
     super::audit(
         &mut conn,
         "web",
-        "invitation",
+        "share_ticket",
         0,
         "create",
-        Some(s.user_id),
-        &json!({ "ledger_id": ledger_id, "role": req.role }),
+        Some(user_id),
+        &json!({ "ledger_id": ledger_id, "role": role }),
         now,
     )
     .await
     .map_err(ApiError::sqlx)?;
-    let url = format!("{}/register?token={token}", state.auth.public_origin);
+    let url = format!("{}/share?token={token}", state.auth.public_origin);
     let mut resp = Json(json!({ "url": url, "expires_at": expires_at })).into_response();
     *resp.status_mut() = StatusCode::CREATED;
     Ok(resp)
+}
+
+/// Compatibility delegation (share design sections 7-1, 9): the legacy
+/// invitation path keeps its input shape ({role, ledger_id?,
+/// inviter_note?}, default-ledger resolution when ledger_id is absent)
+/// but issuance now creates a share ticket and returns a `/share?token=…`
+/// URL; `/register?token=…` URLs are no longer issued here.
+async fn create_invitation(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateInvitationReq>,
+) -> Result<Response, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    let ledger_id = match req.ledger_id {
+        Some(explicit) => resolve_owned_ledger(&state, s.user_id, explicit).await?,
+        None => resolve_default_owned_ledger(&state, s.user_id).await?,
+    };
+    issue_share_ticket(&state, s.user_id, ledger_id, &req.role, req.inviter_note).await
+}
+
+// ---------------------------------------------------------------------------
+// share tickets from the web (share design sections 4, 6, 7)
+
+#[derive(Deserialize)]
+struct CreateShareTicketReq {
+    ledger_id: i64,
+    role: String,
+    #[serde(default)]
+    inviter_note: Option<String>,
+}
+
+async fn create_share_ticket(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateShareTicketReq>,
+) -> Result<Response, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    // ledger_id is mandatory here: no default-ledger fallback (share
+    // design T3). Only the target ledger's owner may issue.
+    let ledger_id = resolve_owned_ledger(&state, s.user_id, req.ledger_id).await?;
+    issue_share_ticket(&state, s.user_id, ledger_id, &req.role, req.inviter_note).await
+}
+
+async fn list_share_tickets(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    let now = session::now_ms();
+    let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
+    let open = share_ticket::list_open_by_issuer(&mut conn, s.user_id, now)
+        .await
+        .map_err(ApiError::sqlx)?;
+    let list: Vec<serde_json::Value> = open
+        .into_iter()
+        .map(|t| {
+            json!({
+                "ticket_ref": share_ticket::ticket_ref(&t.row),
+                "ledger_id": t.row.ledger_id,
+                "ledger_name": t.ledger_name,
+                "role": t.row.role,
+                "created_at": t.row.created_at,
+                "expires_at": t.row.expires_at,
+                "inviter_note": t.row.inviter_note,
+            })
+        })
+        .collect();
+    Ok(Json(json!(list)))
+}
+
+async fn delete_share_ticket(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Path(ticket_ref): Path<String>,
+) -> Result<Response, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    let now = session::now_ms();
+    let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
+    let mut tx = conn
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(ApiError::sqlx)?;
+    // Only the issuer's own rows resolve; another issuer's ref and an
+    // unknown ref are the same 404.
+    let row = share_ticket::find_by_ref_for_issuer(&mut tx, s.user_id, &ticket_ref)
+        .await
+        .map_err(ApiError::sqlx)?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found"))?;
+    share_ticket::delete_by_hash(&mut tx, &row.token_hash)
+        .await
+        .map_err(ApiError::sqlx)?;
+    super::audit(
+        &mut tx,
+        "web",
+        "share_ticket",
+        0,
+        "share_ticket_revoke",
+        Some(s.user_id),
+        &json!({ "token_hash_prefix": share_ticket::ticket_ref(&row) }),
+        now,
+    )
+    .await
+    .map_err(ApiError::sqlx)?;
+    tx.commit().await.map_err(ApiError::sqlx)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(Deserialize)]
+struct ShareTokenReq {
+    token: String,
+}
+
+/// Token introspection for the share landing page (share design section
+/// 4): open tickets only, never consumes. Unknown / expired / accepted
+/// tokens are one uniform `invalid_token` (section 6-7).
+async fn share_info(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<ShareTokenReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let now = session::now_ms();
+    let Some(token) = invitation::parse_token(&req.token) else {
+        warn_token_rejected("share/info", "parse_failed", Some(&req.token));
+        return Err(ApiError::bad_request("invalid_token"));
+    };
+    // Session first: the in-memory test pool has a single connection, and
+    // validating while holding one would stall on the pool.
+    let session = optional_session(&state, &headers).await;
+    let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
+    let row = share_ticket::find_by_token(&mut conn, &token)
+        .await
+        .map_err(ApiError::sqlx)?
+        .filter(|r| share_ticket::is_usable(r, now))
+        .ok_or_else(|| {
+            warn_token_rejected("share/info", "invalid_token", Some(&req.token));
+            ApiError::bad_request("invalid_token")
+        })?;
+    let ledger_name: Option<String> = sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
+        .bind(row.ledger_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(ApiError::sqlx)?;
+    let Some(ledger_name) = ledger_name else {
+        warn_token_rejected("share/info", "invalid_token", Some(&req.token));
+        return Err(ApiError::bad_request("invalid_token"));
+    };
+    let issuer_display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM users WHERE id = ?")
+            .bind(row.created_by)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(ApiError::sqlx)?;
+    let already_member = match &session {
+        Some(s) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM ledger_members WHERE ledger_id = ? AND user_id = ?",
+            )
+            .bind(row.ledger_id)
+            .bind(s.user_id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(ApiError::sqlx)?
+                > 0
+        }
+        None => false,
+    };
+    Ok(Json(json!({
+        "ledger_name": ledger_name,
+        "role": row.role,
+        "issuer_display_name": issuer_display_name,
+        "expires_at": row.expires_at,
+        "session": session.as_ref().map(|s| json!({ "display_name": s.display_name })),
+        "already_member": already_member,
+    })))
+}
+
+/// Accept a share ticket (share design sections 4-a, 6): session required
+/// (an unauthenticated accept is 401 and never consumes). The grant runs
+/// in one BEGIN IMMEDIATE transaction in `share_ticket::accept`.
+async fn share_accept(
+    State(state): State<AuthApiState>,
+    headers: HeaderMap,
+    Json(req): Json<ShareTokenReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (s, _) = require_session(&state, &headers).await?;
+    let now = session::now_ms();
+    let Some(token) = invitation::parse_token(&req.token) else {
+        warn_token_rejected("share/accept", "parse_failed", Some(&req.token));
+        return Err(ApiError::bad_request("invalid_token"));
+    };
+    let hash = super::tokens::sha256(&token);
+    let mut conn = state.db.acquire().await.map_err(ApiError::sqlx)?;
+    let mut tx = conn
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(ApiError::sqlx)?;
+    let accepted = share_ticket::accept(&mut tx, &hash, s.user_id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    let Some(accepted) = accepted else {
+        warn_token_rejected("share/accept", "invalid_token", Some(&req.token));
+        return Err(ApiError::bad_request("invalid_token"));
+    };
+    tx.commit().await.map_err(ApiError::sqlx)?;
+    Ok(Json(json!({
+        "ledger": {
+            "id": accepted.ledger_id,
+            "name": accepted.ledger_name,
+            "role": accepted.role.as_str(),
+        },
+        "outcome": accepted.outcome.as_str(),
+    })))
 }
 
 // ---------------------------------------------------------------------------

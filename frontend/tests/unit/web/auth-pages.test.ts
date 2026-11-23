@@ -15,6 +15,7 @@ vi.mock('@/web/api/webauthn', async (importOriginal) => {
 beforeEach(() => {
   vi.mocked(webauthn.getPasskey).mockReset().mockResolvedValue(ASSERTION)
   vi.mocked(webauthn.createPasskey).mockReset().mockResolvedValue(ATTESTATION)
+  sessionStorage.clear()
 })
 afterEach(cleanup)
 
@@ -80,6 +81,47 @@ describe('LoginPage', () => {
     // the navigation target is the path: the keys-less entry to / carries
     // the store's period on the query (the TASK-124 URL sync's write-back)
     expect(b.router.currentRoute.value.path).toBe('/')
+  })
+
+  it('[covers:web-login.share-return] kb_share_token があればログイン後に /share へ戻り、参加はまだしない', async () => {
+    sessionStorage.setItem('kb_share_token', 'T')
+    const f = mockFetch({
+      'POST /api/webauthn/login/start': { body: RCR },
+      'POST /api/webauthn/login/finish': { body: { next: 'home' } },
+      'GET /api/auth/me': { body: ME },
+      'POST /api/share/info': {
+        body: {
+          ledger_name: '家族',
+          role: 'editor',
+          issuer_display_name: '太郎',
+          expires_at: Date.UTC(2026, 9, 23, 15, 0),
+          session: { display_name: '太郎' },
+          already_member: false,
+        },
+      },
+    })
+    const { wrapper, router } = await mountApp('/login')
+    await wrapper.find('[data-test="login"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/share')
+    // back on the accept screen with its own explicit join button; the
+    // login alone never calls accept
+    expect(wrapper.find('[data-test="accept"]').exists()).toBe(true)
+    expect(f.to('POST', '/api/share/accept')).toHaveLength(0)
+    expect(f.to('POST', '/api/share/info')[0]!.body).toEqual({ token: 'T' })
+  })
+
+  it('[covers:web-login.share-return-req-wins] req 往復がある場合は kb_share_token より consent が優先', async () => {
+    sessionStorage.setItem('kb_share_token', 'T')
+    mockFetch({
+      'POST /api/webauthn/login/start': { body: RCR },
+      'POST /api/webauthn/login/finish': { body: { next: 'consent' } },
+      'GET /api/oauth/requests/R': { status: 404, body: { error: 'not_found' } },
+    })
+    const { wrapper, router } = await mountApp('/login?req=R')
+    await wrapper.find('[data-test="login"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.fullPath).toBe('/oauth/consent?req=R')
   })
 
   it('[covers:web-shell.atomic-mount] login 完了は me 確定後に遷移し shell が即時（me 取得は1回）', async () => {
@@ -163,10 +205,10 @@ describe('RegisterPage', () => {
     expect(f.to('POST', '/api/webauthn/register/start')[0]!.body).toEqual({ token: 'T' })
   })
 
-  it('[covers:web-register.invite-default-ledger-choice] invite は家計簿と既定化の選択を送る', async () => {
+  it('[covers:web-register.invite-no-default-choice] invite は家計簿を示すが既定化の選択肢は無く finish にも送らない', async () => {
     const f = mockFetch({
       'POST /api/webauthn/register/info': {
-        body: { kind: 'invite', needs_display_name: true, ledger_name: '家族', role: 'editor' },
+        body: { kind: 'invite', needs_display_name: true, ledger_name: '家族', role: 'editor', share_migrated: true },
       },
       'POST /api/webauthn/register/start': { body: CCR },
       'POST /api/webauthn/register/finish': { body: {} },
@@ -177,14 +219,26 @@ describe('RegisterPage', () => {
     const text = wrapper.find('[data-test="invite-info"]').text()
     expect(text).toContain('家族')
     expect(text).toContain('編集')
-    await wrapper.find('[data-test="use-invited-default"]').setValue(true)
+    // no default-ledger checkbox anywhere in the registration flow (D-D1)
+    expect(wrapper.find('[data-test="use-invited-default"]').exists()).toBe(false)
+    // share_migrated: an already-registered visitor is pointed at a fresh
+    // share URL instead of this form (design section 9-2)
+    expect(wrapper.find('[data-test="share-migrated"]').text()).toContain('新しい共有 URL を依頼してください')
     await wrapper.find('[data-test="display-name"]').setValue('花子')
     await wrapper.find('form').trigger('submit')
     await settle()
-    expect(f.to('POST', '/api/webauthn/register/finish')[0]!.body).toEqual({
-      credential: ATTESTATION,
-      use_invited_ledger_as_default: true,
+    expect(f.to('POST', '/api/webauthn/register/finish')[0]!.body).toEqual({ credential: ATTESTATION })
+  })
+
+  it('[covers:web-register.invite-no-migrated-note] share_migrated でない invite には移行導線を出さない', async () => {
+    mockFetch({
+      'POST /api/webauthn/register/info': {
+        body: { kind: 'invite', needs_display_name: true, ledger_name: '家族', role: 'viewer' },
+      },
     })
+    const { wrapper } = await mountApp('/register?token=T')
+    expect(wrapper.find('[data-test="invite-info"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="share-migrated"]').exists()).toBe(false)
   })
 
   it('[covers:web-register.register-landing] register は setup と同じ画面で招待元家計簿の選択なし', async () => {
@@ -232,6 +286,123 @@ describe('RegisterPage', () => {
     const { wrapper } = await mountApp('/register?token=T')
     expect(wrapper.find('[data-test="invalid"]').text()).toContain('無効か、期限切れ')
     expect(wrapper.find('[data-test="register"]').exists()).toBe(false)
+  })
+})
+
+describe('ShareAcceptPage', () => {
+  const SHARE_INFO = {
+    ledger_name: '家族',
+    role: 'editor',
+    issuer_display_name: '太郎',
+    expires_at: Date.UTC(2026, 9, 23, 15, 0),
+    session: { display_name: '花子' },
+    already_member: false,
+  }
+
+  it('[covers:web-share.token-stashed-and-removed] token を sessionStorage へ退避し URL から消す・info は body で送る', async () => {
+    const f = mockFetch({ 'POST /api/share/info': { body: SHARE_INFO } })
+    const { router } = await mountApp('/share?token=T')
+    expect(router.currentRoute.value.fullPath).toBe('/share')
+    expect(router.currentRoute.value.query.token).toBeUndefined()
+    expect(sessionStorage.getItem('kb_share_token')).toBe('T')
+    expect(f.to('POST', '/api/share/info')[0]!.body).toEqual({ token: 'T' })
+  })
+
+  it('[covers:web-share.token-restored] query が無ければ sessionStorage の token で再開する', async () => {
+    sessionStorage.setItem('kb_share_token', 'T2')
+    const f = mockFetch({ 'POST /api/share/info': { body: SHARE_INFO } })
+    const { wrapper } = await mountApp('/share')
+    expect(f.to('POST', '/api/share/info')[0]!.body).toEqual({ token: 'T2' })
+    expect(wrapper.find('[data-test="share-info"]').exists()).toBe(true)
+  })
+
+  it('[covers:web-share.no-token] token が無ければ元の URL への開き直しを案内し info を呼ばない', async () => {
+    const f = mockFetch({})
+    const { wrapper } = await mountApp('/share')
+    expect(wrapper.find('[data-test="no-token"]').text()).toContain('元の共有 URL から開き直してください')
+    expect(f.to('POST', '/api/share/info')).toHaveLength(0)
+  })
+
+  it('[covers:web-share.invalid-token] invalid_token は一文の無効表示のみ', async () => {
+    mockFetch({ 'POST /api/share/info': { status: 400, body: { error: 'invalid_token' } } })
+    const { wrapper } = await mountApp('/share?token=T')
+    const text = wrapper.find('[data-test="invalid"]').text()
+    expect(text).toBe('共有 URL が無効か、期限切れか、使用済みです。')
+    expect(text).not.toContain('依頼してください')
+    expect(text).not.toContain('開き直してください')
+    expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-share.join-flow] ログイン済みは招待文と家計簿名・権限・期限を優先順に出し、accept で参加完了・token 退避を消す', async () => {
+    const f = mockFetch({
+      'POST /api/share/info': { body: SHARE_INFO },
+      'POST /api/share/accept': { body: { ledger: { id: 3, name: '家族', role: 'editor' }, outcome: 'joined' } },
+      'GET /api/auth/me': { body: ME },
+    })
+    const { wrapper } = await mountApp('/share?token=T')
+    expect(wrapper.find('h1').text()).toBe('太郎 さんが家計簿を共有しました')
+    expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
+    expect(wrapper.find('[data-test="role"]').text()).toBe('編集')
+    expect(wrapper.find('[data-test="issuer"]').text()).toBe('太郎')
+    expect(wrapper.find('[data-test="expires"]').text()).toContain('2026/10/24 まで有効')
+    expect(wrapper.find('[data-test="expires"]').text()).not.toContain('00:00')
+    expect(wrapper.find('[data-test="join-as"]').text()).toContain('花子')
+    await wrapper.find('[data-test="accept"]').trigger('click')
+    await settle()
+    expect(f.to('POST', '/api/share/accept')[0]!.body).toEqual({ token: 'T' })
+    expect(wrapper.find('[data-test="done"]').text()).toContain('家計簿『家族』を追加しました')
+    expect(wrapper.find('[data-test="go-home"]').exists()).toBe(true)
+    expect(sessionStorage.getItem('kb_share_token')).toBeNull()
+    // the session reloads so the shell membership reflects the join
+    expect(f.to('GET', '/api/auth/me')).toHaveLength(1)
+  })
+
+  it('[covers:web-share.accept-already-member] accept の already_member は既参加の完了表示', async () => {
+    mockFetch({
+      'POST /api/share/info': { body: SHARE_INFO },
+      'POST /api/share/accept': { body: { ledger: { id: 3, name: '家族', role: 'editor' }, outcome: 'already_member' } },
+      'GET /api/auth/me': { body: ME },
+    })
+    const { wrapper } = await mountApp('/share?token=T')
+    await wrapper.find('[data-test="accept"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="already-member"]').text()).toContain('追加済みです')
+    expect(sessionStorage.getItem('kb_share_token')).toBeNull()
+  })
+
+  it('[covers:web-share.info-already-member] info の already_member は参加ボタンを出さない', async () => {
+    mockFetch({ 'POST /api/share/info': { body: { ...SHARE_INFO, already_member: true } } })
+    const { wrapper } = await mountApp('/share?token=T')
+    expect(wrapper.find('[data-test="already-member"]').text()).toContain('この家計簿は追加済みです')
+    expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-share.needs-login] 未ログインはログインと無効状態の追加ボタンを固定配置で出し登録への言及は置かず、チケットは消費しない', async () => {
+    const f = mockFetch({ 'POST /api/share/info': { body: { ...SHARE_INFO, session: null } } })
+    const { wrapper, router } = await mountApp('/share?token=T')
+    expect(wrapper.find('h1').text()).toBe('太郎 さんが家計簿を共有しました')
+    expect(wrapper.find('[data-test="ledger-name"]').text()).toBe('家族')
+    expect(wrapper.find('[data-test="accept"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="accept-waiting"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.text()).not.toContain('登録の招待')
+    expect(wrapper.text()).not.toContain('アカウントをお持ちでない場合')
+    await wrapper.find('[data-test="login"]').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(f.to('POST', '/api/share/accept')).toHaveLength(0)
+    // the stash survives the login round trip
+    expect(sessionStorage.getItem('kb_share_token')).toBe('T')
+  })
+
+  it('[covers:web-share.accept-invalid] accept 時点の invalid_token は無効表示へ切り替える', async () => {
+    mockFetch({
+      'POST /api/share/info': { body: SHARE_INFO },
+      'POST /api/share/accept': { status: 400, body: { error: 'invalid_token' } },
+    })
+    const { wrapper } = await mountApp('/share?token=T')
+    await wrapper.find('[data-test="accept"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="invalid"]').exists()).toBe(true)
   })
 })
 

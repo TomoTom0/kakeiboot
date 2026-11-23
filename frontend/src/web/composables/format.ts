@@ -13,6 +13,13 @@ const dateTime = new Intl.DateTimeFormat('ja-JP', {
   minute: '2-digit',
 })
 
+const dateOnly = new Intl.DateTimeFormat('ja-JP', {
+  timeZone: 'Asia/Tokyo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 const yen = new Intl.NumberFormat('ja-JP')
 
 /** epoch ms or ISO string -> "YYYY/MM/DD HH:MM" in JST; null -> "-". */
@@ -21,6 +28,14 @@ export function formatDateTime(value: number | string | null | undefined): strin
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '-'
   return dateTime.format(d)
+}
+
+/** epoch ms or ISO string -> "YYYY/MM/DD" in JST (no time); null -> "-". */
+export function formatDate(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '-'
+  return dateOnly.format(d)
 }
 
 export function formatYen(value: number | null | undefined): string {

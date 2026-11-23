@@ -37,7 +37,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 | kind | 発行者 | 既定 TTL | できること |
 |---|---|---|---|
 | `setup` | 運用者 CLI（`admin token issue --kind setup --note`） | 24時間 | 新規 user と個人 ledger の作成 |
-| `invite` | 対象 ledger の owner が web 画面から（対象 ledger は発行時に選択。TASK-78） | 168時間（`invite_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer） |
+| `invite` | 対象 ledger の owner が web 画面から（対象 ledger は発行時に選択。TASK-78） | 168時間（`invite_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer）。新規発行は参加チケット（2-1A）へ移行済みで、本行の受理は移行期間のみ |
 | `recovery` | 運用者 CLI（`admin token issue --kind recovery` / `admin recovery resolve`） | 1時間（`--ttl` で最大24時間） | 対象 user へのパスキー追加のみ |
 | `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（メモ必須） | 168時間（`register_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
 
@@ -47,10 +47,23 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 - 未使用の register token は発行者ごとに5本まで（超過時 400 `register_open_limit`）。
 - register の inviter_note は必須・200文字まで。
 - register の発行は `POST /api/register-invitations`（invite とは別 endpoint）。
-- invite で登録した user も個人 ledger を持つ。`default_ledger_id` を招待元 ledger にするかを登録画面で選ぶ（`use_invited_ledger_as_default`）。
+- invite で登録した user も個人 ledger を持つ。`default_ledger_id` は常に個人 ledger とする。登録画面に既定の選択肢は置かず、`register/finish` の `use_invited_ledger_as_default` は互換のため受理するがサーバーは無視する（2-1A の分離に伴う変更。既定の変更は設定画面の `PUT /api/auth/me/default-ledger` のみ）。
 - 受理 API は kind ごとに許可操作を分ける。recovery では user・ledger の作成、表示名の入力・変更、grant の変更を受け付けない。
 - 同じ user の未使用 recovery token は常に1本（発行時に既存の未使用 token を行削除してから INSERT）。
 - `users.disabled_at` が非 NULL の user はログイン・回復・招待受諾をすべて拒否する。
+
+### 2-1A 家計簿の共有（参加チケット）
+
+共有（membership の付与）と登録（identity の作成）は分離する。家計簿への参加は登録トークンではなく、専用の参加チケット（`ledger_share_tickets`、256bit 乱数、DB は SHA-256 hash、平文は1回だけ表示）で行う。テーブル構造は `spec_data-model.md` §14・§15（0013）を正とする。
+
+- 発行: 対象 ledger の owner が web 画面から（`POST /api/share-tickets`、`{ledger_id, role, inviter_note?}`。role は editor / viewer、メモは任意・200文字まで）。TTL は168時間（`share_ttl_hours`）。URL は `https://<host>/share?token=<T>`。frontend は token を同一タブの `sessionStorage`（`kb_share_token`）へ退避してから URL から消し、以降は POST body で送る。開封・照会では消費しないため、タブを閉じた場合は元の URL から開き直せる。
+- 照会: `POST /api/share/info` は認証任意。open なチケットについて家計簿名・role・発行者表示名・期限と、セッションがある場合はその表示名と所属済みかを返す。不存在・期限切れ・受諾済みは同一視して 400 `invalid_token` とする。照会はチケットを消費しない。
+- 受諾: `POST /api/share/accept` は web セッション必須（未ログインは 401 で、チケットは消費しない）。ログインした本人が画面で「参加する」を押したときにだけ、`BEGIN IMMEDIATE` 内で `accepted_at` / `accepted_by` の条件付き UPDATE（`accepted_at IS NULL AND expires_at > now`）により消費し、同じ tx で `ledger_members` への所属付与と audit（`entity_type=share_ticket`、`action=share_accept`）を行う。消費点は受諾の1か所だけ。
+- 所属付与の規則: 既存メンバーでない場合はチケットの role で参加する。既存メンバーで既存 role がチケットより弱い場合は格上げのみ行い、強い場合は変更しない（格下げはしない）。既に自分が受諾済みのチケットの再送は `already_member` として冪等に成功する。受諾は `users.default_ledger_id` と grant の `active_ledger_id` を変更しない。受諾時点で発行者の権限は再検査しない（チケットは発行時点の owner の委任として期限まで有効）。
+- 対象者は登録済み user のみとする。未登録者向けに共有 URL から登録へ橋渡しする経路は持たない（登録は register / setup の招待で別に行う）。受諾画面に登録への言及は置かず、アカウントを持たない受領者を画面から登録へ誘導しない。チケットは消費しない。
+- 受諾画面の提示: 情報は優先順に並べる。先頭は招待として読める文（「{発行者} さんが家計簿を共有しました」。発行者はこの文に組み込み、独立した項目にしない。見出しは行のバランスを取って改行し、文の途中で不自然に折らない）。次に対象の家計簿を、文字の列ではなく1つの視覚パネルとして出す（家計簿のマーク＋名前。種別などの説明ラベルは置かない。名前は1つの単位として扱い、空白・句読点でのみ改行し、単語の途中で割らない）。権限は項目名＋値の表ではなく、役割そのもの（editor は「編集」、viewer は「閲覧のみ」）を家計簿マークの隅に重ねた小さなバッジで示し、独立した行は取らない。受諾のボタンは結果がそのまま分かる文言（「この家計簿を追加する」）とし、「参加」のような抽象語は画面に出さない。期限は最下部に「{日付} まで有効」と日付のみ（時刻は出さない）小さく静かに右揃えで出す。操作部は2段の固定配置とし、第1段はログイン前後で同じ形のアカウントバー（ログイン済みはアバター＋表示名、未ログイン時はバー自体がログイン操作を兼ねる。「ログイン中」のような状態を表す文は置かない）、第2段は常に追加ボタン（未ログイン時は無効状態で同じ位置に置く）として、状態でボタンの位置が動かないようにする。権限・発行者・期限を項目表（kv）でベタ書きしない。
+- 一覧・失効: 発行者は `GET /api/share-tickets` で自分の未受諾チケットを一覧でき、`DELETE /api/share-tickets/{ticket_ref}`（ticket_ref は token hash の先頭8 hex。認証要素としては使わない）で失効（行削除 + audit）できる。平文 URL は発行時にしか表示されない。
+- 互換: `POST /api/invitations` は移行期間中、共有チケット発行へ委譲し `/share?token=…` 形式の URL を返す。旧形式 invite（`/register?token=…`）の受理は移行期間（新規 backend のデプロイから7日）だけ残し、その後は受理コードごと削除する。admin CLI の token 一覧・失効は `ledger_share_tickets` も横断対象とする。
 
 ### 2-2 ユーザー識別
 
@@ -150,6 +163,11 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | `DELETE /api/passkeys/{id}` | session + step-up | 204 / 409（最後の1本） |
 | `POST /api/invitations` | session、対象 ledger の owner（`ledger_id` で指定。無指定は既定 ledger。TASK-78）、`{role, ledger_id?, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す。対象が editor 以下なら 403 `owner_required`・非所属/不在は 404） |
 | `POST /api/register-invitations` | session（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
+| `POST /api/share-tickets` | session、対象 ledger の owner、`{ledger_id, role, inviter_note?}` | 201 `{url, expires_at}`（URL は `/share?token=…` で1回だけ返す。非所属は 404、owner でない所属は 403 `owner_required`） |
+| `GET /api/share-tickets` | session | 200 `[{ticket_ref, ledger_id, ledger_name, role, created_at, expires_at, inviter_note}]`（自分の未受諾・期限内のチケット。平文は含めない） |
+| `DELETE /api/share-tickets/{ticket_ref}` | session（発行者本人のみ） | 204（行削除 + audit。他人の ref は 404） |
+| `POST /api/share/info` | 任意（session があれば付加情報を返す）、`{token}` | 200 `{ledger_name, role, issuer_display_name, expires_at, session, already_member}`（それ以外は一律 400 `invalid_token`） |
+| `POST /api/share/accept` | session、`{token}` | 200 `{ledger: {id, name, role}, outcome}`（`outcome` は `joined` / `already_member`。未ログインは 401） |
 | `GET /api/auth/me` | session | `{user_id, account_number, display_name, default_ledger_id, ledgers, auth_at}`（`ledgers` は `[{id, name, role, color}]`。`default_ledger_id` は所属している ledger のみ。所属していなければ null） |
 | `PUT /api/auth/me/default-ledger` | session、`{ledger_id}`（自分の所属 ledger。role 不問） | 200 `{ledger: {id, name, role}}`（非所属/不在は同一視の 404。TASK-13） |
 | `POST /api/auth/logout` / `logout-all` | session | 204 |
@@ -157,7 +175,7 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 - 文字数上限は文字数で数える（バイト数ではない）: 表示名とパスキーラベルは 100 文字まで、`inviter_note` は 200 文字まで（register 発行では必須）。超過は 400。
 - ceremony の finish 応答では `__Host-bb_ceremony` cookie を `Max-Age=0` で消す（1回使用の完了をブラウザ側でも確定させる）。
 
-認証イベント（ログイン成功・失敗の不一致、パスキー追加・削除、回復、招待発行・受諾）は `audit_events` に `actor_kind=web`、`entity_type` は `user` / `webauthn_credential` / `invitation` / `register_invitation` で記録する。
+認証イベント（ログイン成功・失敗の不一致、パスキー追加・削除、回復、招待発行・受諾）は `audit_events` に `actor_kind=web`、`entity_type` は `user` / `webauthn_credential` / `invitation` / `register_invitation` / `share_ticket` で記録する。
 
 ## 4. OAuth 2.1 認可サーバー
 

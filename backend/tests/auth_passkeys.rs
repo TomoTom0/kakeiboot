@@ -1002,8 +1002,11 @@ async fn web_invitation_issue_owner_and_ledger_choice() {
     );
     let body = body_json(resp).await;
     let url = body["url"].as_str().unwrap();
+    // Share design section 7-1: POST /api/invitations is a compatibility
+    // delegation — issuance creates a share ticket and returns a
+    // /share?token= URL (share_ttl_hours, also 168h).
     assert!(
-        url.starts_with("http://localhost:40281/register?token="),
+        url.starts_with("http://localhost:40281/share?token="),
         "{url}"
     );
     let now = budget_book::auth::session::now_ms();
@@ -1082,17 +1085,16 @@ async fn web_invitation_issue_owner_and_ledger_choice() {
         "{}",
         body_text(resp).await
     );
-    let invited: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT role, inviter_note FROM invitations WHERE kind = 'invite' AND ledger_id = ?",
-    )
-    .bind(second)
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let invited: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT role, inviter_note FROM ledger_share_tickets WHERE ledger_id = ?")
+            .bind(second)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         invited,
         vec![("viewer".to_string(), None)],
-        "the invitation joins the chosen ledger with the chosen role"
+        "the share ticket joins the chosen ledger with the chosen role"
     );
 
     // an editor membership of the target is not enough (owner only)

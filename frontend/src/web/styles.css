@@ -2289,6 +2289,95 @@ button.row-seg:focus-visible {
 .auth-card h2 { margin-top: 1rem; }
 .actions-fill .btn { flex: 1; min-height: 48px; }
 .auth-note { margin-top: 1.5rem; font-size: 0.85rem; color: var(--bb-muted); }
+/* share accept (/share): the screen is composed, not written out — the
+   invitation sentence is the title (balanced wrapping, never an orphan
+   line), the ledger itself is a visual panel (ledger mark + name + what
+   the recipient can do as a badge), the joining account is an avatar row,
+   and the expiry stays a small .auth-note at the very bottom */
+.share-title { text-wrap: balance; }
+.share-nowrap { white-space: nowrap; }
+.share-ledger {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem;
+  margin-bottom: 1.1rem;
+  border-radius: var(--bb-radius-lg);
+  background: var(--bb-surface-2);
+  text-align: left;
+}
+.share-ledger-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 54px;
+  height: 54px;
+  border-radius: 15px;
+  background: var(--ledger-teal);
+  color: #fff;
+}
+.share-ledger-visual { position: relative; flex: none; }
+/* the name is one unit: it wraps at spaces / punctuation, and only ever
+   breaks inside a word when the alternative is overflowing the card */
+.share-ledger-name { font-size: 1.3rem; font-weight: 700; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
+/* the role rides on the ledger mark's corner instead of taking a row */
+.share-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  position: absolute;
+  right: -8px;
+  bottom: -7px;
+  padding: 0 0.45rem;
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(31 41 55 / 0.14);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+/* slot 1 is the same account bar before and after login: the bar
+   itself is the login action until it shows the signed-in account */
+.share-account { display: flex; align-items: center; gap: 0.6rem; width: 100%; min-height: 48px; margin: 0; padding: 0.45rem 0.9rem; border: 1px solid var(--bb-border); border-radius: 12px; background: var(--bb-surface); box-sizing: border-box; font: inherit; color: var(--bb-text); text-align: left; }
+button.share-account { cursor: pointer; }
+.share-account-avatar { width: 30px; height: 30px; font-size: 0.8rem; flex: none; }
+.share-account-guest { display: inline-flex; align-items: center; justify-content: center; background: var(--bb-border); color: var(--bb-muted); }
+.share-account-name { font-weight: 600; }
+.share-expiry { margin-top: 1rem; font-size: 0.8rem; text-align: right; }
+/* this page skips the tagline and tightens the top: logo, title, card */
+.share-auth { padding-top: 1.75rem; }
+.share-auth .auth-logo { margin-bottom: 1.25rem; }
+/* the action zone is two fixed slots so the add button never moves:
+   slot 1 is the account row or the login button, slot 2 is always the
+   add button (waiting, disabled, until login) */
+.share-actions { display: flex; flex-direction: column; gap: 0.6rem; }
+.share-actions .btn { min-height: 48px; }
+.share-slot { display: flex; align-items: center; min-height: 48px; }
+.share-slot .btn { flex: 1; }
+/* the waiting add button is plainly inactive: neutral gray with full
+   opacity, not the primary green faded out (which still reads as a
+   button you could press) */
+.share-waiting { background: var(--bb-border); border-color: var(--bb-border); color: var(--bb-muted); box-shadow: none; }
+.share-waiting:disabled { opacity: 1; cursor: not-allowed; }
+/* before login the account bar is the primary action, so it carries
+   the primary green; after login the emphasis moves to the add button */
+.share-account-login { background: var(--bb-accent); border-color: var(--bb-accent); color: var(--bb-accent-fg); }
+.share-account-login:hover { background: var(--bb-accent-strong); border-color: var(--bb-accent-strong); }
+.share-account-login .share-account-guest { background: rgb(255 255 255 / 0.22); color: var(--bb-accent-fg); }
+.share-done { text-align: center; }
+.share-done-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0.5rem auto 1rem;
+  border-radius: 50%;
+  background: var(--bb-accent-soft);
+  color: var(--bb-accent);
+}
+.share-done .btn { margin-top: 1rem; }
 
 /* ------------------------------------------------------- usage (使い方) */
 

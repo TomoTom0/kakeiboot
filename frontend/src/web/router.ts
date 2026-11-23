@@ -43,6 +43,7 @@ import ManageStoresPage from './pages/ManageStoresPage.vue'
 import ReceiptDetailPage from './pages/ReceiptDetailPage.vue'
 import ReceiptsPage from './pages/ReceiptsPage.vue'
 import RegisterPage from './pages/RegisterPage.vue'
+import ShareAcceptPage from './pages/ShareAcceptPage.vue'
 import SearchPage from './pages/SearchPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import StoresPage from './pages/StoresPage.vue'
@@ -56,6 +57,9 @@ import OthersPanel from './pages/settings/OthersPanel.vue'
 export const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
   { path: '/register', name: 'register', component: RegisterPage, meta: { public: true } },
+  // /share is the share-ticket landing: public because it must render for
+  // a not-yet-logged-in recipient (info itself reports the session state).
+  { path: '/share', name: 'share', component: ShareAcceptPage, meta: { public: true } },
   { path: '/oauth/consent', name: 'consent', component: ConsentPage, meta: { public: true } },
   // `filters` marks the browsing routes that carry the topbar center filter
   // bar (TASK-44 §11-3): set explicitly on the enumerated view routes — not

@@ -135,7 +135,7 @@ async function copyUrl(row: IssuedRow): Promise<void> {
       </div>
     </div>
     <p class="muted small">
-      新規ユーザー登録用の URL を発行します（メモは運用者のみ閲覧可・URL は一度だけ表示されます）。
+      新規ユーザー登録用の URL を発行します（メモは運用者のみ閲覧可・URL は一度だけ表示されます）。家計簿は共有されません。
     </p>
     <ul
       v-if="issued.length > 0"

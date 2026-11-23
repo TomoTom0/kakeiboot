@@ -24,7 +24,6 @@ const error = ref('')
 const busy = ref(false)
 const displayName = ref('')
 const label = ref('')
-const useInvitedDefault = ref(true)
 
 const ROLE_LABEL: Record<string, string> = { owner: 'オーナー', editor: '編集', viewer: '閲覧のみ' }
 const title = computed(() =>
@@ -64,10 +63,12 @@ async function submit(): Promise<void> {
   try {
     const ccr = await authApi.registerStart(token, info.value.needs_display_name ? name : undefined)
     const credential = await createPasskey(ccr)
+    // The default ledger is never set from a registration flow: it is the
+    // personal ledger here, and changing it later is the settings screen's
+    // own operation (share design D-D1).
     await authApi.registerFinish({
       credential,
       ...(label.value.trim() ? { label: label.value.trim() } : {}),
-      ...(info.value.kind === 'invite' ? { use_invited_ledger_as_default: useInvitedDefault.value } : {}),
     })
     // Settle the session BEFORE navigating so the shell mounts together with
     // the home route (TASK-39 A-2; login/finish response has no user).
@@ -124,14 +125,12 @@ async function submit(): Promise<void> {
         <p>
           家計簿「{{ info.ledger_name }}」に{{ ROLE_LABEL[info.role ?? ''] ?? info.role }}の権限で招待されています。あなた専用の家計簿も作成されます。
         </p>
-        <label class="check">
-          <input
-            v-model="useInvitedDefault"
-            type="checkbox"
-            data-test="use-invited-default"
-          >
-          「{{ info.ledger_name }}」を web 画面の既定の家計簿にする
-        </label>
+        <p
+          v-if="info.share_migrated"
+          data-test="share-migrated"
+        >
+          既にアカウントをお持ちの方は、発行者に新しい共有 URL を依頼してください。
+        </p>
       </div>
       <p
         v-if="info.kind === 'recovery'"
