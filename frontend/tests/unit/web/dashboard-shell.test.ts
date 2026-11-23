@@ -472,7 +472,8 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       { timeout: 3_000, interval: 20 },
     )
     await settle()
-    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="breakdown-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="breakdown"]').text()).not.toContain('この期間の記録はありません。')
     expect(wrapper.find('[data-test="recent"] .empty-state').exists()).toBe(true)
     // November 2026 spans six overlapping weeks (10/26 .. 11/30 Mondays) —
     // all zero, no bars, and nothing explains the future
@@ -1329,14 +1330,15 @@ describe('HomePage period UI (TASK-161)', () => {
     expect(ticks).toHaveLength(5)
     expect(ticks[0]!.text()).toBe('')
     expect(ticks[4]!.text()).toBe('1千')
-    // the empty state keeps its one line (§1-1): September holds no records
-    // — no bar, no segments, no ticks
+    // the empty state is the visual one (icon only, no sentence):
+    // September holds no records — no bar, no segments, no ticks
     await wrapper.find('[data-test="period-step-prev"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="breakdown-bar"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-test="breakdown-seg"]').length).toBe(0)
     expect(wrapper.findAll('[data-test^="breakdown-tick-"]').length).toBe(0)
-    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="breakdown-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="breakdown"]').text()).not.toContain('この期間の記録はありません。')
   })
 
   it('[covers:web-home.week-row-in-bar-label] 週行segmentのbar内label: jsdom未測定では非表示fallback（色のみ）・title「名称 金額（n%）」は維持', async () => {

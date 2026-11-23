@@ -116,11 +116,19 @@ async function goHome(): Promise<void> {
       家計簿の共有
     </h1>
     <div class="card auth-card">
-      <p v-if="loading">
+      <Transition
+        name="share-swap"
+        mode="out-in"
+      >
+      <p
+        v-if="loading"
+        key="loading"
+      >
         読み込んでいます...
       </p>
       <p
         v-else-if="noToken"
+        key="no-token"
         class="msg msg-error"
         data-test="no-token"
       >
@@ -128,6 +136,7 @@ async function goHome(): Promise<void> {
       </p>
       <p
         v-else-if="invalid"
+        key="invalid"
         class="msg msg-error"
         data-test="invalid"
       >
@@ -135,6 +144,7 @@ async function goHome(): Promise<void> {
       </p>
       <div
         v-else-if="result"
+        key="done"
         class="share-done"
         data-test="done"
       >
@@ -164,6 +174,7 @@ async function goHome(): Promise<void> {
       </div>
       <div
         v-else-if="info"
+        key="info"
         data-test="share-info"
       >
         <div class="share-ledger">
@@ -258,6 +269,7 @@ async function goHome(): Promise<void> {
           {{ formatDate(info.expires_at) }} まで有効
         </p>
       </div>
+      </Transition>
       <p
         v-if="error"
         class="msg msg-error"

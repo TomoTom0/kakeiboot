@@ -283,12 +283,16 @@ const recentQuery = computed(() => {
             class="zone zone--breakdown"
             data-test="breakdown"
           >
-            <p
+            <div
               v-if="breakdownRows.length === 0"
-              class="muted empty"
+              class="empty-state breakdown-empty"
+              data-test="breakdown-empty"
             >
-              この期間の記録はありません。
-            </p>
+              <span class="breakdown-empty-ring"><AppIcon
+                name="receipt"
+                :size="26"
+              /></span>
+            </div>
             <BreakdownBar
               v-else
               :rows="breakdownRows"

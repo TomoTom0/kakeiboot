@@ -1178,6 +1178,13 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   margin-top: 0.4rem;
   font-size: var(--axis-label-size);
   font-weight: var(--axis-label-weight);
+  /* the axis rows' vertical geometry is FIXED (user direction: the year /
+     month position never moves): one line at a pinned height in every
+     state — sliding, pinned, trimmed, dense or narrow — so nothing in
+     the slide machinery can push the row down and back */
+  line-height: 1.3;
+  height: 1.3em;
+  overflow: hidden;
 }
 .axis-labels span { text-align: center; white-space: nowrap; }
 /* TASK-162 §5-2/§5-3 (指摘5): the YEAR tick row — the upper tier over the
@@ -1195,6 +1202,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   font-size: var(--axis-label-size);
   font-weight: var(--axis-label-weight);
   color: var(--bb-muted);
+  /* fixed height, same rule as .axis-labels above */
+  line-height: 1;
+  height: 1em;
+  overflow: hidden;
 }
 .axis-years span {
   text-align: center;
@@ -1277,6 +1288,11 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .bars.no-anim,
 .axis-labels.no-anim,
 .axis-years.no-anim { transition: none; }
+/* one compositor layer for the whole slide: the three rows translate
+   together and never repaint at different rates mid-move */
+.bars.is-sliding,
+.axis-labels.is-sliding,
+.axis-years.is-sliding { will-change: transform; }
 /* the concatenated pair is twice the wrap wide: the wrap clips at the
    committed window's pinned width (its is-sliding rule) and the scroll
    port hides — the 2-window overflow never feeds a phantom scrollbar */
@@ -1449,6 +1465,21 @@ h3.zone-title { font-size: 0.85rem; }
   text-align: center;
 }
 .empty-state p { margin: 0; }
+/* the breakdown's empty state is a visual, not a sentence (user
+   direction: UI is not written in text) — and it holds the bar's exact
+   block height (track 24px + its 1.35rem headroom) so the zones below
+   never move when a period flips between empty and non-empty */
+.breakdown-empty { height: calc(24px + 1.35rem); padding: 0; justify-content: center; }
+.breakdown-empty-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--bb-accent-soft);
+  color: var(--bb-muted);
+}
 
 /* ------------------------------------------------- dashboard-style views */
 
@@ -2366,6 +2397,26 @@ button.share-account { cursor: pointer; }
 .share-account-login { background: var(--bb-accent); border-color: var(--bb-accent); color: var(--bb-accent-fg); }
 .share-account-login:hover { background: var(--bb-accent-strong); border-color: var(--bb-accent-strong); }
 .share-account-login .share-account-guest { background: rgb(255 255 255 / 0.22); color: var(--bb-accent-fg); }
+/* share surfaces move: the accept card's states cross-fade with a small
+   rise instead of swapping instantly, the done mark pops, the account
+   bar / buttons ease their color changes, and the issuer-side lists
+   fade rows in and out */
+.share-swap-enter-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.share-swap-enter-from { opacity: 0; transform: translateY(6px); }
+.share-swap-leave-active { transition: opacity 0.12s ease; }
+.share-swap-leave-to { opacity: 0; }
+@keyframes bb-pop {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.share-done-mark { animation: bb-pop 0.32s cubic-bezier(.2, .7, .2, 1); }
+.share-account { transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+.share-actions .btn { transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+.share-list-enter-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.share-list-enter-from { opacity: 0; transform: translateY(-4px); }
+.share-list-leave-active { transition: opacity 0.15s ease; }
+.share-list-leave-to { opacity: 0; }
 .share-done { text-align: center; }
 .share-done-mark {
   display: grid;
@@ -2609,6 +2660,12 @@ button.share-account { cursor: pointer; }
   .label-picker .label-anim-leave-active,
   .label-picker .label-anim-move { transition: none; }
   .topbar.ledger-scoped { transition: none; }
+  /* the share surfaces' motion is off under reduced motion too */
+  .share-swap-enter-active,
+  .share-swap-leave-active,
+  .share-list-enter-active,
+  .share-list-leave-active { transition: none; }
+  .share-done-mark { animation: none; }
   .ledger-chip { transition: none; }
   .cat-fold .icon { transition: none; }
   /* TASK-146 §3: the vocabulary's new members are off as well — the scrim
