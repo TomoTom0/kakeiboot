@@ -195,7 +195,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       指定されたカテゴリは見つかりません
     </p>
 
-    <Transition name="handover">
+    <Transition name="handover" type="transition">
     <div
       v-if="analysis && totals"
       key="data"

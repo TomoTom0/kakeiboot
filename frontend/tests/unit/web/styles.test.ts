@@ -560,6 +560,7 @@ describe('motion: page transition, message fade, skeleton (TASK-39)', () => {
     // the skeleton <-> content handover cross-fades (no blank, no cut)
     expect(rulesFor('.handover-leave-active').some((r) => decl(r.body, 'position') === 'absolute')).toBe(true)
     expect(rulesFor('.handover-enter-active').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(true)
+    expect(rulesFor('.handover-leave-to').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
     const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
     expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'animation') === 'none')).toBe(true)
     // reduced motion: no delay, no pulse — static and visible at once

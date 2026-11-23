@@ -555,7 +555,7 @@ const groups = computed(() => {
       {{ error }}
     </p>
 
-    <Transition name="handover">
+    <Transition name="handover" type="transition">
     <DashSkeleton v-if="loading && !loaded" key="skeleton" />
     <div
       v-else

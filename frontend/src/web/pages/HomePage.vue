@@ -266,7 +266,7 @@ const recentQuery = computed(() => {
       {{ error }}
     </p>
 
-    <Transition name="handover">
+    <Transition name="handover" type="transition">
     <div
       v-if="analysis && totals"
       key="data"

@@ -230,7 +230,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       指定された店は見つかりません
     </p>
 
-    <Transition name="handover">
+    <Transition name="handover" type="transition">
     <div
       v-if="analysis && totals"
       key="data"
