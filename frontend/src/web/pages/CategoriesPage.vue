@@ -52,10 +52,18 @@ const committedKey = ref('')
 const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load — the
+  // dimmed two-stage render is for same-ledger refetches only (a period
+  // move, a filter change), never across ledgers
+  if (committedLedger !== null && l !== committedLedger) {
+    analysis.value = null
+  }
   loading.value = true
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
@@ -63,6 +71,7 @@ async function load(id?: number): Promise<void> {
     const a = await api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 })
     if (n !== seq) return
     analysis.value = a
+    committedLedger = l
     committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)

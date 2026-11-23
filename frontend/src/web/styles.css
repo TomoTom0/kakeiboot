@@ -2548,13 +2548,26 @@ button.share-account { cursor: pointer; }
 }
 .msg { animation: bb-fade-in 0.16s ease; }
 
-/* loading skeleton: the zone-stack silhouette in flat surface blocks, no
-   shimmer — the shape holds the layout, one soft fade on insert only */
+/* the skeleton blocks breathe while a load runs — a slow opacity pulse,
+   so the placeholder reads as a living loading state, not a frozen shape */
+@keyframes bb-sk-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.45; }
+}
+
+/* loading skeleton: the zone-stack silhouette in flat surface blocks.
+   The blocks stay invisible for the first 250ms of a load — a load that
+   finishes inside the delay never shows them at all, so fast screen
+   switches do not strobe a placeholder — then they fade in and pulse
+   until the content commits */
 .skeleton .sk {
   display: block;
   background: var(--bb-surface-2);
   border-radius: 6px;
-  animation: bb-fade-in 0.2s ease;
+  opacity: 0;
+  animation:
+    bb-fade-in 0.2s ease 0.25s forwards,
+    bb-sk-pulse 1.5s ease-in-out 0.45s infinite alternate;
 }
 .skeleton .sk-label { width: 34%; height: 0.8rem; margin-bottom: 0.65rem; }
 .skeleton .sk-value { width: 45%; height: 2rem; margin-bottom: 0.9rem; }
@@ -2652,7 +2665,10 @@ button.share-account { cursor: pointer; }
   .axis-labels.is-sliding,
   .axis-years.is-sliding { transition: none; }
   .bar-stack { transition: none; }
-  .msg, .skeleton .sk { animation: none; }
+  .msg { animation: none; }
+  /* reduced motion: the skeleton stands still and shows at once (the
+     delayed reveal and the pulse are motion too) */
+  .skeleton .sk { animation: none; opacity: 1; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */
   .copy-btn.is-done .icon { animation: none; }

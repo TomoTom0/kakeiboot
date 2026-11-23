@@ -73,10 +73,20 @@ const weekSpan = computed<[string, string] | null>(() => {
 const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load — the
+  // dimmed two-stage render is for same-ledger refetches only (a period
+  // move, a filter change), never across ledgers
+  if (committedLedger !== null && l !== committedLedger) {
+    analysis.value = null
+    weekRes.value = null
+    recent.value = []
+  }
   loading.value = true
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
@@ -107,6 +117,7 @@ async function load(id?: number): Promise<void> {
     analysis.value = a
     recent.value = r.receipts
     weekRes.value = wk ?? null
+    committedLedger = l
     // the pane's committed identity (the content transition fires here, at
     // the commit — never at the press); TASK-161 §2: the period range is NOT
     // part of it — a period move renders in place

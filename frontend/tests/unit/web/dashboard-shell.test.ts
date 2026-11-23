@@ -714,6 +714,33 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
   })
 
+  it('[covers:web-shell.loading-skeleton] 家計簿切替は文脈切替: 旧家計簿の内容は即座に消えて skeleton が覆い、確定で新家計簿の内容になる（dim の二段描画は同一家計簿の再取得だけ）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    // ledger 1's content is committed and visible
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    // hold ledger 2's analysis at the gate; everything else flows
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      if (args[0] === 2) await gate
+      return orig(...args)
+    })
+    ;(await import('@/web/stores/session')).useSessionStore().selectedLedgerId = 2
+    await settle()
+    // mid-switch: the previous ledger's content is GONE (no dimmed
+    // two-stage render across ledgers) and the skeleton covers the load
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(true)
+    release()
+    await settle()
+    // committed: ledger 2's content, skeleton gone
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(true)
+  })
+
   it('[covers:web-dashboard.label-filter] 検索dialog下段のラベル選択は Home の analysis 再取得へ label_colors で流れる', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     const spy = vi.spyOn(api, 'getAnalysis')

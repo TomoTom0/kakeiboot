@@ -114,10 +114,21 @@ function analysisFilters() {
 }
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load — the
+  // dimmed two-stage render is for same-ledger refetches only (a period
+  // move, a filter change), never across ledgers
+  if (committedLedger !== null && l !== committedLedger) {
+    loaded.value = false
+    receipts.value = []
+    payments.value = null
+    trendRes.value = null
+  }
   loading.value = true
   error.value = ''
   try {
@@ -131,6 +142,7 @@ async function load(id?: number): Promise<void> {
       api.getAnalysisTrend(l, { axis: 'category', granularity: spanGranularity(...period.range), ...analysisFilters(), limit: 5 }),
     ])
     if (n !== seq) return
+    committedLedger = l
     receipts.value = list.receipts
     totalCount.value = list.total_count
     sumAmount.value = list.sum_amount
