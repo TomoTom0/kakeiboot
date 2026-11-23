@@ -554,8 +554,8 @@ describe('motion: page transition, message fade, skeleton (TASK-39)', () => {
     // (a fast load never shows it — cards included, not just the blocks),
     // then fades in; the blocks pulse while the load runs
     expect(css).toMatch(/@keyframes bb-sk-pulse/)
-    expect(rulesFor('.skeleton').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
     expect(rulesFor('.skeleton').some((r) => (decl(r.body, 'animation') ?? '').includes('0.25s'))).toBe(true)
+    expect(rulesFor('.skeleton').some((r) => (decl(r.body, 'animation') ?? '').includes('backwards'))).toBe(true)
     expect(rulesFor('.skeleton .sk').some((r) => (decl(r.body, 'animation') ?? '').includes('bb-sk-pulse'))).toBe(true)
     // the skeleton <-> content handover cross-fades (no blank, no cut)
     expect(rulesFor('.handover-leave-active').some((r) => decl(r.body, 'position') === 'absolute')).toBe(true)

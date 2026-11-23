@@ -2569,8 +2569,10 @@ button.share-account { cursor: pointer; }
    strobe a placeholder — then it fades in and the blocks pulse until
    the content commits */
 .skeleton {
-  opacity: 0;
-  animation: bb-fade-in 0.2s ease 0.25s forwards;
+  /* the delay hides the skeleton through the animation's backwards fill
+     (the from keyframe), NOT a forwards fill: a held fill would pin the
+     opacity at 1 and defeat the handover leave fade at the commit */
+  animation: bb-fade-in 0.2s ease 0.25s backwards;
 }
 .skeleton .sk {
   display: block;
