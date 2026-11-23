@@ -266,8 +266,10 @@ const recentQuery = computed(() => {
       {{ error }}
     </p>
 
+    <Transition name="handover">
     <div
       v-if="analysis && totals"
+      key="data"
       class="view-stack"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
@@ -415,6 +417,7 @@ const recentQuery = computed(() => {
         </div>
       </ContentSwap>
     </div>
-    <DashSkeleton v-else-if="loading" />
+    <DashSkeleton v-else-if="loading" key="skeleton" />
+    </Transition>
   </div>
 </template>

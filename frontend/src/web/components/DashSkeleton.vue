@@ -3,10 +3,12 @@
 // TASK-105: the reading screens are a zone stack): the same silhouette as
 // the loaded page (headline block + trend bars + ruled rows), flat
 // single-color blocks. The reveal timing and the pulse live in the
-// .skeleton CSS: the blocks stay invisible for a load's first 250ms (a
-// fast load never shows them) and then fade in and breathe until the
-// content commits. Decorative blocks are aria-hidden; the screen-reader
-// text carries the loading state.
+// .skeleton CSS: the whole skeleton stays invisible for a load's first
+// 250ms (a fast load never shows it) and then fades in; the blocks
+// breathe until the content commits. On the main screens the pages hand
+// over between this skeleton and the content with the handover
+// cross-fade (styles.css). Decorative blocks are aria-hidden; the
+// screen-reader text carries the loading state.
 </script>
 
 <template>

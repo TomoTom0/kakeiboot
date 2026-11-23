@@ -550,16 +550,22 @@ describe('motion: page transition, message fade, skeleton (TASK-39)', () => {
     expect(rulesFor('.skeleton .sk').some((r) => decl(r.body, 'background') === 'var(--bb-surface-2)')).toBe(true)
     // single flat color: no shimmer keyframes / gradient animation
     expect(css).not.toMatch(/shimmer/)
-    // the blocks stay invisible for the first 250ms of a load (a fast load
-    // never shows them), then fade in and pulse while the load runs
+    // the whole skeleton stays invisible for the first 250ms of a load
+    // (a fast load never shows it — cards included, not just the blocks),
+    // then fades in; the blocks pulse while the load runs
     expect(css).toMatch(/@keyframes bb-sk-pulse/)
-    expect(rulesFor('.skeleton .sk').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
-    expect(rulesFor('.skeleton .sk').some((r) => (decl(r.body, 'animation') ?? '').includes('0.25s'))).toBe(true)
+    expect(rulesFor('.skeleton').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
+    expect(rulesFor('.skeleton').some((r) => (decl(r.body, 'animation') ?? '').includes('0.25s'))).toBe(true)
     expect(rulesFor('.skeleton .sk').some((r) => (decl(r.body, 'animation') ?? '').includes('bb-sk-pulse'))).toBe(true)
+    // the skeleton <-> content handover cross-fades (no blank, no cut)
+    expect(rulesFor('.handover-leave-active').some((r) => decl(r.body, 'position') === 'absolute')).toBe(true)
+    expect(rulesFor('.handover-enter-active').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(true)
     const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
     expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'animation') === 'none')).toBe(true)
     // reduced motion: no delay, no pulse — static and visible at once
+    expect(rulesFor('.skeleton', rm).some((r) => decl(r.body, 'opacity') === '1')).toBe(true)
     expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'opacity') === '1')).toBe(true)
+    expect(rulesFor('.handover-enter-active', rm).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
     // the loading state stays readable for screen readers
     expect(rulesFor('.sr-only').some((r) => decl(r.body, 'position') === 'absolute' && decl(r.body, 'width') === '1px')).toBe(true)
   })

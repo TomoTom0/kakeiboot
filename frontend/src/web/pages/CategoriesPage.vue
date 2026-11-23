@@ -195,8 +195,10 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       指定されたカテゴリは見つかりません
     </p>
 
+    <Transition name="handover">
     <div
       v-if="analysis && totals"
+      key="data"
       class="view-stack"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
@@ -268,6 +270,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
         </div>
       </ContentSwap>
     </div>
-    <DashSkeleton v-else-if="loading" />
+    <DashSkeleton v-else-if="loading" key="skeleton" />
+    </Transition>
   </div>
 </template>

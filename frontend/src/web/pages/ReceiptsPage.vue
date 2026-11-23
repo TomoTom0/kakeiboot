@@ -555,9 +555,11 @@ const groups = computed(() => {
       {{ error }}
     </p>
 
-    <DashSkeleton v-if="loading && !loaded" />
+    <Transition name="handover">
+    <DashSkeleton v-if="loading && !loaded" key="skeleton" />
     <div
       v-else
+      key="data"
       class="view-stack"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
@@ -782,5 +784,6 @@ const groups = computed(() => {
         </div>
       </ContentSwap>
     </div>
+    </Transition>
   </div>
 </template>

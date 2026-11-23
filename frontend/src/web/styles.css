@@ -1309,6 +1309,13 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    committed content at full opacity until the commit swaps it — the
    only loading surface is the skeleton (first load / ledger switch) */
 .view-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.view-page { position: relative; }
+/* the skeleton <-> content handover cross-fades: the leaving side is
+   parked absolute while the entering side fades in over it, so the two
+   overlap and the switch never passes through a blank or a hard cut */
+.handover-enter-active { transition: opacity 0.2s ease; }
+.handover-enter-from { opacity: 0; }
+.handover-leave-active { transition: opacity 0.2s ease; position: absolute; top: 0; left: 0; right: 0; }
 .zone {
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);
@@ -2555,18 +2562,20 @@ button.share-account { cursor: pointer; }
 }
 
 /* loading skeleton: the zone-stack silhouette in flat surface blocks.
-   The blocks stay invisible for the first 250ms of a load — a load that
-   finishes inside the delay never shows them at all, so fast screen
-   switches do not strobe a placeholder — then they fade in and pulse
-   until the content commits */
+   The whole skeleton (cards included, not just the blocks) stays
+   invisible for the first 250ms of a load — a load that finishes inside
+   the delay never shows it at all, so fast screen switches do not
+   strobe a placeholder — then it fades in and the blocks pulse until
+   the content commits */
+.skeleton {
+  opacity: 0;
+  animation: bb-fade-in 0.2s ease 0.25s forwards;
+}
 .skeleton .sk {
   display: block;
   background: var(--bb-surface-2);
   border-radius: 6px;
-  opacity: 0;
-  animation:
-    bb-fade-in 0.2s ease 0.25s forwards,
-    bb-sk-pulse 1.5s ease-in-out 0.45s infinite alternate;
+  animation: bb-sk-pulse 1.5s ease-in-out 0.45s infinite alternate;
 }
 .skeleton .sk-label { width: 34%; height: 0.8rem; margin-bottom: 0.65rem; }
 .skeleton .sk-value { width: 45%; height: 2rem; margin-bottom: 0.9rem; }
@@ -2667,7 +2676,9 @@ button.share-account { cursor: pointer; }
   .msg { animation: none; }
   /* reduced motion: the skeleton stands still and shows at once (the
      delayed reveal and the pulse are motion too) */
+  .skeleton { animation: none; opacity: 1; }
   .skeleton .sk { animation: none; opacity: 1; }
+  .handover-enter-active, .handover-leave-active { transition: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */
   .copy-btn.is-done .icon { animation: none; }
