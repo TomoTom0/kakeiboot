@@ -74,9 +74,9 @@ async function load(id?: number): Promise<void> {
   if (l === null || !period.valid) return
   const n = ++seq
   // a ledger switch is a context change, not a refetch: the previous
-  // ledger's content leaves NOW and the skeleton covers this load — the
-  // dimmed two-stage render is for same-ledger refetches only (a period
-  // move, a filter change), never across ledgers
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
   if (committedLedger !== null && l !== committedLedger) {
     analysis.value = null
   }
@@ -233,7 +233,6 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
     <div
       v-if="analysis && totals"
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
@@ -249,7 +248,6 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
             <div class="col-main">
               <section
                 class="zone"
-                :class="{ 'is-loading': win.loading.value }"
                 data-test="trend-card"
               >
                 <div class="zone-head">

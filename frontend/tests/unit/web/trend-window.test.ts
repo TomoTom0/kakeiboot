@@ -1641,7 +1641,7 @@ describe('page wiring (Home / view pages, TASK-104 / TASK-115)', () => {
     // prefetch, so its slide is already assembled: the display array is the
     // union (the six committed months + the entering 2026-11, one graph
     // moving — TASK-161 §1-2; the trim lands on the transitionend)
-    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(wrapper.find('.view-stack').classes()).not.toContain('loading')
     expect(bars().findAll('.bar-col').map((b) => b.attributes('data-test'))).toEqual(
       monthsBetween('2026-05-01', '2026-11-30').map((m) => `bar-${m}`),
     )

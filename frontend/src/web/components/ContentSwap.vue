@@ -5,7 +5,7 @@
 // relative with an overflow guard — reused on the same slide vocabulary,
 // with dir='swap' crossing through the fade vocabulary instead. The swapKey
 // is the COMMITTED content's identity (each page's load() bumps it once the
-// response lands), so a mid-refetch press keeps the old content dimmed (the
+// response lands), so a mid-refetch press keeps the old content in place at full opacity (the
 // two-stage render of web-shell.loading-skeleton) and the transition fires
 // at the commit, never at the press. The first appearance (the skeleton ->
 // data handover included) rides the appear fade. prefers-reduced-motion

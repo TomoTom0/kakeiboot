@@ -563,7 +563,7 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     await settle()
     await wrapper.find('[data-test="period-next"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(wrapper.find('.view-stack').classes()).not.toContain('loading')
     expect(wrapper.find('[data-test="period-total"]').text()).toBe('948円')
     expect(still()).toBe(true)
     const paneBefore = swap().element.firstElementChild

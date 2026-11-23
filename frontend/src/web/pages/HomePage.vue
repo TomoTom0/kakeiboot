@@ -50,7 +50,7 @@ const error = ref('')
 const loading = ref(false)
 
 // TASK-146 §3: the content transition's committed key (bumped only at the
-// load commit — mid-refetch the old content stays dimmed). TASK-161 §2
+// load commit — mid-refetch the old content stays in place at full opacity). TASK-161 §2
 // (web-common.period-move-voice): the key drops the PERIOD range — a period
 // step never remounts the pane; the value-level vocabulary (the label micro
 // move, the amount tweens, the bar width transitions) owns the change. A
@@ -79,9 +79,9 @@ async function load(id?: number): Promise<void> {
   if (l === null || !period.valid) return
   const n = ++seq
   // a ledger switch is a context change, not a refetch: the previous
-  // ledger's content leaves NOW and the skeleton covers this load — the
-  // dimmed two-stage render is for same-ledger refetches only (a period
-  // move, a filter change), never across ledgers
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
   if (committedLedger !== null && l !== committedLedger) {
     analysis.value = null
     weekRes.value = null
@@ -269,11 +269,10 @@ const recentQuery = computed(() => {
     <div
       v-if="analysis && totals"
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old
-           content stays right here, dimmed by the loading class above -->
+           content stays right here at full opacity until the commit -->
       <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
@@ -318,7 +317,6 @@ const recentQuery = computed(() => {
             <div class="col-main">
               <section
                 class="zone"
-                :class="{ 'is-loading': win.loading.value }"
                 data-test="trend-card"
               >
                 <div class="zone-head">

@@ -658,8 +658,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
       <div
         v-if="cross && totals"
         class="view-stack"
-        :class="{ loading }"
-      >
+        >
         <!-- TASK-146 §3: the content transition fires at the load commit -->
         <ContentSwap :swap-key="committedKey">
           <div class="content-pane">
@@ -674,8 +673,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
               <div class="col-main">
                 <section
                   class="zone"
-                  :class="{ 'is-loading': win.loading.value }"
-                  data-test="trend-card"
+                    data-test="trend-card"
                 >
                   <div class="zone-head">
                     <h2 class="zone-title">

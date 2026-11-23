@@ -151,7 +151,7 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     await settle()
     await wrapper.find('[data-test="period-prev"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(wrapper.find('.view-stack').classes()).not.toContain('loading')
     const paneBefore = swapEl().element.firstElementChild
     release()
     await flushPromises()
@@ -680,10 +680,10 @@ describe('ReceiptsPage (dashboard)', () => {
 
   // TASK-105 (landed, web-shell.loading-skeleton revised, design §5-4):
   // ReceiptsPage — the last .dash-grid user — joins the others on
-  // `.view-stack` + `.dash-cols`, so the refetch dimming is the shared
-  // `.view-stack.loading`（opacity 0.6）and no `.dash-grid.loading` rule
-  // remains. The assertions here（初回 skeleton・完了後の実データ・aria）are
-  // unchanged by it.
+  // `.view-stack` + `.dash-cols` structure. A refetch never dims: the
+  // committed content stays at full opacity until the commit (there is
+  // no `.view-stack.loading` rule). The assertions here（初回 skeleton・
+  // 完了後の実データ・aria）are unchanged by it.
   it('[covers:web-shell.loading-skeleton] レシート一覧も初回 loading は skeleton で統一', async () => {
     const orig = api.listReceipts.bind(api)
     let release!: () => void

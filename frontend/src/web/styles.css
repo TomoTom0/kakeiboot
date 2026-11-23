@@ -1298,8 +1298,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    port hides — the 2-window overflow never feeds a phantom scrollbar */
 .trend-wrap.is-sliding { overflow: hidden; }
 .trend-window .hscroll.is-sliding { overflow: hidden; }
-/* the window-move loading: the same fade as .view-stack.loading, zone-scoped */
-.zone.is-loading { opacity: 0.6; }
 
 /* ------------------------------------------------ reading screens (TASK-89)
    Home / the lists / the axis detail drop the two-column card grid for a
@@ -1307,15 +1305,16 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    radius, list rows on the shared hairline rule and numbers in tabular
    figures. The settings screens keep the card look (--bb-radius-lg +
    --bb-shadow) — the tokens above stay split on purpose. */
-.view-stack { display: flex; flex-direction: column; gap: 0.75rem; transition: opacity 0.15s; }
-.view-stack.loading { opacity: 0.6; }
+/* no loading dim anywhere (user direction): a refetch keeps the
+   committed content at full opacity until the commit swaps it — the
+   only loading surface is the skeleton (first load / ledger switch) */
+.view-stack { display: flex; flex-direction: column; gap: 0.75rem; }
 .zone {
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius);
   padding: 1rem 1.25rem;
   min-width: 0;
-  transition: opacity 0.15s;
 }
 /* TASK-105: the zone heading is a visible data-name title (zone-title). The
    "see the whole axis" icon link rides the heading row's right end — no

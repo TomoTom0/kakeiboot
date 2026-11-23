@@ -1047,15 +1047,13 @@ describe('visual bar review fixes (PR#4, static checks)', () => {
 // stylesheet. ---
 
 describe('transition vocabulary additions (TASK-146, static checks)', () => {
-  it('[covers:web-shell.loading-skeleton] .zone.is-loading は .view-stack.loading と同一の挙動へ（opacity 0.15s の fade）', () => {
-    // #12: the zone-scoped dim used to flip opacity instantly — it joins the
-    // 0.15s fade the view-stack dim has had since TASK-39
-    const zoneRules = rulesFor('.zone.is-loading').concat(rulesFor('.zone'))
-    expect(
-      zoneRules.some((r) => /^opacity\s*0\.15s/.test(decl(r.body, 'transition') ?? 'x')),
-      '.zone/.zone.is-loading carries an opacity 0.15s transition',
-    ).toBe(true)
-    expect(rulesFor('.zone.is-loading').some((r) => decl(r.body, 'opacity') === '0.6')).toBe(true)
+  it('[covers:web-shell.loading-skeleton] loading の dim は全廃（.view-stack.loading / .zone.is-loading の opacity 規則は存在しない）', () => {
+    // a refetch keeps the committed content at full opacity until the
+    // commit — no half-transparent in-between state anywhere
+    expect(rulesFor('.view-stack.loading')).toHaveLength(0)
+    expect(rulesFor('.zone.is-loading')).toHaveLength(0)
+    expect(rulesFor('.zone').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(false)
+    expect(rulesFor('.view-stack').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(false)
   })
 
   it('[covers:web-common.overlay-transition] scrim と dialog-backdrop は fade（opacity 遷移）で出現・消滅し reduced-motion で無効', () => {

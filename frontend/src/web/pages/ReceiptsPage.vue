@@ -83,7 +83,7 @@ const loading = ref(false)
 // (periodMove is gone); the query itself keeps its period part
 const committedKey = ref('')
 // first load finished at least once: until then the screen shows the
-// skeleton; later reloads keep the grid and dim it (TASK-39 D)
+// skeleton; later reloads keep the content at full opacity (TASK-39 D)
 const loaded = ref(false)
 
 function listQuery(cursor?: string): ReceiptListQuery {
@@ -120,9 +120,9 @@ async function load(id?: number): Promise<void> {
   if (l === null || !period.valid) return
   const n = ++seq
   // a ledger switch is a context change, not a refetch: the previous
-  // ledger's content leaves NOW and the skeleton covers this load — the
-  // dimmed two-stage render is for same-ledger refetches only (a period
-  // move, a filter change), never across ledgers
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
   if (committedLedger !== null && l !== committedLedger) {
     loaded.value = false
     receipts.value = []
@@ -559,7 +559,6 @@ const groups = computed(() => {
     <div
       v-else
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
