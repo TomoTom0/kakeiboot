@@ -39,9 +39,9 @@ const props = withDefaults(
     /** the breakdown's axis — 'label' reads the managed label palette;
      *  unset (and every other axis) keeps the common mapping */
     axis?: AnalysisAxis
-    /** the value epoch (the pane's committed key + the period store's
-     * committedEpoch): a change landing with a new epoch is a period
-     * commit — the amounts land at once instead of counting over */
+    /** the pane's committed key: a change landing with a new key is a
+     * content swap (a period commit included) — the amounts land at
+     * once instead of counting over */
     swapKey?: string
   }>(),
   { to: undefined, select: undefined, axis: undefined, swapKey: undefined },

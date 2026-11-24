@@ -1317,17 +1317,6 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .handover-enter-from { opacity: 0; }
 .handover-leave-active { transition: opacity 0.2s ease; position: absolute; top: 0; left: 0; right: 0; }
 .handover-leave-to { opacity: 0; }
-/* a period commit arrives as ONE animation: App.vue drives the view's
-   blocks (the period head, the KPI card, every zone) in together through
-   the Web Animations API, carrying the finished state (the label is
-   gated to the commit, amounts and bars are already final inside). For
-   the same window the store's commitMotion class suppresses every
-   per-element motion inside the blocks, so the commit has exactly one
-   motion: no number counting, no bar morph, no row fades, no label
-   micro move layered on top of it */
-.view-stack.period-motion .period-head *,
-.view-stack.period-motion .kpi *,
-.view-stack.period-motion .zone * { transition: none !important; animation: none !important; }
 .zone {
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);
@@ -2667,6 +2656,11 @@ button.share-account { cursor: pointer; }
   /* page / message / skeleton motion is off entirely (TASK-39) */
   .page-enter-active,
   .page-leave-active { transition-duration: 0s; }
+  /* …except the pane crossfade inside ContentSwap: a plain fade carries
+     no movement, so it stays (reduced motion removes movement, not
+     fades) — a period commit must animate on these devices too */
+  .content-swap .page-enter-active,
+  .content-swap .page-leave-active { transition: opacity 0.2s ease; }
   .page-enter-from,
   .page-leave-to { transform: none; }
   /* the slide transitions are off as well (TASK-74: the JS side already

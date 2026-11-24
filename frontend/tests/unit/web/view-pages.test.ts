@@ -128,12 +128,11 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
   })
 
   // TASK-146 §3 #6 (web-common.content-swap): the content transition fires at
-  // the load COMMIT — mid-refetch the old content stays dimmed with the swap
-  // key unmoved. TASK-161 §2 (web-common.period-move-voice, 指摘3): a PERIOD
-  // step never slides/remounts the pane anymore — the committedKey drops the
-  // period range, so the commit renders in place (same pane node, no
-  // slide-back classes). Written test-first.
-  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepの内容遷移は pane を再mountしない（再取得中は旧内容の dim・確定時もslide classなし・同一DOM）', async () => {
+  // the load COMMIT — mid-refetch the old content stays with the swap key
+  // unmoved. A PERIOD step commits like every other content change
+  // (2026-11-24 ユーザー指示): the committedKey includes the period, so
+  // the pane crosses through ContentSwap's fade vocabulary (no slide).
+  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepの内容遷移は pane の fade で確定する（再取得中は旧内容・slide classなし）', async () => {
     let gated = false
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
@@ -155,15 +154,15 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     const paneBefore = swapEl().element.firstElementChild
     release()
     await flushPromises()
-    // the commit lands in place: no slide vocabulary, the SAME pane node
-    // (the period change never bumps the committedKey)
+    // the commit crosses through the fade: page-enter/leave classes, no
+    // slide vocabulary, and the entering pane is a fresh node
     const kids = Array.from(swapEl().element.children)
+    expect(kids.some((el) => el.classList.contains('page-enter-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('page-leave-active'))).toBe(true)
     expect(
-      kids.some((el) =>
-        Array.from(el.classList).some((c) => c.includes('-enter-') || c.includes('-leave-')),
-      ),
+      kids.some((el) => Array.from(el.classList).some((c) => c.startsWith('slide-'))),
     ).toBe(false)
-    expect(swapEl().element.firstElementChild).toBe(paneBefore)
+    expect(kids.find((el) => el.classList.contains('page-enter-active'))).not.toBe(paneBefore)
     await settle()
     expect(wrapper.find('.period-label').text()).toBe('2026年9月')
   })

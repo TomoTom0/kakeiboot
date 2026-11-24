@@ -116,32 +116,14 @@ export const usePeriodStore = defineStore('web-period', () => {
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
   const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
-  // A period commit changes the screen as ONE animated arrival (the
-  // user's verdict, 2026-11-24: the change must be animated — a silent
-  // hard cut feels broken — and the animation must carry the finished
-  // state, never a half-changed one: no label ahead of its data, no old
-  // rows inside the new list, no number counting over from the previous
-  // period). committedEpoch bumps ONLY when a commit changes the period
-  // itself; value displays key their instant-landing off it, so inside
-  // the arriving state every value is already final. commitMotion rides
-  // the same commits as the suppression window: while it is up, every
-  // per-element transition inside the view's blocks is suppressed, and
-  // App.vue drives the one arrival animation (Web Animations API) off
-  // the epoch bump, so the commit has exactly one motion.
-  const committedEpoch = ref(0)
-  const commitMotion = ref(false)
-  let motionTimer: ReturnType<typeof setTimeout> | undefined
+  // The committed snapshot: the label the view's headers and chips show.
+  // A period commit lands by bumping each page's committedKey (the period
+  // is part of the key), so the pane crossfades through ContentSwap with
+  // the same fade vocabulary as every other content change — the
+  // entering pane is the finished state, mounted complete.
   function commitLabel(): void {
     const periodKey = JSON.stringify(urlQuery.value)
-    const prev = committedSnapshot.value
-    const periodChanged = prev !== null && prev.periodKey !== periodKey
     committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
-    if (periodChanged) {
-      committedEpoch.value++
-      commitMotion.value = true
-      clearTimeout(motionTimer)
-      motionTimer = setTimeout(() => { commitMotion.value = false }, 280)
-    }
   }
   const committedLabel = computed(() => committedSnapshot.value?.label ?? label.value)
   const committedLabelShort = computed(() => committedSnapshot.value?.labelShort ?? labelShort.value)
@@ -387,8 +369,6 @@ export const usePeriodStore = defineStore('web-period', () => {
     label,
     labelShort,
     commitLabel,
-    committedEpoch,
-    commitMotion,
     committedLabel,
     committedLabelShort,
     committedMonth,

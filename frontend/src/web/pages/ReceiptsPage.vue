@@ -153,7 +153,7 @@ async function load(id?: number): Promise<void> {
     // answered — the PERIOD part alone drops out (a period move keeps the
     // pane; TASK-161 §2-1), so the content transition fires here — never at
     // the press — only for a real content change
-    committedKey.value = `${l}|${JSON.stringify({ ...listQuery(), from: undefined, to: undefined })}`
+    committedKey.value = `${l}|${JSON.stringify(listQuery())}`
     period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
@@ -301,7 +301,7 @@ const perDay = computed(() => {
  *  longer remounts — the value-level vocabulary owns the change); a change
  *  that bumps the committed key is a content swap and lands at once (the
  *  pane's fade is the motion) */
-const sumView = useTweenNumber(() => sumAmount.value, { swapKey: () => `${committedKey.value}@${period.committedEpoch}` })
+const sumView = useTweenNumber(() => sumAmount.value, { swapKey: () => committedKey.value })
 
 /** the payment ranking rows: amount desc + the muted rest row (the old
  *  by_payment_method "その他" fold is the client's now). */
@@ -562,7 +562,6 @@ const groups = computed(() => {
       v-else
       key="data"
       class="view-stack"
-      :class="{ 'period-motion': period.commitMotion }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
@@ -687,7 +686,7 @@ const groups = computed(() => {
                 </div>
                 <!-- TASK-65: a row press toggles the payment filter in place (the
                  null-key aggregates stay inert rows) -->
-                <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
+                <RankedList :swap-key="committedKey"
                   v-if="paymentRows.length > 0"
                   :rows="paymentRows"
                   :select="onPaymentRow"

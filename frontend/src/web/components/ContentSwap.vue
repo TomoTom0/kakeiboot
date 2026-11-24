@@ -9,8 +9,10 @@
 // two-stage render of web-shell.loading-skeleton) and the transition fires
 // at the commit, never at the press. The first appearance (the skeleton ->
 // data handover included) rides the appear fade. prefers-reduced-motion
-// skips the machinery entirely (no classes, an instant swap; the stylesheet
-// repeats the guard). The slot must be a single root element — the key is
+// skips the SLIDE machinery (an instant swap), but the fade vocabulary
+// still runs: a plain fade carries no movement, and it is the one
+// animation every content change — a period commit included — keeps on
+// those devices (the stylesheet scopes the same exemption). The slot must be a single root element — the key is
 // cloned onto it, which is what turns a key change into a transition.
 import {
   cloneVNode,
@@ -49,7 +51,8 @@ export default defineComponent({
     swapKey: { type: String, required: true },
     /** the move's shape — TASK-161 §2-4: the slide vocabulary is the shell
      *  navigation's alone; the in-page callers keep the default fade (a
-     *  period move renders in place, never through the pane) */
+     *  period commit swaps the pane through this fade, like every other
+     *  content change) */
     dir: { type: String, default: 'swap' },
   },
   setup(props, { slots }) {
@@ -66,12 +69,12 @@ export default defineComponent({
     // whatever dir says, a pane never slides in from a direction that was
     // never moved along — and a swap before the appear even finishes
     // already carries the move's direction
-    let vocab = 'page'
+    let vocab = prefersReducedMotion() ? vocabOf(props.dir) : 'page'
     watch(
       () => props.swapKey,
       () => {
         vocab = vocabOf(props.dir)
-        swapping.value = !prefersReducedMotion()
+        swapping.value = !(prefersReducedMotion() && vocab !== 'page')
       },
       { flush: 'sync' },
     )
@@ -82,7 +85,7 @@ export default defineComponent({
       const pane = inner.find((v) => v.type !== Comment) ?? null
       const child = pane === null ? null : cloneVNode(pane, { key: props.swapKey })
       if (child === null) return h('div', { class: 'content-swap' })
-      if (prefersReducedMotion()) return h('div', { class: 'content-swap' }, [child])
+      if (prefersReducedMotion() && vocab !== 'page') return h('div', { class: 'content-swap' }, [child])
       return h('div', { class: 'content-swap' }, [
         h(
           Transition,

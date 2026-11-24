@@ -44,34 +44,6 @@ const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
 
-// A period commit arrives as ONE animation (the finished state, animated
-// in — never a silent cut, never a half-changed intermediate): when the
-// period epoch bumps, the view's blocks fade in together — a plain fade,
-// the same grammar as the app's pane swaps: no sliding (a month move is
-// not a page transition), no positional movement at all. Driven through
-// the Web Animations API:
-// an imperative animation cannot be dropped the way a class-triggered
-// CSS animation can when it lands in the same frame as the content swap.
-// The store's commitMotion window meanwhile suppresses every per-element
-// transition inside the blocks, so this stays the commit's only motion.
-watch(
-  () => period.committedEpoch,
-  () => {
-    // NOTE: no prefers-reduced-motion skip here — a plain opacity fade
-    // is the motion-safe form (the cross-fade is what reduced-motion
-    // guidance substitutes FOR movement), and gating it left the period
-    // change with no animation at all on devices with the setting on.
-    void nextTick(() => {
-      document
-        .querySelectorAll('.view-stack .period-head, .view-stack .kpi, .view-stack .zone')
-        .forEach((el) => {
-          if (typeof el.animate === 'function') {
-            el.animate([{ opacity: '0' }, { opacity: '1' }], { duration: 320, easing: 'cubic-bezier(.2,.7,.2,1)' })
-          }
-        })
-    })
-  },
-)
 const showShell = computed(() => !route.meta.public && session.me !== null)
 
 // The shell-start history boundary (TASK-164 §2-4): everything behind the
