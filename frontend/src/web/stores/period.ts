@@ -116,26 +116,29 @@ export const usePeriodStore = defineStore('web-period', () => {
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
   const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
-  // A period commit is a HARD CUT (the user's repeated real-device verdict,
-  // 2026-11-24: any visible remnant of the previous period — a counting
-  // tween, a morphing bar — reads as the old period's data still sitting on
-  // screen). committedEpoch bumps ONLY when a commit changes the period
-  // itself; value displays key their instant-landing off it. commitFlash
-  // rides the same commits: while it is up, CSS kills every transition and
-  // animation inside the view stack, so bars and segments land in their
-  // final shape in the commit frame itself.
+  // A period commit changes the screen as ONE animated arrival (the
+  // user's verdict, 2026-11-24: the change must be animated — a silent
+  // hard cut feels broken — and the animation must carry the finished
+  // state, never a half-changed one: no label ahead of its data, no old
+  // rows inside the new list, no number counting over from the previous
+  // period). committedEpoch bumps ONLY when a commit changes the period
+  // itself; value displays key their instant-landing off it, so inside
+  // the arriving state every value is already final. commitMotion rides
+  // the same commits: while it is up, the view's blocks run the single
+  // arrival animation and every per-element transition inside them is
+  // suppressed, so the commit has exactly one motion.
   const committedEpoch = ref(0)
-  const commitFlash = ref(false)
-  let flashTimer: ReturnType<typeof setTimeout> | undefined
+  const commitMotion = ref(false)
+  let motionTimer: ReturnType<typeof setTimeout> | undefined
   function commitLabel(): void {
     const periodKey = JSON.stringify(urlQuery.value)
     const periodChanged = committedSnapshot.value !== null && committedSnapshot.value.periodKey !== periodKey
     committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
     if (periodChanged) {
       committedEpoch.value++
-      commitFlash.value = true
-      clearTimeout(flashTimer)
-      flashTimer = setTimeout(() => { commitFlash.value = false }, 150)
+      commitMotion.value = true
+      clearTimeout(motionTimer)
+      motionTimer = setTimeout(() => { commitMotion.value = false }, 280)
     }
   }
   const committedLabel = computed(() => committedSnapshot.value?.label ?? label.value)
@@ -383,7 +386,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     labelShort,
     commitLabel,
     committedEpoch,
-    commitFlash,
+    commitMotion,
     committedLabel,
     committedLabelShort,
     committedMonth,

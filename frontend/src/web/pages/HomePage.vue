@@ -273,7 +273,7 @@ const recentQuery = computed(() => {
       v-if="analysis && totals"
       key="data"
       class="view-stack"
-      :class="{ 'period-flash': period.commitFlash }"
+      :class="{ 'period-motion': period.commitMotion }"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old

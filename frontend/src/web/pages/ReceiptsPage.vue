@@ -562,7 +562,7 @@ const groups = computed(() => {
       v-else
       key="data"
       class="view-stack"
-      :class="{ 'period-flash': period.commitFlash }"
+      :class="{ 'period-motion': period.commitMotion }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->

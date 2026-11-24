@@ -659,7 +659,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
       <div
         v-if="cross && totals"
         class="view-stack"
-      :class="{ 'period-flash': period.commitFlash }"
+      :class="{ 'period-motion': period.commitMotion }"
         >
         <!-- TASK-146 §3: the content transition fires at the load commit -->
         <ContentSwap :swap-key="committedKey">
