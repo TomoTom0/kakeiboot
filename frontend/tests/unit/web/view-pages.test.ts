@@ -157,12 +157,12 @@ describe('CategoriesPage (list, TASK-89 redesign)', () => {
     // the commit crosses through the fade: page-enter/leave classes, no
     // slide vocabulary, and the entering pane is a fresh node
     const kids = Array.from(swapEl().element.children)
-    expect(kids.some((el) => el.classList.contains('page-enter-active'))).toBe(true)
-    expect(kids.some((el) => el.classList.contains('page-leave-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('wipe-enter-active'))).toBe(true)
+    expect(kids.some((el) => el.classList.contains('wipe-leave-active'))).toBe(true)
     expect(
       kids.some((el) => Array.from(el.classList).some((c) => c.startsWith('slide-'))),
     ).toBe(false)
-    expect(kids.find((el) => el.classList.contains('page-enter-active'))).not.toBe(paneBefore)
+    expect(kids.find((el) => el.classList.contains('wipe-enter-active'))).not.toBe(paneBefore)
     await settle()
     expect(wrapper.find('.period-label').text()).toBe('2026年9月')
   })

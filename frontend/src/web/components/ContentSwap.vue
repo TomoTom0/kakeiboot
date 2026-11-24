@@ -8,11 +8,16 @@
 // response lands), so a mid-refetch press keeps the old content in place at full opacity (the
 // two-stage render of web-shell.loading-skeleton) and the transition fires
 // at the commit, never at the press. The first appearance (the skeleton ->
-// data handover included) rides the appear fade. prefers-reduced-motion
-// skips the SLIDE machinery (an instant swap), but the fade vocabulary
-// still runs: a plain fade carries no movement, and it is the one
-// animation every content change — a period commit included — keeps on
-// those devices (the stylesheet scopes the same exemption). The slot must be a single root element — the key is
+// data handover included) rides the appear reveal. The swap vocabulary
+// is a REVEAL, not a fade: the entering pane stays fully opaque and is
+// uncovered (clip-path) over the leaving pane, which waits underneath
+// at full opacity — every frame shows only complete states, never a
+// blend or a half-transparent intermediate (a crossfade's middle is a
+// transient image, and flashing one even for ~100ms is visual stress:
+// user verdict, 2026-11-24). Its own stylesheet transition (a delayed
+// snap-off at the reveal's end) is what keeps it parked until then. prefers-reduced-motion skips the SLIDE
+// machinery (an instant swap); the reveal still runs, for the same
+// reason — it has no intermediate image to flash. The slot must be a single root element — the key is
 // cloned onto it, which is what turns a key change into a transition.
 import {
   cloneVNode,
@@ -37,11 +42,11 @@ export type SwapDir = 'forward' | 'back' | 'swap'
 export const ContentSwapActive: InjectionKey<Readonly<Ref<boolean>>> = Symbol('content-swap-active')
 
 /** the transition vocabulary of a dir — a guard (not a cast) so the runtime
- *  prop stays a plain String while an unknown dir falls back to the fade */
+ *  prop stays a plain String while an unknown dir falls back to the reveal */
 function vocabOf(dir: string): string {
   if (dir === 'forward') return 'slide-forward'
   if (dir === 'back') return 'slide-back'
-  return 'page'
+  return 'wipe'
 }
 
 export default defineComponent({
@@ -50,9 +55,9 @@ export default defineComponent({
     /** the committed content's identity; unchanged mid-refetch by contract */
     swapKey: { type: String, required: true },
     /** the move's shape — TASK-161 §2-4: the slide vocabulary is the shell
-     *  navigation's alone; the in-page callers keep the default fade (a
-     *  period commit swaps the pane through this fade, like every other
-     *  content change) */
+     *  navigation's alone; the in-page callers keep the default reveal (a
+     *  period commit swaps the pane through this reveal, like every
+     *  other content change) */
     dir: { type: String, default: 'swap' },
   },
   setup(props, { slots }) {
@@ -69,12 +74,12 @@ export default defineComponent({
     // whatever dir says, a pane never slides in from a direction that was
     // never moved along — and a swap before the appear even finishes
     // already carries the move's direction
-    let vocab = prefersReducedMotion() ? vocabOf(props.dir) : 'page'
+    let vocab = prefersReducedMotion() ? vocabOf(props.dir) : vocabOf('swap')
     watch(
       () => props.swapKey,
       () => {
         vocab = vocabOf(props.dir)
-        swapping.value = !(prefersReducedMotion() && vocab !== 'page')
+        swapping.value = !(prefersReducedMotion() && vocab !== 'wipe')
       },
       { flush: 'sync' },
     )
@@ -85,7 +90,7 @@ export default defineComponent({
       const pane = inner.find((v) => v.type !== Comment) ?? null
       const child = pane === null ? null : cloneVNode(pane, { key: props.swapKey })
       if (child === null) return h('div', { class: 'content-swap' })
-      if (prefersReducedMotion() && vocab !== 'page') return h('div', { class: 'content-swap' }, [child])
+      if (prefersReducedMotion() && vocab !== 'wipe') return h('div', { class: 'content-swap' }, [child])
       return h('div', { class: 'content-swap' }, [
         h(
           Transition,

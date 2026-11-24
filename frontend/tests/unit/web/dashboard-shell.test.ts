@@ -511,14 +511,14 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.view-stack:not(.skeleton)').exists()).toBe(false)
     release()
     await flushPromises()
-    // the first content commit appears through the fade vocabulary: the
-    // content-swap wrapper's child carries the appear fade's enter classes
+    // the first content commit appears through the reveal vocabulary: the
+    // content-swap wrapper's child carries the appear reveal's enter classes
     const swap = wrapper.find('.view-stack .content-swap')
     expect(swap.exists()).toBe(true)
     expect(swap.element.children).toHaveLength(1)
     const child = swap.element.firstElementChild!
-    expect(child.classList.contains('page-enter-active')).toBe(true)
-    expect(child.classList.contains('page-enter-from')).toBe(true)
+    expect(child.classList.contains('wipe-enter-active')).toBe(true)
+    expect(child.classList.contains('wipe-enter-from')).toBe(true)
     // single motion: the pane's appear is the only animation — after the
     // settle the trend chart itself carries no enter classes of its own
     await settle()
@@ -577,10 +577,10 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // the new period's finished state
     release()
     await flushPromises()
-    const entering = children().find((el) => el.classList.contains('page-enter-active'))
+    const entering = children().find((el) => el.classList.contains('wipe-enter-active'))
     expect(entering).toBeDefined()
     expect(entering).not.toBe(paneBefore)
-    expect(children().some((el) => el.classList.contains('page-leave-active'))).toBe(true)
+    expect(children().some((el) => el.classList.contains('wipe-leave-active'))).toBe(true)
     expect(
       children().some((el) =>
         Array.from(el.classList).some((c) => c.startsWith('slide-')),
@@ -596,9 +596,9 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     gated = false
     await wrapper.find('[data-test="mode-week"]').trigger('click')
     await flushPromises()
-    const fading = children().find((el) => el.classList.contains('page-enter-active'))
+    const fading = children().find((el) => el.classList.contains('wipe-enter-active'))
     expect(fading).toBeDefined()
-    const fadingOut = children().find((el) => el.classList.contains('page-leave-active'))
+    const fadingOut = children().find((el) => el.classList.contains('wipe-leave-active'))
     expect(fadingOut).toBeDefined()
     await settle()
     expect(wrapper.find(".period-label").text()).toBe('2026年10月12日の週')
