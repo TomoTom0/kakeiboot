@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vitest/config'
@@ -43,7 +44,19 @@ const devSpaFallbackPlugin: Plugin = {
 }
 
 // Multi-entry build: `web` (regular SPA) and `widget` (MCP widget HTML).
+// The build marker shown in the account menu: the short hash of the
+// commit the bundle was built from, so a stale shell on a client is
+// distinguishable from the current build at a glance.
+const buildId = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+  } catch {
+    return 'dev'
+  }
+})()
+
 export default defineConfig({
+  define: { __BUILD_ID__: JSON.stringify(buildId) },
   plugins: [usageDocsPlugin(), vue(), devSpaFallbackPlugin],
   resolve: {
     alias: {

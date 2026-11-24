@@ -541,6 +541,9 @@ html.drawer-lock { overflow: hidden; }
 .popover-menu { position: relative; }
 .popover-trigger { display: inline-flex; }
 .account-menu .popover-panel { min-width: 15rem; }
+/* the build marker at the account menu's foot: which commit this shell
+   was built from (a stale client shell is tellable from the current one) */
+.build-id { margin: 0; padding: 0.4rem 0.75rem 0.55rem; text-align: right; }
 /* the ledger section inside the account menu (TASK-101): the radio rows sit
    right under the menu head and above the separator — the row grid keeps
    the name on one ellipsized line inside the 15rem panel (the full name
