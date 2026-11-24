@@ -43,6 +43,8 @@ const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
+// the build marker (vite define): which commit this shell was built from
+const buildId = __BUILD_ID__
 const showShell = computed(() => !route.meta.public && session.me !== null)
 
 // The shell-start history boundary (TASK-164 §2-4): everything behind the
@@ -535,6 +537,12 @@ async function logout(): Promise<void> {
               >
                 <AppIcon name="logout" />ログアウト
               </button>
+              <p
+                class="build-id muted small"
+                data-test="build-id"
+              >
+                build {{ buildId }}
+              </p>
             </template>
           </PopoverMenu>
         </div>
