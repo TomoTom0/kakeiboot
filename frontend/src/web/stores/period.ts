@@ -115,7 +115,12 @@ export const usePeriodStore = defineStore('web-period', () => {
   // wrong month's numbers under the new month's name. Pages call
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
-  const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
+  const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string; mode: PeriodMode; anchor: string } | null>(null)
+  // the travel direction of the latest period commit (+1 toward the
+  // future, -1 toward the past, 0 when the anchors are not comparable —
+  // a mode switch or a range): the arrival animation slides from the
+  // side the user stepped toward
+  const commitDirection = ref(0)
   // A period commit changes the screen as ONE animated arrival (the
   // user's verdict, 2026-11-24: the change must be animated — a silent
   // hard cut feels broken — and the animation must carry the finished
@@ -124,16 +129,23 @@ export const usePeriodStore = defineStore('web-period', () => {
   // period). committedEpoch bumps ONLY when a commit changes the period
   // itself; value displays key their instant-landing off it, so inside
   // the arriving state every value is already final. commitMotion rides
-  // the same commits: while it is up, the view's blocks run the single
-  // arrival animation and every per-element transition inside them is
-  // suppressed, so the commit has exactly one motion.
+  // the same commits as the suppression window: while it is up, every
+  // per-element transition inside the view's blocks is suppressed, and
+  // App.vue drives the one arrival animation (Web Animations API) off
+  // the epoch bump, so the commit has exactly one motion.
   const committedEpoch = ref(0)
   const commitMotion = ref(false)
   let motionTimer: ReturnType<typeof setTimeout> | undefined
   function commitLabel(): void {
     const periodKey = JSON.stringify(urlQuery.value)
-    const periodChanged = committedSnapshot.value !== null && committedSnapshot.value.periodKey !== periodKey
-    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
+    const prev = committedSnapshot.value
+    const periodChanged = prev !== null && prev.periodKey !== periodKey
+    const anchor = mode.value === 'month' ? month.value : mode.value === 'week' ? week.value : mode.value === 'year' ? year.value : ''
+    commitDirection.value =
+      periodChanged && prev !== null && prev.mode === mode.value && prev.anchor !== '' && anchor !== '' && prev.anchor !== anchor
+        ? anchor > prev.anchor ? 1 : -1
+        : 0
+    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey, mode: mode.value, anchor }
     if (periodChanged) {
       committedEpoch.value++
       commitMotion.value = true
@@ -387,6 +399,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     commitLabel,
     committedEpoch,
     commitMotion,
+    commitDirection,
     committedLabel,
     committedLabelShort,
     committedMonth,

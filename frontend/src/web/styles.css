@@ -1317,21 +1317,14 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .handover-enter-from { opacity: 0; }
 .handover-leave-active { transition: opacity 0.2s ease; position: absolute; top: 0; left: 0; right: 0; }
 .handover-leave-to { opacity: 0; }
-/* a period commit arrives as ONE animation (period store's commitMotion,
-   up for the commit's frames): the view's blocks — the period head, the
-   KPI card, every zone — fade and settle in together, carrying the
-   finished state (the label is gated to the commit, amounts and bars are
-   already final inside). Every per-element motion inside them is
-   suppressed for the same window, so the commit has exactly one motion:
-   no number counting, no bar morph, no row fades, no label micro move
-   layered on top of it */
-@keyframes bb-period-arrive {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
-.view-stack.period-motion .period-head,
-.view-stack.period-motion .kpi,
-.view-stack.period-motion .zone { animation: bb-period-arrive 0.24s cubic-bezier(.2, .7, .2, 1); }
+/* a period commit arrives as ONE animation: App.vue drives the view's
+   blocks (the period head, the KPI card, every zone) in together through
+   the Web Animations API, carrying the finished state (the label is
+   gated to the commit, amounts and bars are already final inside). For
+   the same window the store's commitMotion class suppresses every
+   per-element motion inside the blocks, so the commit has exactly one
+   motion: no number counting, no bar morph, no row fades, no label
+   micro move layered on top of it */
 .view-stack.period-motion .period-head *,
 .view-stack.period-motion .kpi *,
 .view-stack.period-motion .zone * { transition: none !important; animation: none !important; }
@@ -2700,7 +2693,6 @@ button.share-account { cursor: pointer; }
   .skeleton { animation: none; opacity: 1; }
   .skeleton .sk { animation: none; opacity: 1; }
   .handover-enter-active, .handover-leave-active { transition: none; }
-  .view-stack.period-motion .period-head, .view-stack.period-motion .kpi, .view-stack.period-motion .zone { animation: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */
   .copy-btn.is-done .icon { animation: none; }

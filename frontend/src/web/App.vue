@@ -26,6 +26,7 @@ import {
   resetPageReady,
 } from './composables/usePageReady'
 import { usePeriodStore } from './stores/period'
+import { prefersReducedMotion } from './composables/reducedMotion'
 import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
@@ -43,6 +44,37 @@ const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
+
+// A period commit arrives as ONE animation (the finished state, animated
+// in — never a silent cut, never a half-changed intermediate): when the
+// period epoch bumps, the view's blocks slide/fade in together from the
+// side the user stepped toward. Driven through the Web Animations API:
+// an imperative animation cannot be dropped the way a class-triggered
+// CSS animation can when it lands in the same frame as the content swap.
+// The store's commitMotion window meanwhile suppresses every per-element
+// transition inside the blocks, so this stays the commit's only motion.
+watch(
+  () => period.committedEpoch,
+  () => {
+    if (prefersReducedMotion()) return
+    void nextTick(() => {
+      const dir = period.commitDirection
+      const from =
+        dir > 0
+          ? { opacity: '0', transform: 'translateX(18px)' }
+          : dir < 0
+            ? { opacity: '0', transform: 'translateX(-18px)' }
+            : { opacity: '0', transform: 'translateY(6px)' }
+      document
+        .querySelectorAll('.view-stack .period-head, .view-stack .kpi, .view-stack .zone')
+        .forEach((el) => {
+          if (typeof el.animate === 'function') {
+            el.animate([from, { opacity: '1', transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.7,.2,1)' })
+          }
+        })
+    })
+  },
+)
 const showShell = computed(() => !route.meta.public && session.me !== null)
 
 // The shell-start history boundary (TASK-164 §2-4): everything behind the
