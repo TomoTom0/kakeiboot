@@ -301,7 +301,7 @@ const perDay = computed(() => {
  *  longer remounts — the value-level vocabulary owns the change); a change
  *  that bumps the committed key is a content swap and lands at once (the
  *  pane's fade is the motion) */
-const sumView = useTweenNumber(() => sumAmount.value, { swapKey: () => committedKey.value })
+const sumView = useTweenNumber(() => sumAmount.value, { swapKey: () => `${committedKey.value}@${period.committedEpoch}` })
 
 /** the payment ranking rows: amount desc + the muted rest row (the old
  *  by_payment_method "その他" fold is the client's now). */
@@ -562,6 +562,7 @@ const groups = computed(() => {
       v-else
       key="data"
       class="view-stack"
+      :class="{ 'period-flash': period.commitFlash }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
@@ -686,7 +687,7 @@ const groups = computed(() => {
                 </div>
                 <!-- TASK-65: a row press toggles the payment filter in place (the
                  null-key aggregates stay inert rows) -->
-                <RankedList
+                <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
                   v-if="paymentRows.length > 0"
                   :rows="paymentRows"
                   :select="onPaymentRow"

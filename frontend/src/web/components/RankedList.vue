@@ -39,8 +39,12 @@ const props = withDefaults(
     /** the breakdown's axis — 'label' reads the managed label palette;
      *  unset (and every other axis) keeps the common mapping */
     axis?: AnalysisAxis
+    /** the value epoch (the pane's committed key + the period store's
+     * committedEpoch): a change landing with a new epoch is a period
+     * commit — the amounts land at once instead of counting over */
+    swapKey?: string
   }>(),
-  { to: undefined, select: undefined, axis: undefined },
+  { to: undefined, select: undefined, axis: undefined, swapKey: undefined },
 )
 
 // TASK-123 §4-5 rule E: the allocation works in px, so the track's real
@@ -125,7 +129,7 @@ const items = computed(() =>
           >{{ r.label }}</span>
         </template>
         <template #amount>
-          <TweenYen :value="r.value" />
+          <TweenYen :value="r.value" :swap-key="props.swapKey" />
         </template>
         <template
           v-if="r.top"

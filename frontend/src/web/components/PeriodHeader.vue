@@ -16,7 +16,9 @@ import PeriodStep from './PeriodStep.vue'
 // the statement, no「総額」caption). The two-stage gap lives in styles.css
 // (button↔label 0.25rem, label組↔total space-between with a 1.5rem floor,
 // flex-wrap on the narrow bands). The label's direction micro move rides the
-// PeriodStep slot; the total tweens on a period change (§2-2).
+// PeriodStep slot; on a period commit the total lands at once (the
+// caller's swap key carries the period epoch) — the tween serves
+// in-period value changes only.
 const props = defineProps<{
   /** the period label, e.g. "2026年10月" (period.label — no suffix) */
   label: string

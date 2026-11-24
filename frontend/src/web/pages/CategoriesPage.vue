@@ -201,6 +201,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       v-if="analysis && totals"
       key="data"
       class="view-stack"
+      :class="{ 'period-flash': period.commitFlash }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
@@ -209,7 +210,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
           <PeriodHeader
             :label="period.committedLabel"
             :total="totals.amount"
-            :swap-key="committedKey"
+            :swap-key="`${committedKey}@${period.committedEpoch}`"
           />
 
           <div class="dash-cols">
@@ -258,7 +259,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
                 >
                   この期間の記録はありません。
                 </p>
-                <RankedList
+                <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
                   v-else
                   :rows="rows"
                   :to="rowTo"

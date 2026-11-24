@@ -659,6 +659,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
       <div
         v-if="cross && totals"
         class="view-stack"
+      :class="{ 'period-flash': period.commitFlash }"
         >
         <!-- TASK-146 §3: the content transition fires at the load commit -->
         <ContentSwap :swap-key="committedKey">
@@ -667,7 +668,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
               :label="period.committedLabel"
               :total="totals.amount"
               data-test="axis-period"
-              :swap-key="committedKey"
+              :swap-key="`${committedKey}@${period.committedEpoch}`"
             />
 
             <div class="dash-cols">
@@ -792,7 +793,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                   >
                     この期間の記録はありません。
                   </p>
-                  <RankedList
+                  <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
                     v-else
                     :rows="crossRows"
                     :to="crossTo"
@@ -817,7 +818,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                   >
                     この期間の記録はありません。
                   </p>
-                  <RankedList
+                  <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
                     v-else
                     :rows="ownRows"
                     :to="ownTo"

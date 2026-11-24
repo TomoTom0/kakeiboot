@@ -1317,6 +1317,13 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .handover-enter-from { opacity: 0; }
 .handover-leave-active { transition: opacity 0.2s ease; position: absolute; top: 0; left: 0; right: 0; }
 .handover-leave-to { opacity: 0; }
+/* a period commit is a hard cut (period store's commitFlash, up for the
+   commit's own frames): no transition or animation runs inside the view —
+   the new period's bars and segments land in their final shape at once
+   instead of morphing over from the previous period's proportions */
+.view-stack.period-flash *,
+.view-stack.period-flash *::before,
+.view-stack.period-flash *::after { transition: none !important; animation: none !important; }
 .zone {
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);

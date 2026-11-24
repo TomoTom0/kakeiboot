@@ -24,8 +24,9 @@ import { prefersReducedMotion } from './reducedMotion'
  *  itself when the scope dies (an unmounted row never leaks a frame).
  *  `swapKey` — the pane's committed identity: a change that rides a key
  *  bump is a CONTENT swap (the pane's own fade carries it — the number
- *  lands at once); the tween serves the key-stable changes alone (a period
- *  move, §2-2). */
+ *  lands at once); the tween serves the key-stable changes alone (an
+ *  in-period value change — a period commit bumps the period epoch
+ *  inside the callers' keys and lands at once). */
 export function useTweenNumber(source: () => number, opts?: { duration?: number; swapKey?: () => string }): Ref<number> {
   const duration = opts?.duration ?? 300
   const shown = ref(source())

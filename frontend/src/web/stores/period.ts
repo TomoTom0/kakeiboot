@@ -115,9 +115,28 @@ export const usePeriodStore = defineStore('web-period', () => {
   // wrong month's numbers under the new month's name. Pages call
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
-  const committedSnapshot = ref<{ label: string; labelShort: string; month: string } | null>(null)
+  const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
+  // A period commit is a HARD CUT (the user's repeated real-device verdict,
+  // 2026-11-24: any visible remnant of the previous period — a counting
+  // tween, a morphing bar — reads as the old period's data still sitting on
+  // screen). committedEpoch bumps ONLY when a commit changes the period
+  // itself; value displays key their instant-landing off it. commitFlash
+  // rides the same commits: while it is up, CSS kills every transition and
+  // animation inside the view stack, so bars and segments land in their
+  // final shape in the commit frame itself.
+  const committedEpoch = ref(0)
+  const commitFlash = ref(false)
+  let flashTimer: ReturnType<typeof setTimeout> | undefined
   function commitLabel(): void {
-    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value }
+    const periodKey = JSON.stringify(urlQuery.value)
+    const periodChanged = committedSnapshot.value !== null && committedSnapshot.value.periodKey !== periodKey
+    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
+    if (periodChanged) {
+      committedEpoch.value++
+      commitFlash.value = true
+      clearTimeout(flashTimer)
+      flashTimer = setTimeout(() => { commitFlash.value = false }, 150)
+    }
   }
   const committedLabel = computed(() => committedSnapshot.value?.label ?? label.value)
   const committedLabelShort = computed(() => committedSnapshot.value?.labelShort ?? labelShort.value)
@@ -363,6 +382,8 @@ export const usePeriodStore = defineStore('web-period', () => {
     label,
     labelShort,
     commitLabel,
+    committedEpoch,
+    commitFlash,
     committedLabel,
     committedLabelShort,
     committedMonth,

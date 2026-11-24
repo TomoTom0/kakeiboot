@@ -52,8 +52,9 @@ const loading = ref(false)
 // TASK-146 §3: the content transition's committed key (bumped only at the
 // load commit — mid-refetch the old content stays in place at full opacity). TASK-161 §2
 // (web-common.period-move-voice): the key drops the PERIOD range — a period
-// step never remounts the pane; the value-level vocabulary (the label micro
-// move, the amount tweens, the bar width transitions) owns the change. A
+// step never remounts the pane; at the commit the new period lands at
+// once (labels gated to the commit, amounts and bars hard-cut — the
+// period epoch in the value keys and the commit flash). A
 // mode / label / ledger change still bumps it (the fade vocabulary)
 const committedKey = ref('')
 
@@ -272,6 +273,7 @@ const recentQuery = computed(() => {
       v-if="analysis && totals"
       key="data"
       class="view-stack"
+      :class="{ 'period-flash': period.commitFlash }"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old
@@ -281,7 +283,7 @@ const recentQuery = computed(() => {
           <PeriodHeader
             :label="period.committedLabel"
             :total="totals.amount"
-            :swap-key="committedKey"
+            :swap-key="`${committedKey}@${period.committedEpoch}`"
           />
 
           <!-- TASK-161 §5 (指摘7): the category breakdown sits DIRECTLY under
@@ -357,7 +359,7 @@ const recentQuery = computed(() => {
                     週ごとの支出
                   </h2>
                 </div>
-                <WeekRows
+                <WeekRows :swap-key="`${committedKey}@${period.committedEpoch}`"
                   :weeks="weeks"
                   :current="weekCurrent"
                   :scale="screenScale"
