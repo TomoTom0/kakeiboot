@@ -115,12 +115,7 @@ export const usePeriodStore = defineStore('web-period', () => {
   // wrong month's numbers under the new month's name. Pages call
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
-  const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string; mode: PeriodMode; anchor: string } | null>(null)
-  // the travel direction of the latest period commit (+1 toward the
-  // future, -1 toward the past, 0 when the anchors are not comparable —
-  // a mode switch or a range): the arrival animation slides from the
-  // side the user stepped toward
-  const commitDirection = ref(0)
+  const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
   // A period commit changes the screen as ONE animated arrival (the
   // user's verdict, 2026-11-24: the change must be animated — a silent
   // hard cut feels broken — and the animation must carry the finished
@@ -140,12 +135,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     const periodKey = JSON.stringify(urlQuery.value)
     const prev = committedSnapshot.value
     const periodChanged = prev !== null && prev.periodKey !== periodKey
-    const anchor = mode.value === 'month' ? month.value : mode.value === 'week' ? week.value : mode.value === 'year' ? String(year.value) : ''
-    commitDirection.value =
-      periodChanged && prev !== null && prev.mode === mode.value && prev.anchor !== '' && anchor !== '' && prev.anchor !== anchor
-        ? anchor > prev.anchor ? 1 : -1
-        : 0
-    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey, mode: mode.value, anchor }
+    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
     if (periodChanged) {
       committedEpoch.value++
       commitMotion.value = true
@@ -399,7 +389,6 @@ export const usePeriodStore = defineStore('web-period', () => {
     commitLabel,
     committedEpoch,
     commitMotion,
-    commitDirection,
     committedLabel,
     committedLabelShort,
     committedMonth,

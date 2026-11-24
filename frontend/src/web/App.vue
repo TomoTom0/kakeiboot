@@ -47,8 +47,10 @@ const period = usePeriodStore()
 
 // A period commit arrives as ONE animation (the finished state, animated
 // in — never a silent cut, never a half-changed intermediate): when the
-// period epoch bumps, the view's blocks slide/fade in together from the
-// side the user stepped toward. Driven through the Web Animations API:
+// period epoch bumps, the view's blocks fade in together — a plain fade,
+// the same grammar as the app's pane swaps: no sliding (a month move is
+// not a page transition), no positional movement at all. Driven through
+// the Web Animations API:
 // an imperative animation cannot be dropped the way a class-triggered
 // CSS animation can when it lands in the same frame as the content swap.
 // The store's commitMotion window meanwhile suppresses every per-element
@@ -58,18 +60,11 @@ watch(
   () => {
     if (prefersReducedMotion()) return
     void nextTick(() => {
-      const dir = period.commitDirection
-      const from =
-        dir > 0
-          ? { opacity: '0', transform: 'translateX(18px)' }
-          : dir < 0
-            ? { opacity: '0', transform: 'translateX(-18px)' }
-            : { opacity: '0', transform: 'translateY(6px)' }
       document
         .querySelectorAll('.view-stack .period-head, .view-stack .kpi, .view-stack .zone')
         .forEach((el) => {
           if (typeof el.animate === 'function') {
-            el.animate([from, { opacity: '1', transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.7,.2,1)' })
+            el.animate([{ opacity: '0' }, { opacity: '1' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' })
           }
         })
     })
