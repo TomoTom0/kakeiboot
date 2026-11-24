@@ -511,14 +511,14 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.view-stack:not(.skeleton)').exists()).toBe(false)
     release()
     await flushPromises()
-    // the first content commit appears through the fade vocabulary: the
-    // content-swap wrapper's child carries the appear fade's enter classes
+    // the first content commit appears through the reveal vocabulary: the
+    // content-swap wrapper's child carries the appear reveal's enter classes
     const swap = wrapper.find('.view-stack .content-swap')
     expect(swap.exists()).toBe(true)
     expect(swap.element.children).toHaveLength(1)
     const child = swap.element.firstElementChild!
-    expect(child.classList.contains('page-enter-active')).toBe(true)
-    expect(child.classList.contains('page-enter-from')).toBe(true)
+    expect(child.classList.contains('wipe-enter-active')).toBe(true)
+    expect(child.classList.contains('wipe-enter-from')).toBe(true)
     // single motion: the pane's appear is the only animation — after the
     // settle the trend chart itself carries no enter classes of its own
     await settle()
@@ -531,13 +531,12 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
 
   // TASK-146 §3 #6/#7 (web-common.content-swap): the content transition fires
   // at the LOAD COMMIT, not at the press. Mid-load the old content stays
-  // (dimmed, swap key unmoved — the two-stage render of
-  // web-shell.loading-skeleton survives). TASK-161 §2 (web-common.period-
-  // move-voice, 指摘3): a PERIOD step no longer slides/remounts the pane —
-  // the committedKey drops the period range, so the commit renders in place
-  // (same pane node, no slide vocabulary) and the value-level vocabulary
-  // owns the change; a mode switch keeps crossing through the fade.
-  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepはpaneを再mountしない（load確定時もslide classなし・同一DOM）・mode切替はfadeのまま', async () => {
+  // (swap key unmoved — the two-stage render of web-shell.loading-skeleton
+  // survives). A PERIOD step commits like every other content change
+  // (2026-11-24 ユーザー指示): the committedKey includes the period, so
+  // the pane crosses through ContentSwap's fade vocabulary — no slide,
+  // and the entering pane is the new period's finished state.
+  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepは他の内容変更と同じくpaneのfadeで確定する（slideなし・中間状態なし）・mode切替もfade', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     let gated = false
     let release!: () => void
@@ -572,15 +571,23 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.chip-label-full').text()).toBe('2026年10月')
     expect(still()).toBe(true)
     const paneBefore = swap().element.firstElementChild
-    // TASK-161: the commit lands IN PLACE — no slide-forward/back classes and
-    // the pane element is the SAME node (the period change never bumps the
-    // committedKey, so ContentSwap does not remount the pane at all)
+    // the commit bumps the committedKey (the period is part of it): the
+    // pane crosses through the fade — page-enter/leave classes, never the
+    // slide vocabulary — and the entering pane is a fresh node carrying
+    // the new period's finished state
     release()
     await flushPromises()
-    expect(still()).toBe(true)
-    expect(swap().element.children).toHaveLength(1)
-    expect(swap().element.firstElementChild).toBe(paneBefore)
+    const entering = children().find((el) => el.classList.contains('wipe-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering).not.toBe(paneBefore)
+    expect(children().some((el) => el.classList.contains('wipe-leave-active'))).toBe(true)
+    expect(
+      children().some((el) =>
+        Array.from(el.classList).some((c) => c.startsWith('slide-')),
+      ),
+    ).toBe(false)
     await settle()
+    expect(swap().element.children).toHaveLength(1)
     expect(wrapper.find('.period-label').text()).toBe('2026年11月')
     expect(wrapper.find('.chip-label-full').text()).toBe('2026年11月')
 
@@ -589,9 +596,9 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     gated = false
     await wrapper.find('[data-test="mode-week"]').trigger('click')
     await flushPromises()
-    const fading = children().find((el) => el.classList.contains('page-enter-active'))
+    const fading = children().find((el) => el.classList.contains('wipe-enter-active'))
     expect(fading).toBeDefined()
-    const fadingOut = children().find((el) => el.classList.contains('page-leave-active'))
+    const fadingOut = children().find((el) => el.classList.contains('wipe-leave-active'))
     expect(fadingOut).toBeDefined()
     await settle()
     expect(wrapper.find(".period-label").text()).toBe('2026年10月12日の週')

@@ -122,7 +122,7 @@ async function load(id?: number): Promise<void> {
     // the pane's committed identity (the content transition fires here, at
     // the commit — never at the press); TASK-161 §2: the period range is NOT
     // part of it — a period move renders in place
-    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${JSON.stringify(period.urlQuery)}`
     period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
@@ -273,7 +273,6 @@ const recentQuery = computed(() => {
       v-if="analysis && totals"
       key="data"
       class="view-stack"
-      :class="{ 'period-flash': period.commitFlash }"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old
@@ -283,7 +282,7 @@ const recentQuery = computed(() => {
           <PeriodHeader
             :label="period.committedLabel"
             :total="totals.amount"
-            :swap-key="`${committedKey}@${period.committedEpoch}`"
+            :swap-key="committedKey"
           />
 
           <!-- TASK-161 §5 (指摘7): the category breakdown sits DIRECTLY under
@@ -359,7 +358,7 @@ const recentQuery = computed(() => {
                     週ごとの支出
                   </h2>
                 </div>
-                <WeekRows :swap-key="`${committedKey}@${period.committedEpoch}`"
+                <WeekRows :swap-key="committedKey"
                   :weeks="weeks"
                   :current="weekCurrent"
                   :scale="screenScale"

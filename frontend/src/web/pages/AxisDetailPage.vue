@@ -390,7 +390,7 @@ async function load(id?: number): Promise<void> {
     own.value = ownRes
     itemStats.value = itemRes
     recent.value = recentRes.receipts
-    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${route.path}|${subjectQuery()}`
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${route.path}|${subjectQuery()}|${JSON.stringify(period.urlQuery)}`
     period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
@@ -659,7 +659,6 @@ const menuItems = computed<PageMenuItem[]>(() => {
       <div
         v-if="cross && totals"
         class="view-stack"
-      :class="{ 'period-flash': period.commitFlash }"
         >
         <!-- TASK-146 §3: the content transition fires at the load commit -->
         <ContentSwap :swap-key="committedKey">
@@ -668,7 +667,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
               :label="period.committedLabel"
               :total="totals.amount"
               data-test="axis-period"
-              :swap-key="`${committedKey}@${period.committedEpoch}`"
+              :swap-key="committedKey"
             />
 
             <div class="dash-cols">
@@ -793,7 +792,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                   >
                     この期間の記録はありません。
                   </p>
-                  <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
+                  <RankedList :swap-key="committedKey"
                     v-else
                     :rows="crossRows"
                     :to="crossTo"
@@ -818,7 +817,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
                   >
                     この期間の記録はありません。
                   </p>
-                  <RankedList :swap-key="`${committedKey}@${period.committedEpoch}`"
+                  <RankedList :swap-key="committedKey"
                     v-else
                     :rows="ownRows"
                     :to="ownTo"

@@ -116,27 +116,14 @@ export const usePeriodStore = defineStore('web-period', () => {
   // commitLabel() at their load commit (the same instant their data and
   // committedKey land); until the first commit the live values show.
   const committedSnapshot = ref<{ label: string; labelShort: string; month: string; periodKey: string } | null>(null)
-  // A period commit is a HARD CUT (the user's repeated real-device verdict,
-  // 2026-11-24: any visible remnant of the previous period — a counting
-  // tween, a morphing bar — reads as the old period's data still sitting on
-  // screen). committedEpoch bumps ONLY when a commit changes the period
-  // itself; value displays key their instant-landing off it. commitFlash
-  // rides the same commits: while it is up, CSS kills every transition and
-  // animation inside the view stack, so bars and segments land in their
-  // final shape in the commit frame itself.
-  const committedEpoch = ref(0)
-  const commitFlash = ref(false)
-  let flashTimer: ReturnType<typeof setTimeout> | undefined
+  // The committed snapshot: the label the view's headers and chips show.
+  // A period commit lands by bumping each page's committedKey (the period
+  // is part of the key), so the pane crossfades through ContentSwap with
+  // the same fade vocabulary as every other content change — the
+  // entering pane is the finished state, mounted complete.
   function commitLabel(): void {
     const periodKey = JSON.stringify(urlQuery.value)
-    const periodChanged = committedSnapshot.value !== null && committedSnapshot.value.periodKey !== periodKey
     committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value, periodKey }
-    if (periodChanged) {
-      committedEpoch.value++
-      commitFlash.value = true
-      clearTimeout(flashTimer)
-      flashTimer = setTimeout(() => { commitFlash.value = false }, 150)
-    }
   }
   const committedLabel = computed(() => committedSnapshot.value?.label ?? label.value)
   const committedLabelShort = computed(() => committedSnapshot.value?.labelShort ?? labelShort.value)
@@ -382,8 +369,6 @@ export const usePeriodStore = defineStore('web-period', () => {
     label,
     labelShort,
     commitLabel,
-    committedEpoch,
-    commitFlash,
     committedLabel,
     committedLabelShort,
     committedMonth,

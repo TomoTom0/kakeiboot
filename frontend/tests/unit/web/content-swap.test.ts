@@ -60,20 +60,20 @@ const motionClasses = (w: ReturnType<typeof swap>): string[] =>
   )
 
 describe('ContentSwap (component, TASK-146 §3)', () => {
-  it('[covers:web-common.content-swap] mount: slot を1つ描き wrapper は content-swap・初回出現は appear fade（page-enter-*）', () => {
+  it('[covers:web-common.content-swap] mount: slot を1つ描き wrapper は content-swap・初回出現は appear reveal（wipe-enter-*）', () => {
     const w = swap('a', 'forward')
     expect(w.classes()).toContain('content-swap')
     expect(w.element.children).toHaveLength(1)
     const child = w.element.firstElementChild!
     expect(child.getAttribute('data-test')).toBe('slot')
-    // the first appearance (skeleton -> data included) rides the appear fade
-    // of the fade vocabulary — not the slide machinery
-    expect(child.classList.contains('page-enter-active')).toBe(true)
-    expect(child.classList.contains('page-enter-from')).toBe(true)
+    // the first appearance (skeleton -> data included) rides the appear
+    // reveal of the swap vocabulary — not the slide machinery
+    expect(child.classList.contains('wipe-enter-active')).toBe(true)
+    expect(child.classList.contains('wipe-enter-from')).toBe(true)
     w.unmount()
   })
 
-  it('[covers:web-common.content-swap] swapKey 切替は dir の語彙で遷移: forward/back は shell と同じ slide 族・swap は fade（page-*）', async () => {
+  it('[covers:web-common.content-swap] swapKey 切替は dir の語彙で遷移: forward/back は shell と同じ slide 族・swap は reveal（wipe-*）', async () => {
     for (const dir of ['forward', 'back'] as const) {
       const w = swap('a', dir)
       await w.setProps({ swapKey: 'b' })
@@ -83,13 +83,13 @@ describe('ContentSwap (component, TASK-146 §3)', () => {
       expect(motion.some((c) => c.startsWith(`slide-${dir}-leave-`)), dir).toBe(true)
       w.unmount()
     }
-    // dir='swap' crosses through the fade vocabulary instead
+    // dir='swap' crosses through the reveal vocabulary instead
     const w = swap('a', 'swap')
     await w.setProps({ swapKey: 'b' })
     await nextTick()
     const motion = motionClasses(w)
-    expect(motion.some((c) => c.startsWith('page-enter-'))).toBe(true)
-    expect(motion.some((c) => c.startsWith('page-leave-'))).toBe(true)
+    expect(motion.some((c) => c.startsWith('wipe-enter-'))).toBe(true)
+    expect(motion.some((c) => c.startsWith('wipe-leave-'))).toBe(true)
     expect(motion.some((c) => c.startsWith('slide-'))).toBe(false)
     w.unmount()
   })
@@ -323,8 +323,8 @@ describe('AppearList (component, review MED2)', () => {
       slots: { default: () => [h(AppearList, () => rowsSlot(['x']))] },
       global: { stubs: { transition: false, 'transition-group': false } },
     })
-    // the first appearance: the pane fades as one motion, rows stay silent
-    expect(w.find('ul').classes()).toContain('page-enter-active')
+    // the first appearance: the pane reveals as one motion, rows stay silent
+    expect(w.find('ul').classes()).toContain('wipe-enter-active')
     expect(rowHasAppear(w, 'x')).toBe(false)
     // a period step commit rebuilds the pane: the pane slides, and the rows
     // of the rebuilt pane never re-run their appear fade (no double motion)
