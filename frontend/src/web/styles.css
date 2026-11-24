@@ -2540,6 +2540,13 @@ button.share-account { cursor: pointer; }
    is the relative flow anchor, the leaving pane parks absolute inside it,
    and the horizontal overflow of the mid-swap pair stays clipped */
 .content-swap { position: relative; overflow-x: clip; min-width: 0; }
+/* the fade vocabulary parks the leaving pane absolute too (the shell
+   recipe ContentSwap's header describes): without it the pair stacks in
+   flow, the viewport fades to the bare background and the layout jumps
+   when the leaving pane is removed — a white flash on every swap. The
+   leave also delays by half the enter, so the two panes never sit at
+   half opacity together and the crossfade never dips toward white */
+.content-swap .page-leave-active { position: absolute; top: 0; left: 0; width: 100%; transition-delay: 0.12s; }
 /* the pane element the pages hand to ContentSwap: the view-stack's own
    column rhythm moves inside it (the stack itself now holds one child) */
 .content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
@@ -2659,8 +2666,8 @@ button.share-account { cursor: pointer; }
   /* …except the pane crossfade inside ContentSwap: a plain fade carries
      no movement, so it stays (reduced motion removes movement, not
      fades) — a period commit must animate on these devices too */
-  .content-swap .page-enter-active,
-  .content-swap .page-leave-active { transition: opacity 0.2s ease; }
+  .content-swap .page-enter-active { transition: opacity 0.2s ease; }
+  .content-swap .page-leave-active { transition: opacity 0.2s ease 0.12s; }
   .page-enter-from,
   .page-leave-to { transform: none; }
   /* the slide transitions are off as well (TASK-74: the JS side already
