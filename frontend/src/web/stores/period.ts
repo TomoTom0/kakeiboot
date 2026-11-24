@@ -107,6 +107,22 @@ export const usePeriodStore = defineStore('web-period', () => {
     return `${shortDate(from.value)}〜`
   })
 
+  // --- committed display snapshot -----------------------------------------
+  // The display surfaces (the pages' period headers, the topbar chip, the
+  // trend's current-month highlight) show the period the DISPLAYED data
+  // belongs to, never the working period: a step press moves the working
+  // period at once, and a label that runs ahead of its data reads as the
+  // wrong month's numbers under the new month's name. Pages call
+  // commitLabel() at their load commit (the same instant their data and
+  // committedKey land); until the first commit the live values show.
+  const committedSnapshot = ref<{ label: string; labelShort: string; month: string } | null>(null)
+  function commitLabel(): void {
+    committedSnapshot.value = { label: label.value, labelShort: labelShort.value, month: month.value }
+  }
+  const committedLabel = computed(() => committedSnapshot.value?.label ?? label.value)
+  const committedLabelShort = computed(() => committedSnapshot.value?.labelShort ?? labelShort.value)
+  const committedMonth = computed(() => committedSnapshot.value?.month ?? month.value)
+
   const valid = computed(() => mode.value !== 'range' || (!!from.value && !!to.value && from.value <= to.value))
 
   /** Period part of an analysis query for the ranked endpoints. */
@@ -346,6 +362,10 @@ export const usePeriodStore = defineStore('web-period', () => {
     range,
     label,
     labelShort,
+    commitLabel,
+    committedLabel,
+    committedLabelShort,
+    committedMonth,
     valid,
     query,
     trendQuery,

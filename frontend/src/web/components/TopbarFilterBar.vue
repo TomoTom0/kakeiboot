@@ -132,8 +132,8 @@ function run(): void {
           data-test="filter-period"
         >
           <!-- both width labels ride the chip: a 900px media query shows one -->
-          <span class="chip-label chip-label-short">{{ period.labelShort }}</span>
-          <span class="chip-label chip-label-full">{{ period.label }}</span>
+          <span class="chip-label chip-label-short">{{ period.committedLabelShort }}</span>
+          <span class="chip-label chip-label-full">{{ period.committedLabel }}</span>
         </button>
       </template>
       <PeriodPicker />

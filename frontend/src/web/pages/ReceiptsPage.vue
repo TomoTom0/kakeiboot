@@ -154,6 +154,7 @@ async function load(id?: number): Promise<void> {
     // pane; TASK-161 §2-1), so the content transition fires here — never at
     // the press — only for a real content change
     committedKey.value = `${l}|${JSON.stringify({ ...listQuery(), from: undefined, to: undefined })}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -573,7 +574,7 @@ const groups = computed(() => {
             <p class="kpi-head">
               <!-- TASK-161 §3/§4 (指摘5): the label is period.label alone
                    (no「の支出」suffix) with the step pair around it -->
-              <PeriodStep><span class="label">{{ period.label }}</span></PeriodStep>
+              <PeriodStep><span class="label">{{ period.committedLabel }}</span></PeriodStep>
               <strong class="kpi-value">{{ formatYen(sumView) }}</strong>
             </p>
             <!-- TASK-161 §2-2 (review 中6): the summary line crosses through

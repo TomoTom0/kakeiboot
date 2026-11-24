@@ -565,6 +565,11 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     await flushPromises()
     expect(wrapper.find('.view-stack').classes()).not.toContain('loading')
     expect(wrapper.find('[data-test="period-total"]').text()).toBe('948円')
+    // the period label (header + topbar chip) belongs to the DISPLAYED
+    // data: it must not run ahead of the gated fetch — mid-refetch it
+    // still names the old month the numbers on screen belong to
+    expect(wrapper.find('.period-label').text()).toBe('2026年10月')
+    expect(wrapper.find('.chip-label-full').text()).toBe('2026年10月')
     expect(still()).toBe(true)
     const paneBefore = swap().element.firstElementChild
     // TASK-161: the commit lands IN PLACE — no slide-forward/back classes and
@@ -577,6 +582,7 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(swap().element.firstElementChild).toBe(paneBefore)
     await settle()
     expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+    expect(wrapper.find('.chip-label-full').text()).toBe('2026年11月')
 
     // a mode switch (month -> week) still remounts the pane: the fade
     // vocabulary carries the swap (the dialog stays open through both)

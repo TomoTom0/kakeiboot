@@ -127,6 +127,7 @@ function segTitle(segTotal: number): (s: AllocatedSegment) => string {
     ref="rowsEl"
     class="week-rows"
     data-test="rows"
+    instant-leave
   >
     <li
       v-for="w in items"

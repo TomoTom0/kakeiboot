@@ -102,6 +102,7 @@ const items = computed(() =>
     ref="rowsEl"
     class="ranked"
     data-test="rows"
+    instant-leave
   >
     <li
       v-for="r in items"

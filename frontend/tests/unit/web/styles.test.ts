@@ -1111,6 +1111,13 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
       expect(r.selectors.join(','), 'every timing-less rule is the origin pair').toMatch(/-from|-to/)
       expect(decl(r.body, 'opacity'), 'the origin sets opacity 0').toBe('0')
     }
+    // the instant-leave member: aggregate lists a period commit replaces
+    // wholesale (week rows, ranked rows) drop the old rows at once — the
+    // rule exists in motion.css with transition: none (AppearList's
+    // instantLeave binds it as the leave-active class)
+    const instant = rules(motion).filter((r) => r.selectors.some((s) => s === '.bb-appear-leave-instant'))
+    expect(instant.length, 'the instant-leave member exists').toBe(1)
+    expect(decl(instant[0]!.body, 'transition')).toBe('none')
     // reduced-motion turns the vocabulary off (the second guard)
     const reduced = motion.slice(motion.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)

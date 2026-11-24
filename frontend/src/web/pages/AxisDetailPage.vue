@@ -391,6 +391,7 @@ async function load(id?: number): Promise<void> {
     itemStats.value = itemRes
     recent.value = recentRes.receipts
     committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${route.path}|${subjectQuery()}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -492,7 +493,7 @@ const screenScale = computed(() =>
 )
 
 const trendCurrent = computed(() =>
-  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.committedMonth),
 )
 
 /** A bar press: a day bar opens that day's receipts; a week/month bar moves
@@ -663,7 +664,7 @@ const menuItems = computed<PageMenuItem[]>(() => {
         <ContentSwap :swap-key="committedKey">
           <div class="content-pane">
             <PeriodHeader
-              :label="period.label"
+              :label="period.committedLabel"
               :total="totals.amount"
               data-test="axis-period"
               :swap-key="committedKey"

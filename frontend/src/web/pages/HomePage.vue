@@ -122,6 +122,7 @@ async function load(id?: number): Promise<void> {
     // the commit — never at the press); TASK-161 §2: the period range is NOT
     // part of it — a period move renders in place
     committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -165,7 +166,7 @@ function axisTo(axis: AnalysisAxis, key: string | number | null, label: string):
 // §6: the current key keeps existing rules — out of the slid window it just
 // matches no bar and the highlight drops until the window returns
 const trendCurrent = computed(() =>
-  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.committedMonth),
 )
 
 /** A bar press: a day bar opens that day's receipts list, a week/month bar
@@ -201,7 +202,7 @@ const weeks = computed<WeekRow[]>(() => {
 // today's week whenever the month does
 const weekCurrent = computed(() => {
   const span = weekSpan.value
-  return span ? currentTrendKey('week', period.mode, span[0], span[1], period.month) : null
+  return span ? currentTrendKey('week', period.mode, span[0], span[1], period.committedMonth) : null
 })
 function onWeekSelect(key: string): void {
   period.setWeek(key)
@@ -278,7 +279,7 @@ const recentQuery = computed(() => {
       <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
-            :label="period.label"
+            :label="period.committedLabel"
             :total="totals.amount"
             :swap-key="committedKey"
           />
