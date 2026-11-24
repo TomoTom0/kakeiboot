@@ -26,7 +26,6 @@ import {
   resetPageReady,
 } from './composables/usePageReady'
 import { usePeriodStore } from './stores/period'
-import { prefersReducedMotion } from './composables/reducedMotion'
 import { useSessionStore } from './stores/session'
 
 // App shell (TASK-27 §3): a full-width sticky topbar, and below it a
@@ -58,13 +57,16 @@ const period = usePeriodStore()
 watch(
   () => period.committedEpoch,
   () => {
-    if (prefersReducedMotion()) return
+    // NOTE: no prefers-reduced-motion skip here — a plain opacity fade
+    // is the motion-safe form (the cross-fade is what reduced-motion
+    // guidance substitutes FOR movement), and gating it left the period
+    // change with no animation at all on devices with the setting on.
     void nextTick(() => {
       document
         .querySelectorAll('.view-stack .period-head, .view-stack .kpi, .view-stack .zone')
         .forEach((el) => {
           if (typeof el.animate === 'function') {
-            el.animate([{ opacity: '0' }, { opacity: '1' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' })
+            el.animate([{ opacity: '0' }, { opacity: '1' }], { duration: 320, easing: 'cubic-bezier(.2,.7,.2,1)' })
           }
         })
     })
