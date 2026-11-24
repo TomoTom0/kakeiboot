@@ -2554,7 +2554,14 @@ button.share-account { cursor: pointer; }
 .wipe-leave-to { opacity: 0; }
 /* the pane element the pages hand to ContentSwap: the view-stack's own
    column rhythm moves inside it (the stack itself now holds one child) */
-.content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; background: var(--bb-bg); }
+/* the pane's opaque background is load-bearing for the reveal: the two
+   states' layouts differ (a wider total wraps to a second line, bars
+   sit at different heights), so wherever the entering pane's own
+   content is transparent — the gaps between zones, the header row's
+   empty half — the leaving pane would show through and the composite
+   would print both states at once. With the background, the revealed
+   region is fully the new state and the rest is fully the old */
 
 /* TASK-170 W-9: the bb-appear vocabulary moved to
    shared/styles/motion.css (both entry points import it) */
