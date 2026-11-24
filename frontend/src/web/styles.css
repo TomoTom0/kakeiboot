@@ -2547,9 +2547,9 @@ button.share-account { cursor: pointer; }
    frame blends the two states: a crossfade's half-transparent middle
    is a transient image, and flashing one even for ~100ms is visual
    stress (user verdict, 2026-11-24) */
-.wipe-enter-active { position: relative; z-index: 1; transition: clip-path 0.24s cubic-bezier(.2, .7, .2, 1); }
+.wipe-enter-active { position: relative; z-index: 1; transition: clip-path 0.48s cubic-bezier(.2, .7, .2, 1); }
 .wipe-enter-from { clip-path: inset(0 0 100% 0); }
-.wipe-leave-active { position: absolute; top: 0; left: 0; width: 100%; transition: opacity 0.01s linear 0.23s; }
+.wipe-leave-active { position: absolute; top: 0; left: 0; width: 100%; transition: opacity 0.01s linear 0.47s; }
 .wipe-leave-to { opacity: 0; }
 /* the pane element the pages hand to ContentSwap: the view-stack's own
    column rhythm moves inside it (the stack itself now holds one child) */
