@@ -7,7 +7,7 @@ MCP経由（ChatGPT等）での操作・閲覧を主とし、web画面を補助�
 - backend: Rust（axum / rmcp / sqlx / webauthn-rs）+ SQLite
 - frontend: TypeScript + Vite + Vue + Pinia（pnpm）。ログイン・登録、補助操作画面、MCP widget
 - 認証: パスキー（WebAuthn）。backendがRelying Party兼OAuth 2.1認可サーバー（MCPクライアント向け）を担う
-- OAuth: クライアント登録はCIMD（chatgpt.comのみallowlist）、トークンはopaque+DB保存（hash）、refresh tokenはrotation。PKCE(S256)・resource/aud検証・Bearer検証は自前実装（rmcpは未提供）
+- OAuth: クライアント登録はCIMD（allowlist は chatgpt.com・claude.ai。値の正本は configs/<env>/auth.toml の cimd_allowed_hosts）、トークンはopaque+DB保存（hash）、refresh tokenはrotation。PKCE(S256)・resource/aud検証・Bearer検証は自前実装（rmcpは未提供）
 - 画像: WebPに圧縮しファイルシステムへ保存、DBにはパスとメタ情報。デコード・向き補正・リサイズはimage crate、lossyエンコードはwebp crate（libwebp）。変換前にEXIFを抽出する
 
 ## 要件上の前提
