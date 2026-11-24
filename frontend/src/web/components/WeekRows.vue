@@ -49,8 +49,8 @@ export interface WeekRow {
   segments: StackedSegment[]
 }
 const props = withDefaults(
-  defineProps<{ weeks: WeekRow[]; current?: string | null; scale: number }>(),
-  { current: null },
+  defineProps<{ weeks: WeekRow[]; current?: string | null; scale: number; swapKey?: string }>(),
+  { current: null, swapKey: undefined },
 )
 const emit = defineEmits<{ select: [key: string] }>()
 
@@ -127,6 +127,7 @@ function segTitle(segTotal: number): (s: AllocatedSegment) => string {
     ref="rowsEl"
     class="week-rows"
     data-test="rows"
+    instant-leave
   >
     <li
       v-for="w in items"
@@ -140,7 +141,7 @@ function segTitle(segTotal: number): (s: AllocatedSegment) => string {
         @click="emit('select', w.key)"
       >
         <span class="week-label">{{ w.label }}</span>
-        <TweenYen :value="w.total" />
+        <TweenYen :value="w.total" :swap-key="props.swapKey" />
         <span class="week-bar-track">
           <RowBar
             v-if="w.bar"

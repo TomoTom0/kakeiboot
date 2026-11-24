@@ -16,12 +16,20 @@ import { ContentSwapActive } from './ContentSwap.vue'
 
 const paneActive = inject<Readonly<Ref<boolean>> | null>(ContentSwapActive, null)
 const appear = computed(() => paneActive?.value !== true)
+
+// instantLeave: for aggregate lists whose rows are replaced WHOLESALE by a
+// period commit (week rows, ranked rows), the leaving rows go at once —
+// a fade would hold the previous period's rows visibly inside the new
+// period's list for the fade's duration. Row-level changes within one
+// period (an appended page, an archived row) keep the fade.
+const props = defineProps<{ instantLeave?: boolean }>()
 </script>
 
 <template>
   <TransitionGroup
     name="bb-appear"
     :appear="appear"
+    :leave-active-class="props.instantLeave ? 'bb-appear-leave-instant' : undefined"
     tag="ul"
   >
     <slot />

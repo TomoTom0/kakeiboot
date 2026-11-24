@@ -220,14 +220,16 @@ async function copyUrl(row: IssuedRow): Promise<void> {
       <p class="muted small">
         家計簿への参加を依頼する共有 URL を発行します（URL は一度だけ表示されます）。
       </p>
-      <ul
+      <TransitionGroup
         v-if="issued.length > 0"
+        tag="ul"
+        name="share-list"
         class="rows"
         data-test="invite-issued"
       >
         <li
-          v-for="(row, i) in issued"
-          :key="i"
+          v-for="row in issued"
+          :key="row.invitation.url"
           class="row"
           data-test="invite-issued-row"
         >
@@ -271,7 +273,7 @@ async function copyUrl(row: IssuedRow): Promise<void> {
             >コピーしました</span>
           </div>
         </li>
-      </ul>
+      </TransitionGroup>
       <div
         v-if="openTickets.length > 0"
         data-test="share-tickets"
@@ -280,7 +282,11 @@ async function copyUrl(row: IssuedRow): Promise<void> {
         <p class="muted small">
           発行済みの共有 URL は再表示できません（URL は発行時のみ表示されます）。
         </p>
-        <ul class="rows">
+        <TransitionGroup
+          tag="ul"
+          name="share-list"
+          class="rows"
+        >
           <li
             v-for="t in openTickets"
             :key="t.ticket_ref"
@@ -321,7 +327,7 @@ async function copyUrl(row: IssuedRow): Promise<void> {
               />
             </div>
           </li>
-        </ul>
+        </TransitionGroup>
       </div>
       <p
         v-if="ticketsError"

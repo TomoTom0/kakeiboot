@@ -472,7 +472,8 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
       { timeout: 3_000, interval: 20 },
     )
     await settle()
-    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="breakdown-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="breakdown"]').text()).not.toContain('この期間の記録はありません。')
     expect(wrapper.find('[data-test="recent"] .empty-state').exists()).toBe(true)
     // November 2026 spans six overlapping weeks (10/26 .. 11/30 Mondays) —
     // all zero, no bars, and nothing explains the future
@@ -510,14 +511,14 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     expect(wrapper.find('.view-stack:not(.skeleton)').exists()).toBe(false)
     release()
     await flushPromises()
-    // the first content commit appears through the fade vocabulary: the
-    // content-swap wrapper's child carries the appear fade's enter classes
+    // the first content commit appears through the reveal vocabulary: the
+    // content-swap wrapper's child carries the appear reveal's enter classes
     const swap = wrapper.find('.view-stack .content-swap')
     expect(swap.exists()).toBe(true)
     expect(swap.element.children).toHaveLength(1)
     const child = swap.element.firstElementChild!
-    expect(child.classList.contains('page-enter-active')).toBe(true)
-    expect(child.classList.contains('page-enter-from')).toBe(true)
+    expect(child.classList.contains('wipe-enter-active')).toBe(true)
+    expect(child.classList.contains('wipe-enter-from')).toBe(true)
     // single motion: the pane's appear is the only animation — after the
     // settle the trend chart itself carries no enter classes of its own
     await settle()
@@ -530,13 +531,12 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
 
   // TASK-146 §3 #6/#7 (web-common.content-swap): the content transition fires
   // at the LOAD COMMIT, not at the press. Mid-load the old content stays
-  // (dimmed, swap key unmoved — the two-stage render of
-  // web-shell.loading-skeleton survives). TASK-161 §2 (web-common.period-
-  // move-voice, 指摘3): a PERIOD step no longer slides/remounts the pane —
-  // the committedKey drops the period range, so the commit renders in place
-  // (same pane node, no slide vocabulary) and the value-level vocabulary
-  // owns the change; a mode switch keeps crossing through the fade.
-  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepはpaneを再mountしない（load確定時もslide classなし・同一DOM）・mode切替はfadeのまま', async () => {
+  // (swap key unmoved — the two-stage render of web-shell.loading-skeleton
+  // survives). A PERIOD step commits like every other content change
+  // (2026-11-24 ユーザー指示): the committedKey includes the period, so
+  // the pane crosses through ContentSwap's fade vocabulary — no slide,
+  // and the entering pane is the new period's finished state.
+  it('[covers:web-common.period-move-voice][covers:web-common.content-swap] 期間stepは他の内容変更と同じくpaneのfadeで確定する（slideなし・中間状態なし）・mode切替もfade', async () => {
     mockFetch({ 'GET /api/auth/me': { body: ME } })
     let gated = false
     let release!: () => void
@@ -562,29 +562,43 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     await settle()
     await wrapper.find('[data-test="period-next"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.view-stack').classes()).toContain('loading')
+    expect(wrapper.find('.view-stack').classes()).not.toContain('loading')
     expect(wrapper.find('[data-test="period-total"]').text()).toBe('948円')
+    // the period label (header + topbar chip) belongs to the DISPLAYED
+    // data: it must not run ahead of the gated fetch — mid-refetch it
+    // still names the old month the numbers on screen belong to
+    expect(wrapper.find('.period-label').text()).toBe('2026年10月')
+    expect(wrapper.find('.chip-label-full').text()).toBe('2026年10月')
     expect(still()).toBe(true)
     const paneBefore = swap().element.firstElementChild
-    // TASK-161: the commit lands IN PLACE — no slide-forward/back classes and
-    // the pane element is the SAME node (the period change never bumps the
-    // committedKey, so ContentSwap does not remount the pane at all)
+    // the commit bumps the committedKey (the period is part of it): the
+    // pane crosses through the fade — page-enter/leave classes, never the
+    // slide vocabulary — and the entering pane is a fresh node carrying
+    // the new period's finished state
     release()
     await flushPromises()
-    expect(still()).toBe(true)
-    expect(swap().element.children).toHaveLength(1)
-    expect(swap().element.firstElementChild).toBe(paneBefore)
+    const entering = children().find((el) => el.classList.contains('wipe-enter-active'))
+    expect(entering).toBeDefined()
+    expect(entering).not.toBe(paneBefore)
+    expect(children().some((el) => el.classList.contains('wipe-leave-active'))).toBe(true)
+    expect(
+      children().some((el) =>
+        Array.from(el.classList).some((c) => c.startsWith('slide-')),
+      ),
+    ).toBe(false)
     await settle()
+    expect(swap().element.children).toHaveLength(1)
     expect(wrapper.find('.period-label').text()).toBe('2026年11月')
+    expect(wrapper.find('.chip-label-full').text()).toBe('2026年11月')
 
     // a mode switch (month -> week) still remounts the pane: the fade
     // vocabulary carries the swap (the dialog stays open through both)
     gated = false
     await wrapper.find('[data-test="mode-week"]').trigger('click')
     await flushPromises()
-    const fading = children().find((el) => el.classList.contains('page-enter-active'))
+    const fading = children().find((el) => el.classList.contains('wipe-enter-active'))
     expect(fading).toBeDefined()
-    const fadingOut = children().find((el) => el.classList.contains('page-leave-active'))
+    const fadingOut = children().find((el) => el.classList.contains('wipe-leave-active'))
     expect(fadingOut).toBeDefined()
     await settle()
     expect(wrapper.find(".period-label").text()).toBe('2026年10月12日の週')
@@ -711,6 +725,33 @@ describe('HomePage (dashboard, TASK-89 redesign)', () => {
     // the settled load drops the skeleton (the empty object fails the
     // data check and renders nothing — the skeleton is gone either way)
     expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+  })
+
+  it('[covers:web-shell.loading-skeleton] 家計簿切替は文脈切替: 旧家計簿の内容は即座に消えて skeleton が覆い、確定で新家計簿の内容になる（dim の二段描画は同一家計簿の再取得だけ）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    // ledger 1's content is committed and visible
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    // hold ledger 2's analysis at the gate; everything else flows
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const orig = api.getAnalysis.bind(api)
+    vi.spyOn(api, 'getAnalysis').mockImplementation(async (...args: Parameters<typeof orig>) => {
+      if (args[0] === 2) await gate
+      return orig(...args)
+    })
+    ;(await import('@/web/stores/session')).useSessionStore().selectedLedgerId = 2
+    await settle()
+    // mid-switch: the previous ledger's content is GONE (no dimmed
+    // two-stage render across ledgers) and the skeleton covers the load
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(true)
+    release()
+    await settle()
+    // committed: ledger 2's content, skeleton gone
+    expect(wrapper.find('[data-test="loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="period-total"]').exists()).toBe(true)
   })
 
   it('[covers:web-dashboard.label-filter] 検索dialog下段のラベル選択は Home の analysis 再取得へ label_colors で流れる', async () => {
@@ -1329,14 +1370,15 @@ describe('HomePage period UI (TASK-161)', () => {
     expect(ticks).toHaveLength(5)
     expect(ticks[0]!.text()).toBe('')
     expect(ticks[4]!.text()).toBe('1千')
-    // the empty state keeps its one line (§1-1): September holds no records
-    // — no bar, no segments, no ticks
+    // the empty state is the visual one (icon only, no sentence):
+    // September holds no records — no bar, no segments, no ticks
     await wrapper.find('[data-test="period-step-prev"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-test="breakdown-bar"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-test="breakdown-seg"]').length).toBe(0)
     expect(wrapper.findAll('[data-test^="breakdown-tick-"]').length).toBe(0)
-    expect(wrapper.find('[data-test="breakdown"]').text()).toContain('この期間の記録はありません。')
+    expect(wrapper.find('[data-test="breakdown-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="breakdown"]').text()).not.toContain('この期間の記録はありません。')
   })
 
   it('[covers:web-home.week-row-in-bar-label] 週行segmentのbar内label: jsdom未測定では非表示fallback（色のみ）・title「名称 金額（n%）」は維持', async () => {

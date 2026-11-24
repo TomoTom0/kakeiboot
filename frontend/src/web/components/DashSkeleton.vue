@@ -2,8 +2,13 @@
 // Loading placeholder for the dashboard screens (TASK-39 D, TASK-89 /
 // TASK-105: the reading screens are a zone stack): the same silhouette as
 // the loaded page (headline block + trend bars + ruled rows), flat
-// single-color blocks — no shimmer, no per-item motion. Decorative blocks
-// are aria-hidden; the screen-reader text carries the loading state.
+// single-color blocks. The reveal timing and the pulse live in the
+// .skeleton CSS: the whole skeleton stays invisible for a load's first
+// 250ms (a fast load never shows it) and then fades in; the blocks
+// breathe until the content commits. On the main screens the pages hand
+// over between this skeleton and the content with the handover
+// cross-fade (styles.css). Decorative blocks are aria-hidden; the
+// screen-reader text carries the loading state.
 </script>
 
 <template>

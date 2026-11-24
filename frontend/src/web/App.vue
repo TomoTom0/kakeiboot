@@ -43,6 +43,7 @@ const session = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 const period = usePeriodStore()
+
 const showShell = computed(() => !route.meta.public && session.me !== null)
 
 // The shell-start history boundary (TASK-164 §2-4): everything behind the

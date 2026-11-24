@@ -50,10 +50,11 @@ const error = ref('')
 const loading = ref(false)
 
 // TASK-146 §3: the content transition's committed key (bumped only at the
-// load commit — mid-refetch the old content stays dimmed). TASK-161 §2
+// load commit — mid-refetch the old content stays in place at full opacity). TASK-161 §2
 // (web-common.period-move-voice): the key drops the PERIOD range — a period
-// step never remounts the pane; the value-level vocabulary (the label micro
-// move, the amount tweens, the bar width transitions) owns the change. A
+// step never remounts the pane; at the commit the new period lands at
+// once (labels gated to the commit, amounts and bars hard-cut — the
+// period epoch in the value keys and the commit flash). A
 // mode / label / ledger change still bumps it (the fade vocabulary)
 const committedKey = ref('')
 
@@ -73,10 +74,20 @@ const weekSpan = computed<[string, string] | null>(() => {
 const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
+  if (committedLedger !== null && l !== committedLedger) {
+    analysis.value = null
+    weekRes.value = null
+    recent.value = []
+  }
   loading.value = true
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
@@ -107,10 +118,12 @@ async function load(id?: number): Promise<void> {
     analysis.value = a
     recent.value = r.receipts
     weekRes.value = wk ?? null
+    committedLedger = l
     // the pane's committed identity (the content transition fires here, at
     // the commit — never at the press); TASK-161 §2: the period range is NOT
     // part of it — a period move renders in place
-    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${JSON.stringify(period.urlQuery)}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -154,7 +167,7 @@ function axisTo(axis: AnalysisAxis, key: string | number | null, label: string):
 // §6: the current key keeps existing rules — out of the slid window it just
 // matches no bar and the highlight drops until the window returns
 const trendCurrent = computed(() =>
-  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.committedMonth),
 )
 
 /** A bar press: a day bar opens that day's receipts list, a week/month bar
@@ -190,7 +203,7 @@ const weeks = computed<WeekRow[]>(() => {
 // today's week whenever the month does
 const weekCurrent = computed(() => {
   const span = weekSpan.value
-  return span ? currentTrendKey('week', period.mode, span[0], span[1], period.month) : null
+  return span ? currentTrendKey('week', period.mode, span[0], span[1], period.committedMonth) : null
 })
 function onWeekSelect(key: string): void {
   period.setWeek(key)
@@ -255,18 +268,19 @@ const recentQuery = computed(() => {
       {{ error }}
     </p>
 
+    <Transition name="handover" type="transition">
     <div
       v-if="analysis && totals"
+      key="data"
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the pane's content transition fires at the load
            commit (swapKey) in the move's direction — mid-refetch the old
-           content stays right here, dimmed by the loading class above -->
+           content stays right here at full opacity until the commit -->
       <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
-            :label="period.label"
+            :label="period.committedLabel"
             :total="totals.amount"
             :swap-key="committedKey"
           />
@@ -283,12 +297,16 @@ const recentQuery = computed(() => {
             class="zone zone--breakdown"
             data-test="breakdown"
           >
-            <p
+            <div
               v-if="breakdownRows.length === 0"
-              class="muted empty"
+              class="empty-state breakdown-empty"
+              data-test="breakdown-empty"
             >
-              この期間の記録はありません。
-            </p>
+              <span class="breakdown-empty-ring"><AppIcon
+                name="receipt"
+                :size="26"
+              /></span>
+            </div>
             <BreakdownBar
               v-else
               :rows="breakdownRows"
@@ -303,7 +321,6 @@ const recentQuery = computed(() => {
             <div class="col-main">
               <section
                 class="zone"
-                :class="{ 'is-loading': win.loading.value }"
                 data-test="trend-card"
               >
                 <div class="zone-head">
@@ -341,7 +358,7 @@ const recentQuery = computed(() => {
                     週ごとの支出
                   </h2>
                 </div>
-                <WeekRows
+                <WeekRows :swap-key="committedKey"
                   :weeks="weeks"
                   :current="weekCurrent"
                   :scale="screenScale"
@@ -402,6 +419,7 @@ const recentQuery = computed(() => {
         </div>
       </ContentSwap>
     </div>
-    <DashSkeleton v-else-if="loading" />
+    <DashSkeleton v-else-if="loading" key="skeleton" />
+    </Transition>
   </div>
 </template>

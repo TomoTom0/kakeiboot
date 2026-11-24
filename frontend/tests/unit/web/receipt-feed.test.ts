@@ -97,7 +97,7 @@ async function anyReceipt(over: (id: number) => Partial<ReceiptView> = () => ({}
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
 
 describe('Feed sequence', () => {
-  it('[covers:web-receipts.feed-sequence-from-context][covers:web-receipts.feed-external-nav][covers:web-browse.feed-no-remount] 文脈 query で listReceipts を呼び一覧と同じ並び・文脈変更の内容再取得は content-swap の fade のみ（ページrootはremountなし）', async () => {
+  it('[covers:web-receipts.feed-sequence-from-context][covers:web-receipts.feed-external-nav][covers:web-browse.feed-no-remount] 文脈 query で listReceipts を呼び一覧と同じ並び・文脈変更の内容再取得は content-swap の reveal のみ（ページrootはremountなし）', async () => {
     const list = vi.spyOn(api, 'listReceipts')
     await mountApp(`/receipts/102?${CTX_QS}&store=Aマート&item=牛乳&category=食費&include_deleted=1`)
     // fixed order regardless of the filters (the list API is the source of the order)
@@ -125,7 +125,7 @@ describe('Feed sequence', () => {
     expect(swapWrap.element.contains(panel(feed.wrapper, 102).element)).toBe(true)
 
     // a context change refetches the sequence and crosses the content
-    // through the wrapper's fade — the page root never remounts and never
+    // through the wrapper's reveal — the page root never remounts and never
     // carries a transition class (web-browse.feed-no-remount's coexistence)
     const { wrapper, router } = feed
     let gated = false
@@ -150,7 +150,7 @@ describe('Feed sequence', () => {
     release()
     await flushPromises()
     const kids = Array.from(swapWrap.element.children)
-    expect(kids.some((el) => el.classList.contains('page-enter-active')), 'the content fades in').toBe(true)
+    expect(kids.some((el) => el.classList.contains('wipe-enter-active')), 'the content reveals in').toBe(true)
     // the page root is the very same node, classless — only the wrapper moved
     expect(document.querySelector('main.app-main .receipt-feed')).toBe(feedRoot)
     expect(

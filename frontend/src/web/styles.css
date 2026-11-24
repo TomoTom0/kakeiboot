@@ -1178,6 +1178,13 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   margin-top: 0.4rem;
   font-size: var(--axis-label-size);
   font-weight: var(--axis-label-weight);
+  /* the axis rows' vertical geometry is FIXED (user direction: the year /
+     month position never moves): one line at a pinned height in every
+     state — sliding, pinned, trimmed, dense or narrow — so nothing in
+     the slide machinery can push the row down and back */
+  line-height: 1.3;
+  height: 1.3em;
+  overflow: hidden;
 }
 .axis-labels span { text-align: center; white-space: nowrap; }
 /* TASK-162 §5-2/§5-3 (指摘5): the YEAR tick row — the upper tier over the
@@ -1195,6 +1202,10 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
   font-size: var(--axis-label-size);
   font-weight: var(--axis-label-weight);
   color: var(--bb-muted);
+  /* fixed height, same rule as .axis-labels above */
+  line-height: 1;
+  height: 1em;
+  overflow: hidden;
 }
 .axis-years span {
   text-align: center;
@@ -1277,13 +1288,16 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
 .bars.no-anim,
 .axis-labels.no-anim,
 .axis-years.no-anim { transition: none; }
+/* one compositor layer for the whole slide: the three rows translate
+   together and never repaint at different rates mid-move */
+.bars.is-sliding,
+.axis-labels.is-sliding,
+.axis-years.is-sliding { will-change: transform; }
 /* the concatenated pair is twice the wrap wide: the wrap clips at the
    committed window's pinned width (its is-sliding rule) and the scroll
    port hides — the 2-window overflow never feeds a phantom scrollbar */
 .trend-wrap.is-sliding { overflow: hidden; }
 .trend-window .hscroll.is-sliding { overflow: hidden; }
-/* the window-move loading: the same fade as .view-stack.loading, zone-scoped */
-.zone.is-loading { opacity: 0.6; }
 
 /* ------------------------------------------------ reading screens (TASK-89)
    Home / the lists / the axis detail drop the two-column card grid for a
@@ -1291,15 +1305,24 @@ input[type='checkbox'] { min-height: 0; accent-color: var(--bb-accent); }
    radius, list rows on the shared hairline rule and numbers in tabular
    figures. The settings screens keep the card look (--bb-radius-lg +
    --bb-shadow) — the tokens above stay split on purpose. */
-.view-stack { display: flex; flex-direction: column; gap: 0.75rem; transition: opacity 0.15s; }
-.view-stack.loading { opacity: 0.6; }
+/* no loading dim anywhere (user direction): a refetch keeps the
+   committed content at full opacity until the commit swaps it — the
+   only loading surface is the skeleton (first load / ledger switch) */
+.view-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.view-page { position: relative; }
+/* the skeleton <-> content handover cross-fades: the leaving side is
+   parked absolute while the entering side fades in over it, so the two
+   overlap and the switch never passes through a blank or a hard cut */
+.handover-enter-active { transition: opacity 0.2s ease; }
+.handover-enter-from { opacity: 0; }
+.handover-leave-active { transition: opacity 0.2s ease; position: absolute; top: 0; left: 0; right: 0; }
+.handover-leave-to { opacity: 0; }
 .zone {
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius);
   padding: 1rem 1.25rem;
   min-width: 0;
-  transition: opacity 0.15s;
 }
 /* TASK-105: the zone heading is a visible data-name title (zone-title). The
    "see the whole axis" icon link rides the heading row's right end — no
@@ -1449,6 +1472,21 @@ h3.zone-title { font-size: 0.85rem; }
   text-align: center;
 }
 .empty-state p { margin: 0; }
+/* the breakdown's empty state is a visual, not a sentence (user
+   direction: UI is not written in text) — and it holds the bar's exact
+   block height (track 24px + its 1.35rem headroom) so the zones below
+   never move when a period flips between empty and non-empty */
+.breakdown-empty { height: calc(24px + 1.35rem); padding: 0; justify-content: center; }
+.breakdown-empty-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--bb-accent-soft);
+  color: var(--bb-muted);
+}
 
 /* ------------------------------------------------- dashboard-style views */
 
@@ -2366,6 +2404,26 @@ button.share-account { cursor: pointer; }
 .share-account-login { background: var(--bb-accent); border-color: var(--bb-accent); color: var(--bb-accent-fg); }
 .share-account-login:hover { background: var(--bb-accent-strong); border-color: var(--bb-accent-strong); }
 .share-account-login .share-account-guest { background: rgb(255 255 255 / 0.22); color: var(--bb-accent-fg); }
+/* share surfaces move: the accept card's states cross-fade with a small
+   rise instead of swapping instantly, the done mark pops, the account
+   bar / buttons ease their color changes, and the issuer-side lists
+   fade rows in and out */
+.share-swap-enter-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.share-swap-enter-from { opacity: 0; transform: translateY(6px); }
+.share-swap-leave-active { transition: opacity 0.12s ease; }
+.share-swap-leave-to { opacity: 0; }
+@keyframes bb-pop {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.share-done-mark { animation: bb-pop 0.32s cubic-bezier(.2, .7, .2, 1); }
+.share-account { transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+.share-actions .btn { transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+.share-list-enter-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.share-list-enter-from { opacity: 0; transform: translateY(-4px); }
+.share-list-leave-active { transition: opacity 0.15s ease; }
+.share-list-leave-to { opacity: 0; }
 .share-done { text-align: center; }
 .share-done-mark {
   display: grid;
@@ -2482,9 +2540,28 @@ button.share-account { cursor: pointer; }
    is the relative flow anchor, the leaving pane parks absolute inside it,
    and the horizontal overflow of the mid-swap pair stays clipped */
 .content-swap { position: relative; overflow-x: clip; min-width: 0; }
+/* ContentSwap's swap vocabulary — the REVEAL: the entering pane stays
+   fully opaque and is uncovered top-to-bottom over the leaving pane,
+   which parks absolute underneath, also fully opaque (its delayed
+   snap-off transition keeps it there until the reveal completes). No
+   frame blends the two states: a crossfade's half-transparent middle
+   is a transient image, and flashing one even for ~100ms is visual
+   stress (user verdict, 2026-11-24) */
+.wipe-enter-active { position: relative; z-index: 1; transition: clip-path 0.48s cubic-bezier(.2, .7, .2, 1); }
+.wipe-enter-from { clip-path: inset(0% 0% 100% 0%); }
+.wipe-enter-to { clip-path: inset(0% 0% 0% 0%); }
+.wipe-leave-active { position: absolute; top: 0; left: 0; width: 100%; transition: opacity 0.01s linear 0.47s; }
+.wipe-leave-to { opacity: 0; }
 /* the pane element the pages hand to ContentSwap: the view-stack's own
    column rhythm moves inside it (the stack itself now holds one child) */
-.content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.content-pane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; background: var(--bb-bg); }
+/* the pane's opaque background is load-bearing for the reveal: the two
+   states' layouts differ (a wider total wraps to a second line, bars
+   sit at different heights), so wherever the entering pane's own
+   content is transparent — the gaps between zones, the header row's
+   empty half — the leaving pane would show through and the composite
+   would print both states at once. With the background, the revealed
+   region is fully the new state and the rest is fully the old */
 
 /* TASK-170 W-9: the bb-appear vocabulary moved to
    shared/styles/motion.css (both entry points import it) */
@@ -2497,13 +2574,30 @@ button.share-account { cursor: pointer; }
 }
 .msg { animation: bb-fade-in 0.16s ease; }
 
-/* loading skeleton: the zone-stack silhouette in flat surface blocks, no
-   shimmer — the shape holds the layout, one soft fade on insert only */
+/* the skeleton blocks breathe while a load runs — a slow opacity pulse,
+   so the placeholder reads as a living loading state, not a frozen shape */
+@keyframes bb-sk-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.45; }
+}
+
+/* loading skeleton: the zone-stack silhouette in flat surface blocks.
+   The whole skeleton (cards included, not just the blocks) stays
+   invisible for the first 250ms of a load — a load that finishes inside
+   the delay never shows it at all, so fast screen switches do not
+   strobe a placeholder — then it fades in and the blocks pulse until
+   the content commits */
+.skeleton {
+  /* the delay hides the skeleton through the animation's backwards fill
+     (the from keyframe), NOT a forwards fill: a held fill would pin the
+     opacity at 1 and defeat the handover leave fade at the commit */
+  animation: bb-fade-in 0.2s ease 0.25s backwards;
+}
 .skeleton .sk {
   display: block;
   background: var(--bb-surface-2);
   border-radius: 6px;
-  animation: bb-fade-in 0.2s ease;
+  animation: bb-sk-pulse 1.5s ease-in-out 0.45s infinite alternate;
 }
 .skeleton .sk-label { width: 34%; height: 0.8rem; margin-bottom: 0.65rem; }
 .skeleton .sk-value { width: 45%; height: 2rem; margin-bottom: 0.9rem; }
@@ -2581,6 +2675,7 @@ button.share-account { cursor: pointer; }
   /* page / message / skeleton motion is off entirely (TASK-39) */
   .page-enter-active,
   .page-leave-active { transition-duration: 0s; }
+
   .page-enter-from,
   .page-leave-to { transform: none; }
   /* the slide transitions are off as well (TASK-74: the JS side already
@@ -2601,7 +2696,12 @@ button.share-account { cursor: pointer; }
   .axis-labels.is-sliding,
   .axis-years.is-sliding { transition: none; }
   .bar-stack { transition: none; }
-  .msg, .skeleton .sk { animation: none; }
+  .msg { animation: none; }
+  /* reduced motion: the skeleton stands still and shows at once (the
+     delayed reveal and the pulse are motion too) */
+  .skeleton { animation: none; opacity: 1; }
+  .skeleton .sk { animation: none; opacity: 1; }
+  .handover-enter-active, .handover-leave-active { transition: none; }
   /* TASK-48/51: the copy pop and the label chips' enter/leave/move motion
      are off (the icon swap and the instant chips keep the information) */
   .copy-btn.is-done .icon { animation: none; }
@@ -2609,6 +2709,12 @@ button.share-account { cursor: pointer; }
   .label-picker .label-anim-leave-active,
   .label-picker .label-anim-move { transition: none; }
   .topbar.ledger-scoped { transition: none; }
+  /* the share surfaces' motion is off under reduced motion too */
+  .share-swap-enter-active,
+  .share-swap-leave-active,
+  .share-list-enter-active,
+  .share-list-leave-active { transition: none; }
+  .share-done-mark { animation: none; }
   .ledger-chip { transition: none; }
   .cat-fold .icon { transition: none; }
   /* TASK-146 §3: the vocabulary's new members are off as well — the scrim

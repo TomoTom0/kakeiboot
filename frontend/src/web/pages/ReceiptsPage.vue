@@ -83,7 +83,7 @@ const loading = ref(false)
 // (periodMove is gone); the query itself keeps its period part
 const committedKey = ref('')
 // first load finished at least once: until then the screen shows the
-// skeleton; later reloads keep the grid and dim it (TASK-39 D)
+// skeleton; later reloads keep the content at full opacity (TASK-39 D)
 const loaded = ref(false)
 
 function listQuery(cursor?: string): ReceiptListQuery {
@@ -114,10 +114,21 @@ function analysisFilters() {
 }
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
+  if (committedLedger !== null && l !== committedLedger) {
+    loaded.value = false
+    receipts.value = []
+    payments.value = null
+    trendRes.value = null
+  }
   loading.value = true
   error.value = ''
   try {
@@ -131,6 +142,7 @@ async function load(id?: number): Promise<void> {
       api.getAnalysisTrend(l, { axis: 'category', granularity: spanGranularity(...period.range), ...analysisFilters(), limit: 5 }),
     ])
     if (n !== seq) return
+    committedLedger = l
     receipts.value = list.receipts
     totalCount.value = list.total_count
     sumAmount.value = list.sum_amount
@@ -141,7 +153,8 @@ async function load(id?: number): Promise<void> {
     // answered — the PERIOD part alone drops out (a period move keeps the
     // pane; TASK-161 §2-1), so the content transition fires here — never at
     // the press — only for a real content change
-    committedKey.value = `${l}|${JSON.stringify({ ...listQuery(), from: undefined, to: undefined })}`
+    committedKey.value = `${l}|${JSON.stringify(listQuery())}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -543,11 +556,12 @@ const groups = computed(() => {
       {{ error }}
     </p>
 
-    <DashSkeleton v-if="loading && !loaded" />
+    <Transition name="handover" type="transition">
+    <DashSkeleton v-if="loading && !loaded" key="skeleton" />
     <div
       v-else
+      key="data"
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
@@ -560,7 +574,7 @@ const groups = computed(() => {
             <p class="kpi-head">
               <!-- TASK-161 §3/§4 (指摘5): the label is period.label alone
                    (no「の支出」suffix) with the step pair around it -->
-              <PeriodStep><span class="label">{{ period.label }}</span></PeriodStep>
+              <PeriodStep><span class="label">{{ period.committedLabel }}</span></PeriodStep>
               <strong class="kpi-value">{{ formatYen(sumView) }}</strong>
             </p>
             <!-- TASK-161 §2-2 (review 中6): the summary line crosses through
@@ -672,7 +686,7 @@ const groups = computed(() => {
                 </div>
                 <!-- TASK-65: a row press toggles the payment filter in place (the
                  null-key aggregates stay inert rows) -->
-                <RankedList
+                <RankedList :swap-key="committedKey"
                   v-if="paymentRows.length > 0"
                   :rows="paymentRows"
                   :select="onPaymentRow"
@@ -771,5 +785,6 @@ const groups = computed(() => {
         </div>
       </ContentSwap>
     </div>
+    </Transition>
   </div>
 </template>

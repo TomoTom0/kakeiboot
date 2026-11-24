@@ -497,7 +497,7 @@ export function useTrendWindow(opts: UseTrendWindowOptions): TrendWindowState {
     lastMove = dir
     slideRequest = dir
     // a slide still in progress trims at once: the press restarts from the
-    // committed window (cache miss: dim + fetch; hit: immediate assembly)
+    // committed window (cache miss: keep the old window + fetch; hit: immediate assembly)
     if (slide.value !== null) slide.value = null
     shiftWindow(dir, k)
     void run()

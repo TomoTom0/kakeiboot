@@ -52,10 +52,18 @@ const committedKey = ref('')
 const win = useTrendWindow({ axis: () => 'category', onError: (m) => (error.value = m ?? '') })
 
 let seq = 0
+let committedLedger: number | null = null
 async function load(id?: number): Promise<void> {
   const l = id ?? ledgerId.value
   if (l === null || !period.valid) return
   const n = ++seq
+  // a ledger switch is a context change, not a refetch: the previous
+  // ledger's content leaves NOW and the skeleton covers this load.
+  // Same-ledger refetches (a period move, a filter change) instead keep
+  // their content in place at full opacity until the commit — no dim
+  if (committedLedger !== null && l !== committedLedger) {
+    analysis.value = null
+  }
   loading.value = true
   error.value = ''
   const labels = period.labelQuery ? { label_colors: period.labelQuery } : {}
@@ -63,7 +71,9 @@ async function load(id?: number): Promise<void> {
     const a = await api.getAnalysis(l, { axis: 'category', metric: 'amount', ...period.query(), ...labels, limit: 50 })
     if (n !== seq) return
     analysis.value = a
-    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}`
+    committedLedger = l
+    committedKey.value = `${l}|${period.mode}|${period.labelQuery?.join(',') ?? ''}|${JSON.stringify(period.urlQuery)}`
+    period.commitLabel()
   } catch (e) {
     if (n === seq) error.value = errorMessage(e)
   } finally {
@@ -128,7 +138,7 @@ const rows = computed<StatsRow[]>(() => {
 const screenScale = computed(() => barScale(Math.max(0, ...rows.value.map((r) => r.value))))
 
 const trendCurrent = computed(() =>
-  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.month),
+  currentTrendKey(win.granularity.value, period.mode, win.window.value[0], win.window.value[1], period.committedMonth),
 )
 function onTrendSelect(key: string): void {
   if (win.granularity.value === 'day') {
@@ -186,17 +196,18 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
       指定されたカテゴリは見つかりません
     </p>
 
+    <Transition name="handover" type="transition">
     <div
       v-if="analysis && totals"
+      key="data"
       class="view-stack"
-      :class="{ loading }"
     >
       <!-- TASK-146 §3: the content transition fires at the load commit.
            TASK-161 §2: a period move renders in place (dir stays 'swap') -->
       <ContentSwap :swap-key="committedKey">
         <div class="content-pane">
           <PeriodHeader
-            :label="period.label"
+            :label="period.committedLabel"
             :total="totals.amount"
             :swap-key="committedKey"
           />
@@ -205,7 +216,6 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
             <div class="col-main">
               <section
                 class="zone"
-                :class="{ 'is-loading': win.loading.value }"
                 data-test="trend-card"
               >
                 <div class="zone-head">
@@ -248,7 +258,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
                 >
                   この期間の記録はありません。
                 </p>
-                <RankedList
+                <RankedList :swap-key="committedKey"
                   v-else
                   :rows="rows"
                   :to="rowTo"
@@ -261,6 +271,7 @@ function rowTo(row: StatsRow): RouteLocationRaw | null {
         </div>
       </ContentSwap>
     </div>
-    <DashSkeleton v-else-if="loading" />
+    <DashSkeleton v-else-if="loading" key="skeleton" />
+    </Transition>
   </div>
 </template>

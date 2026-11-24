@@ -13,6 +13,10 @@
    box through the leave fade, so the survivors' close-up eases through the
    FLIP transform at the fade's own grade instead of teleporting */
 .bb-appear-move { transition: transform 0.16s ease; }
+/* the instant-leave member (AppearList's instantLeave, for aggregate lists
+   a period commit replaces wholesale — week rows, ranked rows): the old
+   period's rows leave at once instead of fading inside the new list */
+.bb-appear-leave-instant { transition: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .bb-appear-enter-active,

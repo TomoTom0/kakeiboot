@@ -550,8 +550,23 @@ describe('motion: page transition, message fade, skeleton (TASK-39)', () => {
     expect(rulesFor('.skeleton .sk').some((r) => decl(r.body, 'background') === 'var(--bb-surface-2)')).toBe(true)
     // single flat color: no shimmer keyframes / gradient animation
     expect(css).not.toMatch(/shimmer/)
+    // the whole skeleton stays invisible for the first 250ms of a load
+    // (a fast load never shows it — cards included, not just the blocks),
+    // then fades in; the blocks pulse while the load runs
+    expect(css).toMatch(/@keyframes bb-sk-pulse/)
+    expect(rulesFor('.skeleton').some((r) => (decl(r.body, 'animation') ?? '').includes('0.25s'))).toBe(true)
+    expect(rulesFor('.skeleton').some((r) => (decl(r.body, 'animation') ?? '').includes('backwards'))).toBe(true)
+    expect(rulesFor('.skeleton .sk').some((r) => (decl(r.body, 'animation') ?? '').includes('bb-sk-pulse'))).toBe(true)
+    // the skeleton <-> content handover cross-fades (no blank, no cut)
+    expect(rulesFor('.handover-leave-active').some((r) => decl(r.body, 'position') === 'absolute')).toBe(true)
+    expect(rulesFor('.handover-enter-active').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(true)
+    expect(rulesFor('.handover-leave-to').some((r) => decl(r.body, 'opacity') === '0')).toBe(true)
     const rm = blockAfter(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)!
     expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'animation') === 'none')).toBe(true)
+    // reduced motion: no delay, no pulse — static and visible at once
+    expect(rulesFor('.skeleton', rm).some((r) => decl(r.body, 'opacity') === '1')).toBe(true)
+    expect(rulesFor('.skeleton .sk', rm).some((r) => decl(r.body, 'opacity') === '1')).toBe(true)
+    expect(rulesFor('.handover-enter-active', rm).some((r) => decl(r.body, 'transition') === 'none')).toBe(true)
     // the loading state stays readable for screen readers
     expect(rulesFor('.sr-only').some((r) => decl(r.body, 'position') === 'absolute' && decl(r.body, 'width') === '1px')).toBe(true)
   })
@@ -1039,15 +1054,13 @@ describe('visual bar review fixes (PR#4, static checks)', () => {
 // stylesheet. ---
 
 describe('transition vocabulary additions (TASK-146, static checks)', () => {
-  it('[covers:web-shell.loading-skeleton] .zone.is-loading は .view-stack.loading と同一の挙動へ（opacity 0.15s の fade）', () => {
-    // #12: the zone-scoped dim used to flip opacity instantly — it joins the
-    // 0.15s fade the view-stack dim has had since TASK-39
-    const zoneRules = rulesFor('.zone.is-loading').concat(rulesFor('.zone'))
-    expect(
-      zoneRules.some((r) => /^opacity\s*0\.15s/.test(decl(r.body, 'transition') ?? 'x')),
-      '.zone/.zone.is-loading carries an opacity 0.15s transition',
-    ).toBe(true)
-    expect(rulesFor('.zone.is-loading').some((r) => decl(r.body, 'opacity') === '0.6')).toBe(true)
+  it('[covers:web-shell.loading-skeleton] loading の dim は全廃（.view-stack.loading / .zone.is-loading の opacity 規則は存在しない）', () => {
+    // a refetch keeps the committed content at full opacity until the
+    // commit — no half-transparent in-between state anywhere
+    expect(rulesFor('.view-stack.loading')).toHaveLength(0)
+    expect(rulesFor('.zone.is-loading')).toHaveLength(0)
+    expect(rulesFor('.zone').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(false)
+    expect(rulesFor('.view-stack').some((r) => (decl(r.body, 'transition') ?? '').includes('opacity'))).toBe(false)
   })
 
   it('[covers:web-common.overlay-transition] scrim と dialog-backdrop は fade（opacity 遷移）で出現・消滅し reduced-motion で無効', () => {
@@ -1098,6 +1111,13 @@ describe('transition vocabulary additions (TASK-146, static checks)', () => {
       expect(r.selectors.join(','), 'every timing-less rule is the origin pair').toMatch(/-from|-to/)
       expect(decl(r.body, 'opacity'), 'the origin sets opacity 0').toBe('0')
     }
+    // the instant-leave member: aggregate lists a period commit replaces
+    // wholesale (week rows, ranked rows) drop the old rows at once — the
+    // rule exists in motion.css with transition: none (AppearList's
+    // instantLeave binds it as the leave-active class)
+    const instant = rules(motion).filter((r) => r.selectors.some((s) => s === '.bb-appear-leave-instant'))
+    expect(instant.length, 'the instant-leave member exists').toBe(1)
+    expect(decl(instant[0]!.body, 'transition')).toBe('none')
     // reduced-motion turns the vocabulary off (the second guard)
     const reduced = motion.slice(motion.indexOf('@media (prefers-reduced-motion: reduce)'))
     expect(reduced).toMatch(/\.bb-appear[^{]*\{[^}]*(?:animation|transition):\s*none/)
