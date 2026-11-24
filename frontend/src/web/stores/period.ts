@@ -140,7 +140,7 @@ export const usePeriodStore = defineStore('web-period', () => {
     const periodKey = JSON.stringify(urlQuery.value)
     const prev = committedSnapshot.value
     const periodChanged = prev !== null && prev.periodKey !== periodKey
-    const anchor = mode.value === 'month' ? month.value : mode.value === 'week' ? week.value : mode.value === 'year' ? year.value : ''
+    const anchor = mode.value === 'month' ? month.value : mode.value === 'week' ? week.value : mode.value === 'year' ? String(year.value) : ''
     commitDirection.value =
       periodChanged && prev !== null && prev.mode === mode.value && prev.anchor !== '' && anchor !== '' && prev.anchor !== anchor
         ? anchor > prev.anchor ? 1 : -1
