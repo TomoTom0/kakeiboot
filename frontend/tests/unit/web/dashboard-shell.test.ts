@@ -1002,6 +1002,19 @@ describe('App shell', () => {
     expect(wrapper.find('[data-test="account-menu"] [data-test="ledger-option-1"]').exists()).toBe(false)
   })
 
+  it('[covers:web-shell.build-marker] アカウントメニュー末尾に build マーカー（構築コミットの短縮ハッシュ）', async () => {
+    mockFetch({ 'GET /api/auth/me': { body: ME } })
+    const { wrapper } = await mountApp('/')
+    await wrapper.find('[data-test="account-button"]').trigger('click')
+    const marker = wrapper.find('[data-test="account-menu"] [data-test="build-id"]')
+    expect(marker.exists()).toBe(true)
+    // the value is the __BUILD_ID__ define injected at build time (the
+    // short hash of the build commit; 'dev' outside a git checkout).
+    // display-only: it is not one of the menu items.
+    expect(marker.text()).toMatch(/^build \S+$/)
+    expect(accountItems(wrapper).some((i) => i.element === marker.element)).toBe(false)
+  })
+
   it('[covers:web-shell.menus] 左上 menu ボタンで drawer を開閉（aria・アイコン・フォーカス・inert・scrim）、右上アカウントメニューからログアウト', async () => {
     const f = mockFetch({
       'GET /api/auth/me': { body: ME },

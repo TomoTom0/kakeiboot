@@ -3,6 +3,7 @@
  * (importing vite.config.ts runs fileURLToPath(new URL(..., import.meta.url)),
  * which needs the real file-scheme module URL of the node environment)
  */
+import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -99,5 +100,17 @@ describe('vite dev server', () => {
     // ([frontend].dev_port); moving to another port would hide the
     // collision. Same pattern as the playwright webServer command.
     expect(miseText).toMatch(/run = "pnpm dev --strictPort"/)
+  })
+
+  it('[covers:web-http.build-id-define] __BUILD_ID__ は構築時点の HEAD 短縮ハッシュ（git 不通時は dev へ fallback）', () => {
+    // the marker tells a stale client shell apart from the current build.
+    // vite evaluates the define when the config loads, in the checkout the
+    // bundle is built from — the test runs in the same checkout, so the
+    // loaded define must equal this HEAD's short hash.
+    const head = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+    expect(config.define?.__BUILD_ID__).toBe(JSON.stringify(head))
+    // the fallback for builds outside a git checkout stays in the source
+    expect(configText).toContain('git rev-parse --short HEAD')
+    expect(configText).toContain("return 'dev'")
   })
 })
