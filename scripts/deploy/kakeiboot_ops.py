@@ -17,11 +17,15 @@ Subcommands (env is an argument; the stg/prod task prefix maps to --env):
                  backup script via the kakeiboot-deploy wrapper (installed
                  as kakeiboot:srvops) -> rsync configs + dist (dist mode-
                  normalized by the operator, then re-owned via the wrapper)
-                 -> systemctl restart -> healthz retry loop
+                 -> systemctl restart -> healthz retry loop -> deploy
+                 record (promote's precheck anchor)
                  (stg only: prod distribution goes through promote -- TASK-189)
   promote        distribute the RUNNING stg runtime-dir artifacts to prod:
-                 stg prechecks (healthz + service start >= binary mtime),
-                 sha256 display both sides, configs drift preview, archive the
+                 stg prechecks (healthz + the deploy-record verification:
+                 the on-disk binary hashes to the value deploy recorded
+                 after its verified restart, and the current service start
+                 is at or after the recorded one), sha256 display both
+                 sides, configs drift preview, archive the
                  previous prod artifacts to releases/<utc-timestamp>/, place
                  binary + backup script via the kakeiboot-deploy wrapper and
                  rsync dist stg->prod ON the runtime host (artifacts re-owned
@@ -288,7 +292,9 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) ->
     """Deploy plan: stage the single-file artifacts on the target, place them
     via the kakeiboot-deploy wrapper as kakeiboot:srvops (service-account
     migration), rsync configs + dist (dist mode-normalized by the operator,
-    then re-owned via the wrapper's chown-tree), restart, healthz.
+    then re-owned via the wrapper's chown-tree), restart, healthz, and --
+    only once the new state is verified healthy -- the deploy record
+    (deploy_record_step) that promote's precheck anchors on.
 
     The binary and the backup script are placed by the wrapper's
     install-file, not rsync: the operator cannot chown, so an rsynced file
@@ -334,6 +340,7 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) ->
         remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
         remote_exec(cfg, healthz_command(port)),
+        remote_exec(cfg, deploy_record_step(root, env)),
     ]
 
 
@@ -370,28 +377,44 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     stg_bin = shlex.quote(f"{stg}/budget-book")
     prod_bin = shlex.quote(f"{prod}/budget-book")
 
-    # D-2 (review follow-up): the running stg process must BE the on-disk
-    # binary. rsync -a preserves mtimes, so a service-start >= mtime
-    # comparison cannot prove identity (B distributed -> restart failed still
-    # passes); hash the running process's /proc/<pid>/exe and the
-    # distribution source directly instead. A failing systemctl, empty/zero
-    # MainPID, unreadable /proc (permission) or any hash mismatch leaves the
-    # && chain non-zero -- fail closed. kakeiboot-stg is a system service
-    # whose User= matches the ssh operator on the current route, so
-    # /proc/<pid>/exe is readable; an operator different from the unit's
-    # run user fails closed here on /proc permission instead.
-    # NOTE (service-account migration): once stg runs as the dedicated
-    # kakeiboot account, NEITHER operator matches the run user, so this
-    # step fails closed for both (verified: a different-uid reader gets
-    # Permission denied on /proc/<pid>/exe). The precheck needs a redesign
-    # that does not read another user's /proc; that is a separate follow-up
-    # from the placement changes in this area and is NOT settled here.
+    # D-2 (review follow-up), redesigned after the service-account
+    # migration: the stg state being promoted must BE the state deploy
+    # verified. The original check hashed the running process's
+    # /proc/<pid>/exe against the on-disk binary, but with stg running as
+    # the dedicated kakeiboot account NEITHER operator can read another
+    # uid's /proc/<pid>/exe (verified on gt430: Permission denied), so
+    # that form now fails closed for everyone. The replacement anchors on
+    # the record deploy writes after its restart + healthz succeed
+    # (deploy_record_step: sha256 of the placed binary + the service
+    # start it verified): this step requires the CURRENT on-disk binary
+    # to hash to the recorded value (the distribution source is exactly
+    # the deploy-verified artifact) and the CURRENT ActiveEnterTimestamp
+    # to be at or after the recorded start (the running process started
+    # no earlier than the verified one -- the "binary placed, restart
+    # failed/stale process" mid-state has a start BEFORE the recorded
+    # one and is rejected). Step 1's live healthz completes the picture.
+    # What this does NOT prove, unlike /proc: that the running image is
+    # byte-identical to the disk file at this instant -- a swap-restart-
+    # swap-back of the binary between deploy and promote would pass.
+    # That needs a writer inside the tree between the two operations;
+    # the only writers are the two operators and the service account,
+    # and promote distributes the disk file (hash-pinned here), so the
+    # residual risk is accepted (see the PR discussion). A missing or
+    # unparsable record, a failing systemctl/date, or any mismatch
+    # leaves the && chain non-zero -- fail closed; a stg deployed before
+    # records existed must be redeployed once to create one.
     process_check = (
-        "pid=$(systemctl show kakeiboot-stg -p MainPID --value) "
-        '&& [ -n "$pid" ] && [ "$pid" != "0" ] '
-        '&& a=$(sha256sum /proc/$pid/exe | cut -d" " -f1) '
-        f'&& b=$(sha256sum {stg_bin} | cut -d" " -f1) '
-        '&& [ "$a" = "$b" ]'
+        f"rec={shlex.quote(f'{stg}/deploy-record')} "
+        '&& [ -f "$rec" ] '
+        '&& want=$(grep "^sha256=" "$rec" | cut -d= -f2) '
+        '&& [ -n "$want" ] '
+        f'&& got=$(sha256sum {stg_bin} | cut -d" " -f1) '
+        '&& [ "$got" = "$want" ] '
+        '&& verified=$(grep "^service_start_epoch=" "$rec" | cut -d= -f2) '
+        '&& [ -n "$verified" ] '
+        '&& start=$(date -d "$(systemctl show kakeiboot-stg '
+        '-p ActiveEnterTimestamp --value)" +%s) '
+        '&& [ "$start" -ge "$verified" ]'
     )
     # D-3: show the binary hash on both sides. A failing stg-side sha256sum
     # stops promote; an absent prod binary (first deployment) prints and
@@ -628,6 +651,34 @@ def deploy_normalize_tree_modes(path: str) -> list[str]:
     policy changes never require replacing a root-owned file (and the
     root re-run that would take)."""
     return ["sh", "-c", normalize_tree_modes_command(path)]
+
+
+def deploy_record_step(cfg_root: str, env: str) -> list[str]:
+    """Write the deploy record (<root>/<env>/deploy-record) as the final
+    deploy step, after restart + healthz have succeeded: the sha256 of
+    the placed binary and the ActiveEnterTimestamp of the service run
+    that healthz just verified, as KEY=VALUE lines. promote's step 2
+    anchors on this record (build_promote_commands): it is the
+    /proc-free proof that the stg state to be promoted is the state
+    deploy verified. The record is written by the operator into the
+    srvops group-writable env dir (measured on gt430: the operator can
+    create files there and read the kakeiboot-owned binary for hashing);
+    it is a consistency anchor between the two operators' operations,
+    not a security boundary against them. Any failure (hashing, reading
+    the start time) leaves the step non-zero and the deploy failed --
+    a record from a half-finished deploy must not exist."""
+    bin_path = shlex.quote(f"{cfg_root}/{env}/budget-book")
+    record_path = shlex.quote(f"{cfg_root}/{env}/deploy-record")
+    script = (
+        f"h=$(sha256sum {bin_path} | cut -d\" \" -f1) "
+        '&& [ -n "$h" ] '
+        f"&& s=$(date -d \"$(systemctl show kakeiboot-{env} "
+        '-p ActiveEnterTimestamp --value)" +%s) '
+        '&& printf "sha256=%s\\nservice_start_epoch=%s\\n'
+        'recorded_at_epoch=%s\\n" "$h" "$s" "$(date +%s)" '
+        f"> {record_path}"
+    )
+    return ["sh", "-c", script]
 
 
 def deploy_chown_tree(path: str) -> list[str]:
