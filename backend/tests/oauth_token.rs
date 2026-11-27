@@ -714,6 +714,112 @@ async fn jwks_kid_mismatch_refetch_throttled_to_60s() {
     assert!(mock.jwks_fetches() > fetches_after_warm);
 }
 
+// [covers:auth-oauth.jwks-304-stale-window-recovery]
+#[tokio::test]
+async fn jwks_304_recovers_beyond_stale_window() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    // warm both caches (CIMD + JWKS with kid k1)
+    let (verifier, challenge) = pkce_pair();
+    let code = get_code(&router, &client, &mock, &challenge, None).await;
+    let jti = oauth::b64url_of_random();
+    let form = exchange_form(
+        &mock,
+        &code,
+        &verifier,
+        Some(&fresh_assertion(&mock, &issuer, &jti)),
+    );
+    let resp = post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200);
+    let fetches_after_warm = mock.jwks_fetches();
+
+    // Age the JWKS row beyond the stale-if-error window (fetched and
+    // expired 25h ago; the window closes 24h after expiry). The key set
+    // has not changed, so the conditional GET is answered 304 — which
+    // confirms the cached body and must serve the key anyway (this is
+    // the 2026-11-27 ChatGPT outage shape: an untouched cache row whose
+    // window had closed was rejected despite the 304).
+    let past = budget_book::auth::session::now_ms() - 25 * 3_600_000;
+    sqlx::query("UPDATE oauth_jwks_cache SET fetched_at = ?, expires_at = ?")
+        .bind(past)
+        .bind(past)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (verifier2, challenge2) = pkce_pair();
+    let code = get_code(&router, &client, &mock, &challenge2, None).await;
+    let jti = oauth::b64url_of_random();
+    let form = exchange_form(
+        &mock,
+        &code,
+        &verifier2,
+        Some(&fresh_assertion(&mock, &issuer, &jti)),
+    );
+    let resp = post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200, "304-confirmed cache must serve the key");
+    assert_eq!(
+        mock.jwks_fetches(),
+        fetches_after_warm + 1,
+        "one conditional GET"
+    );
+
+    // the 304 refreshed the row's lifetime: it is fresh again
+    let expires_at: i64 = sqlx::query_scalar("SELECT expires_at FROM oauth_jwks_cache")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(expires_at > budget_book::auth::session::now_ms());
+}
+
+// [covers:auth-oauth.jwks-304-stale-window-recovery]
+#[tokio::test]
+async fn jwks_304_with_desynced_body_refetches_unconditionally() {
+    let (router, pool, mock, client, issuer) = setup().await;
+    // warm both caches (CIMD + JWKS with kid k1)
+    let (verifier, challenge) = pkce_pair();
+    let code = get_code(&router, &client, &mock, &challenge, None).await;
+    let jti = oauth::b64url_of_random();
+    let form = exchange_form(
+        &mock,
+        &code,
+        &verifier,
+        Some(&fresh_assertion(&mock, &issuer, &jti)),
+    );
+    let resp = post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200);
+    let fetches_after_warm = mock.jwks_fetches();
+
+    // Desync the row: the stored etag still matches the server's (so the
+    // conditional GET answers 304) but the stored body lost the key, and
+    // the row is beyond the stale window too. Recovery is one
+    // unconditional GET, which returns the full key set again.
+    let past = budget_book::auth::session::now_ms() - 25 * 3_600_000;
+    sqlx::query("UPDATE oauth_jwks_cache SET jwks_json = ?, fetched_at = ?, expires_at = ?")
+        .bind(r#"{"keys":[]}"#)
+        .bind(past)
+        .bind(past)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (verifier2, challenge2) = pkce_pair();
+    let code = get_code(&router, &client, &mock, &challenge2, None).await;
+    let jti = oauth::b64url_of_random();
+    let form = exchange_form(
+        &mock,
+        &code,
+        &verifier2,
+        Some(&fresh_assertion(&mock, &issuer, &jti)),
+    );
+    let resp = post_form(&router, "/oauth/token", &form, &[]).await;
+    assert_eq!(resp.status(), 200, "unconditional refetch must recover");
+    assert_eq!(
+        mock.jwks_fetches(),
+        fetches_after_warm + 2,
+        "conditional GET (304) + unconditional GET (200)"
+    );
+}
+
 // [covers:auth-oauth.cimd-fetch-cache]
 #[tokio::test]
 async fn cimd_cached_within_ttl_and_304_keeps_document() {
