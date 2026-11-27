@@ -389,7 +389,7 @@ async fn select_jwk(
             return Err(AssertionError::Invalid);
         }
         return match refetch(pool, fetch, &source, etag.clone(), now).await? {
-            Some(json) => match load(&json) {
+            Refetch::Fetched(json) => match load(&json) {
                 Some(k) => Ok(k),
                 None => {
                     tracing::warn!(
@@ -403,7 +403,7 @@ async fn select_jwk(
                     Err(AssertionError::Invalid)
                 }
             },
-            None => {
+            Refetch::NotModified | Refetch::Failed => {
                 tracing::warn!(
                     reason = "jwks_kid_not_found",
                     client_id = record.client_id,
@@ -417,7 +417,7 @@ async fn select_jwk(
         };
     }
 
-    // missing or expired cache: normal fetch (or stale-if-error fallback)
+    // missing or expired cache: refetch (or stale-if-error fallback)
     match refetch(
         pool,
         fetch,
@@ -427,7 +427,7 @@ async fn select_jwk(
     )
     .await?
     {
-        Some(json) => match load(&json) {
+        Refetch::Fetched(json) => match load(&json) {
             Some(k) => Ok(k),
             None => {
                 tracing::warn!(
@@ -441,7 +441,50 @@ async fn select_jwk(
                 Err(AssertionError::Invalid)
             }
         },
-        None => {
+        Refetch::NotModified => {
+            // A 304 is not a fetch failure: the server just confirmed the
+            // cached body is still current, so serve the key from it and
+            // refresh the row's lifetime — regardless of the stale-if-error
+            // window, which only governs actual fetch failures. (The CIMD
+            // document path in `cimd::get_client` treats a 304 the same
+            // way.) When the confirmed body does not carry the kid, the
+            // etag and the body have desynced: recover with one
+            // unconditional refetch instead of wedging on the 304.
+            if let Some((jwks_json, _, _, _)) = &row
+                && let Some(k) = load(jwks_json)
+            {
+                refresh_jwks_lifetime(pool, &source, now).await?;
+                return Ok(k);
+            }
+            match refetch(pool, fetch, &source, None, now).await? {
+                Refetch::Fetched(json) => match load(&json) {
+                    Some(k) => Ok(k),
+                    None => {
+                        tracing::warn!(
+                            reason = "jwks_kid_not_found",
+                            client_id = record.client_id,
+                            alg = ?alg,
+                            kid,
+                            detail = "after_unconditional_refetch",
+                            "client assertion rejected"
+                        );
+                        Err(AssertionError::Invalid)
+                    }
+                },
+                _ => {
+                    tracing::warn!(
+                        reason = "jwks_unavailable",
+                        client_id = record.client_id,
+                        alg = ?alg,
+                        kid,
+                        detail = "unconditional_refetch_failed",
+                        "client assertion rejected"
+                    );
+                    Err(AssertionError::Invalid)
+                }
+            }
+        }
+        Refetch::Failed => {
             if let Some((jwks_json, _, _, expires_at)) = &row
                 && expires_at + 24 * 86_400_000 > now
                 && let Some(k) = load(jwks_json)
@@ -453,7 +496,7 @@ async fn select_jwk(
                 client_id = record.client_id,
                 alg = ?alg,
                 kid,
-                detail = "fetch_failed_or_not_modified_and_no_usable_stale_cache",
+                detail = "fetch_failed_and_no_usable_stale_cache",
                 "client assertion rejected"
             );
             Err(AssertionError::Invalid)
@@ -502,18 +545,29 @@ fn jwk_alg_to_algorithm(ka: KeyAlgorithm) -> Option<Algorithm> {
     }
 }
 
-/// Refetch the JWKS and refresh the cache; None on 304 without changes.
-/// Errors are mapped to `None` (stale-if-error is handled by the caller).
+/// Outcome of a JWKS refetch attempt. A 304 and a failure are distinct:
+/// only a failure may fall back to the stale cache, while a 304 *validates*
+/// the cached body (the caller refreshes its lifetime and serves from it).
+enum Refetch {
+    /// 200: the cache row was replaced with the returned body.
+    Fetched(String),
+    /// 304: the server confirmed the cached body is still current.
+    NotModified,
+    /// Transport / HTTP failure (already logged by `refetch`).
+    Failed,
+}
+
+/// Refetch the JWKS, replacing the cache row on a 200.
 async fn refetch(
     pool: &SqlitePool,
     fetch: &FetchClient,
     jwks_uri: &str,
     etag: Option<String>,
     now: i64,
-) -> Result<Option<String>, AssertionError> {
+) -> Result<Refetch, AssertionError> {
     // The inline cache row is never fetched over HTTP.
     if jwks_uri.ends_with("#jwks") {
-        return Ok(None);
+        return Ok(Refetch::Failed);
     }
     match fetch.fetch_json(jwks_uri, etag.as_deref()).await {
         Ok(Some(fetched)) => {
@@ -534,9 +588,9 @@ async fn refetch(
             .execute(pool)
             .await
             .map_err(anyhow::Error::from)?;
-            Ok(Some(body))
+            Ok(Refetch::Fetched(body))
         }
-        Ok(None) => Ok(None),
+        Ok(None) => Ok(Refetch::NotModified),
         Err(e) => {
             tracing::warn!(
                 reason = "jwks_fetch_failed",
@@ -544,9 +598,29 @@ async fn refetch(
                 error = %e,
                 "JWKS fetch failed; falling back to the stale cache if usable"
             );
-            Ok(None)
+            Ok(Refetch::Failed)
         }
     }
+}
+
+/// Extend a JWKS cache row's lifetime after a 304 confirmed its body is
+/// still current (default TTL: a 304 carries no usable max-age here),
+/// mirroring the CIMD document handling in `cimd::get_client`. The
+/// stale-if-error window is measured from this confirmation from now on.
+async fn refresh_jwks_lifetime(
+    pool: &SqlitePool,
+    jwks_uri: &str,
+    now: i64,
+) -> Result<(), AssertionError> {
+    let ttl_ms = clamp_max_age(None) * 1000;
+    sqlx::query("UPDATE oauth_jwks_cache SET fetched_at = ?, expires_at = ? WHERE jwks_uri = ?")
+        .bind(now)
+        .bind(now + ttl_ms)
+        .bind(jwks_uri)
+        .execute(pool)
+        .await
+        .map_err(anyhow::Error::from)?;
+    Ok(())
 }
 
 /// Single-use jti registration in its own transaction, before the token tx
