@@ -88,8 +88,8 @@ STG_DEPLOY_PLAN = [
     f"mkdir -p {DEPLOY_ROOT}/stg/bin",
     f"sudo /usr/local/sbin/kakeiboot-deploy install-file {STG_STAGE}/kakeiboot-backup.sh "
     f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
-    f"rsync -a --no-perms --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
-    f"rsync -a --no-perms --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
+    f"rsync -a --no-perms --omit-dir-times --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
+    f"rsync -a --no-perms --omit-dir-times --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
     f"sudo /usr/local/sbin/kakeiboot-deploy chown-tree {DEPLOY_ROOT}/stg/frontend/dist",
     f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
@@ -219,7 +219,7 @@ class TestConfigErrorExitCode(unittest.TestCase):
 # follow-up shape (STG_DEPLOY_PLAN)
 class TestTransportLocal(unittest.TestCase):
     def test_stg_deploy_matches_service_account_plan(self) -> None:
-        cmds = build_deploy_commands(local_cfg(), "stg", 40282)
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
         self.assertEqual([shlex.join(c) for c in cmds], STG_DEPLOY_PLAN)
 
     def test_stg_backup_status_matches_legacy_run_array(self) -> None:
@@ -273,7 +273,7 @@ class TestTransportSsh(unittest.TestCase):
         )
 
     def test_rsync_gets_ssh_e_and_host_prefix(self) -> None:
-        cmds = build_deploy_commands(ssh_cfg(), "stg", 40282)
+        cmds = build_deploy_commands(ssh_cfg(), "stg", 40282, STG_STAGE)
         # rsync steps: the two artifact stagings, configs, dist (indices 1,2,6,7)
         for idx in (1, 2, 6, 7):
             cmd = cmds[idx]
@@ -286,15 +286,15 @@ class TestTransportSsh(unittest.TestCase):
             self.assertIn("--delete", cmds[idx])
 
     def test_non_rsync_steps_wrapped_in_ssh(self) -> None:
-        local_cmds = build_deploy_commands(local_cfg(), "stg", 40282)
-        ssh_cmds = build_deploy_commands(ssh_cfg(), "stg", 40282)
+        local_cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
+        ssh_cmds = build_deploy_commands(ssh_cfg(), "stg", 40282, STG_STAGE)
         # mkdir x2, sudo install x2, sudo chown, rm -rf, systemctl restart, healthz
         for idx in (0, 3, 4, 5, 8, 9, 10, 11):
             self.assert_ssh_wrapped(ssh_cmds[idx], local_cmds[idx])
 
     def test_every_step_is_host_mediated(self) -> None:
         for cmds in (
-            build_deploy_commands(ssh_cfg(), "stg", 40282),
+            build_deploy_commands(ssh_cfg(), "stg", 40282, STG_STAGE),
             build_backup_status_commands(ssh_cfg(), "prod"),
         ):
             for cmd in cmds:
@@ -487,7 +487,7 @@ class TestHealthz(unittest.TestCase):
         )
 
     def test_deploy_last_element_is_healthz(self) -> None:
-        cmds = build_deploy_commands(local_cfg(), "stg", 40282)
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
         self.assertEqual(cmds[-1], healthz_command(40282))
         joined = shlex.join(cmds[-1])
         self.assertEqual(joined, STG_DEPLOY_PLAN[-1])
@@ -1083,7 +1083,7 @@ class TestPromotePlan(unittest.TestCase):
         # step 9: dist keeps its rsync -- no --checksum (D-3), --delete only
         self.assertEqual(
             rs_dist,
-            ["rsync", "-a", "--no-perms", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
+            ["rsync", "-a", "--no-perms", "--omit-dir-times", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
         # steps 10/11: ownership of the rsynced dist and of the archived
         # releases generations moves to kakeiboot:srvops (the wrapper's
@@ -1104,7 +1104,7 @@ class TestPromotePlan(unittest.TestCase):
         cmds = self.build(local_cfg())
         preview = cmds[3]
         self.assertEqual(preview[0], "rsync")
-        self.assertEqual(preview[1:7], ["-a", "--no-perms", "--delete", "--checksum", "-i", "--dry-run"])
+        self.assertEqual(preview[1:8], ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i", "--dry-run"])
         self.assertEqual(preview[-2:], ["configs/prod/", f"{PROD_DIR}/configs/prod/"])
 
     def test_plan_does_not_distribute_configs_or_touch_var(self) -> None:
@@ -1161,7 +1161,7 @@ class TestArtifactPlacementOwner(unittest.TestCase):
         self.assertEqual(deploy_chown_tree("/some/tree"), [*WRAPPER_CHOWN_TREE, "/some/tree"])
 
     def test_deploy_places_binary_and_script_via_wrapper(self) -> None:
-        cmds = build_deploy_commands(local_cfg(), "stg", 40282)
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
         self.assertEqual(
             cmds[3],
             [
@@ -1481,6 +1481,7 @@ class TestConfigsCommandPlan(unittest.TestCase):
                     "rsync",
                     "-a",
                     "--no-perms",
+                    "--omit-dir-times",
                     "--delete",
                     "--checksum",
                     "-i",

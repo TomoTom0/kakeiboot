@@ -51,6 +51,7 @@ Standard library only. Run with: uv run --no-project python scripts/deploy/kakei
 from __future__ import annotations
 
 import argparse
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -276,7 +277,7 @@ def rsync_exec(cfg: DeployConfig, opts: list[str], src: str, dst: str) -> list[s
     return ["rsync", *opts, src, dst]
 
 
-def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[str]]:
+def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) -> list[list[str]]:
     """Deploy plan: stage the single-file artifacts on the target, place them
     via the kakeiboot-deploy wrapper as kakeiboot:srvops (service-account
     migration), rsync configs + dist (dist re-owned via the wrapper's
@@ -287,13 +288,16 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[s
     would stay operator-owned while the service (running as the dedicated
     kakeiboot account) is the identity that must own what deploy replaces
     and chmods. The staging dir follows the install-units pattern
-    (target-side dir, removed at the end of the plan). The dist tree keeps
-    its rsync --delete transfer (install has no recursive form) and is
-    re-owned wholesale afterwards; configs keep their rsync too (their
-    ownership form is the configs subcommand's concern, unchanged here).
+    (target-side dir, removed at the end of the plan) and is unique per
+    invocation -- the caller (cmd_deploy) generates it: a fixed name would
+    strand a failed run's staging dir under /tmp's sticky bit, owned by one
+    operator and unremovable by the other, blocking the recovery deploy.
+    The dist tree keeps its rsync --delete transfer (install has no
+    recursive form) and is re-owned wholesale afterwards; configs keep
+    their rsync too (their ownership form is the configs subcommand's
+    concern, unchanged here).
     """
     root = cfg.deploy_root
-    stage = f"{ARTIFACT_STAGE_PREFIX}-{env}"
     return [
         remote_exec(cfg, ["mkdir", "-p", stage]),
         rsync_exec(cfg, ["-a"], "target/debug/budget-book", f"{stage}/budget-book"),
@@ -314,8 +318,8 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[s
                 f"{stage}/kakeiboot-backup.sh", f"{root}/{env}/bin/kakeiboot-backup.sh"
             ),
         ),
-        rsync_exec(cfg, ["-a", "--no-perms", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
-        rsync_exec(cfg, ["-a", "--no-perms", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
+        rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
+        rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
         remote_exec(cfg, deploy_chown_tree(f"{root}/{env}/frontend/dist")),
         remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
@@ -415,7 +419,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         remote_exec(cfg, ["sh", "-c", sha_display]),
         rsync_exec(
             cfg,
-            ["-a", "--no-perms", "--delete", "--checksum", "-i", "--dry-run"],
+            ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i", "--dry-run"],
             "configs/prod/",
             f"{prod}/configs/prod/",
         ),
@@ -435,7 +439,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         ),
         remote_exec(
             cfg,
-            ["rsync", "-a", "--no-perms", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
+            ["rsync", "-a", "--no-perms", "--omit-dir-times", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
         remote_exec(cfg, deploy_chown_tree(f"{prod}/frontend/dist")),
         remote_exec(cfg, ["sh", "-c", releases_chown]),
@@ -455,7 +459,7 @@ def build_configs_commands(cfg: DeployConfig, env: str, preview: bool = False) -
     diff, the regular drift-check path) -- unlike the script's --dry-run,
     which only prints the plan without touching rsync.
     """
-    opts = ["-a", "--no-perms", "--delete", "--checksum", "-i"]
+    opts = ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i"]
     if preview:
         opts.append("--dry-run")
     dst = f"{cfg.deploy_root}/{env}/configs/{env}"
@@ -569,10 +573,11 @@ def deploy_chown_tree(path: str) -> list[str]:
     ownership half of the placement, validated inside the wrapper. The
     wrapper also normalizes modes (directories 2770, files group-writable)
     so the next operator-run transfer can write the tree again: the rsync
-    steps into these service-owned trees therefore use --no-perms, because
-    propagating the build's 0755/0644 modes would make rsync chmod
-    directories the operator does not own (exit 23) and would strip the
-    group write the following deploy depends on."""
+    steps into these service-owned trees therefore use --no-perms and
+    --omit-dir-times, because propagating the build's 0755/0644 modes (or
+    setting directory timestamps) would make rsync chmod/utime directories
+    the operator does not own (exit 23) and would strip the group write
+    the following deploy depends on."""
     return ["sudo", DEPLOY_WRAPPER, "chown-tree", path]
 
 
@@ -669,7 +674,10 @@ def run_commands(
 def cmd_deploy(args: argparse.Namespace) -> int:
     cfg = load_config(config_paths())
     port = resolve_port(REPO_ROOT, args.env)
-    cmds = build_deploy_commands(cfg, args.env, port)
+    # Per-invocation staging dir (install-units pattern): unique, so a failed
+    # run never leaves a fixed-name dir the other operator cannot clear.
+    stage = f"{ARTIFACT_STAGE_PREFIX}-{args.env}-{secrets.token_hex(4)}"
+    cmds = build_deploy_commands(cfg, args.env, port, stage)
     executed, rc = run_commands(cmds, args.dry_run, cwd=REPO_ROOT)
     if rc != 0:
         print("steps executed before failure:", file=sys.stderr)
