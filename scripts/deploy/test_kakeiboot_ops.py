@@ -107,6 +107,23 @@ STG_DEPLOY_PLAN = [
     "systemctl restart kakeiboot-stg",
     "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; "
     "sleep 1; done; exit 1'",
+    f"sh -c 'rm -f {DEPLOY_ROOT}/stg/deploy-record.tmp.* "
+    f"&& h=$(sha256sum {DEPLOY_ROOT}/stg/budget-book | cut -d\" \" -f1) "
+    f"&& [ -n \"$h\" ] "
+    f"&& kh=$(sha256sum {DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh | cut -d\" \" -f1) "
+    f"&& [ -n \"$kh\" ] "
+    f"&& dh=$(find {DEPLOY_ROOT}/stg/frontend/dist -type f -exec sha256sum {{}} + "
+    f"| LC_ALL=C sort | sha256sum | cut -d\" \" -f1) "
+    f"&& [ -n \"$dh\" ] "
+    f"&& raw=$(systemctl show kakeiboot-stg -p ActiveEnterTimestamp --value) "
+    f"&& [ -n \"$raw\" ] "
+    f"&& s=$(date -d \"$raw\" +%s) "
+    f"&& tmp={DEPLOY_ROOT}/stg/deploy-record.tmp.$$.$(date +%s) "
+    f"&& printf \"sha256=%s\\nscript_sha256=%s\\ndist_sha256=%s\\n"
+    f"service_start_epoch=%s\\nrecorded_at_epoch=%s\\n\" "
+    f"\"$h\" \"$kh\" \"$dh\" \"$s\" \"$(date +%s)\" > \"$tmp\" "
+    f"&& chmod g+rw \"$tmp\" "
+    f"&& mv -f \"$tmp\" {DEPLOY_ROOT}/stg/deploy-record'",
 ]
 STG_BACKUP_STATUS_LEGACY = [
     "sh -c 'echo \"last_success: $(cat "
@@ -301,8 +318,8 @@ class TestTransportSsh(unittest.TestCase):
         local_cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
         ssh_cmds = build_deploy_commands(ssh_cfg(), "stg", 40282, STG_STAGE)
         # mkdir x2, sudo install x2, normalize, sudo chown, rm -rf,
-        # systemctl restart, healthz
-        for idx in (0, 3, 4, 5, 8, 9, 10, 11, 12):
+        # systemctl restart, healthz, deploy record
+        for idx in (0, 3, 4, 5, 8, 9, 10, 11, 12, 13):
             self.assert_ssh_wrapped(ssh_cmds[idx], local_cmds[idx])
 
     def test_every_step_is_host_mediated(self) -> None:
@@ -499,11 +516,13 @@ class TestHealthz(unittest.TestCase):
             ["sh", "-c", self.LEGACY_LOOP.format(port=40283)],
         )
 
-    def test_deploy_last_element_is_healthz(self) -> None:
+    def test_deploy_healthz_precedes_the_record_step(self) -> None:
+        # healthz is the last VERIFICATION step; the deploy record is
+        # written after it (only a verified deploy may record its state)
         cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
-        self.assertEqual(cmds[-1], healthz_command(40282))
-        joined = shlex.join(cmds[-1])
-        self.assertEqual(joined, STG_DEPLOY_PLAN[-1])
+        self.assertEqual(cmds[-2], healthz_command(40282))
+        joined = shlex.join(cmds[-2])
+        self.assertEqual(joined, STG_DEPLOY_PLAN[-2])
         self.assertIn("1 2 3 4 5", joined)
         self.assertIn("sleep 1", joined)
 
@@ -1308,9 +1327,159 @@ class TestNormalizeTreeModes(unittest.TestCase):
             self.assertEqual(rerun.returncode, 0, rerun.stderr)
 
 
+# [covers:deploy-ops.deploy-record]
+class TestDeployRecord(unittest.TestCase):
+    """deploy's final step writes <env>/deploy-record (sha256 of the
+    placed binary + the service start healthz verified); promote's
+    step 2 anchors on it. The record is written ONLY after restart +
+    healthz, so a failed deploy leaves no fresh record behind."""
+
+    def test_record_step_is_deploys_last_step(self) -> None:
+        from kakeiboot_ops import deploy_record_step
+
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
+        self.assertEqual(cmds[-1], deploy_record_step(DEPLOY_ROOT, "stg"))
+        self.assertEqual(cmds[-2], healthz_command(40282))
+
+    def test_record_step_shape(self) -> None:
+        from kakeiboot_ops import deploy_record_step
+
+        argv = deploy_record_step(DEPLOY_ROOT, "stg")
+        self.assertEqual(argv[:2], ["sh", "-c"])
+        script = argv[2]
+        self.assertIn(f"sha256sum {DEPLOY_ROOT}/stg/budget-book", script)
+        self.assertIn("systemctl show kakeiboot-stg", script)
+        self.assertIn("ActiveEnterTimestamp", script)
+        self.assertIn(f"{DEPLOY_ROOT}/stg/deploy-record", script)
+        self.assertIn("sha256=%s", script)
+        self.assertIn("script_sha256=%s", script)
+        self.assertIn("dist_sha256=%s", script)
+        self.assertIn("service_start_epoch=%s", script)
+        self.assertIn(f"sha256sum {DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh", script)
+        self.assertIn(f"find {DEPLOY_ROOT}/stg/frontend/dist", script)
+        # systemctl output is captured in its own assignment (its exit
+        # status must stop the step; a nested $(...) inside date -d
+        # would discard it and date -d "" yields today's midnight)
+        self.assertIn("raw=$(systemctl show kakeiboot-stg", script)
+        self.assertIn('[ -n "$raw" ]', script)
+        self.assertIn('date -d "$raw"', script)
+        # written via a per-invocation temp file + rename, so the OTHER
+        # operator can replace a record they do not own (rename needs
+        # only the group-writable directory, not the file's write bit);
+        # stale temps are cleaned first and the name carries pid + epoch
+        self.assertIn("rm -f", script)
+        self.assertIn(".tmp.$$.$(date +%s)", script)
+        self.assertIn("mv -f", script)
+
+    def make_stg_artifacts(self, root: Path) -> tuple[bytes, bytes, bytes]:
+        binary = b"placed-binary"
+        script = b"#!/bin/sh\n# backup\n"
+        page = b"<html>shell</html>\n"
+        (root / "stg" / "bin").mkdir(parents=True)
+        (root / "stg" / "frontend" / "dist").mkdir(parents=True)
+        (root / "stg" / "budget-book").write_bytes(binary)
+        (root / "stg" / "bin" / "kakeiboot-backup.sh").write_bytes(script)
+        (root / "stg" / "frontend" / "dist" / "index.html").write_bytes(page)
+        return binary, script, page
+
+    def stub_env(self, root: Path, stub_body: str) -> dict[str, str]:
+        stub_dir = root / "stub-bin"
+        stub_dir.mkdir()
+        stub = stub_dir / "systemctl"
+        stub.write_text("#!/bin/sh\n" + stub_body, encoding="utf-8")
+        stub.chmod(0o755)
+        return {**os.environ, "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"}
+
+    def run_record_step(self, root: Path, env: dict[str, str]):
+        from kakeiboot_ops import deploy_record_step
+
+        return subprocess.run(
+            deploy_record_step(str(root), "stg"),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_record_step_execution_writes_a_parseable_record(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            binary, script, page = self.make_stg_artifacts(root)
+            env = self.stub_env(root, "echo 'Fri 2026-11-27 13:20:49 UTC'\n")
+            proc = self.run_record_step(root, env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            record = (root / "stg" / "deploy-record").read_text(encoding="utf-8")
+            fields = dict(
+                line.split("=", 1) for line in record.strip().splitlines()
+            )
+            self.assertEqual(fields["sha256"], hashlib.sha256(binary).hexdigest())
+            self.assertEqual(
+                fields["script_sha256"], hashlib.sha256(script).hexdigest()
+            )
+            dist_dir = root / "stg" / "frontend" / "dist"
+            line = f"{hashlib.sha256(page).hexdigest()}  {dist_dir}/index.html\n"
+            self.assertEqual(
+                fields["dist_sha256"],
+                hashlib.sha256(line.encode()).hexdigest(),
+            )
+            expected_epoch = int(
+                datetime(2026, 11, 27, 13, 20, 49, tzinfo=timezone.utc).timestamp()
+            )
+            self.assertEqual(fields["service_start_epoch"], str(expected_epoch))
+            self.assertIn("recorded_at_epoch", fields)
+            # the temp file was renamed over the destination, not left behind
+            self.assertEqual(list((root / "stg").glob("deploy-record.tmp.*")), [])
+            # the record itself is group-writable (srvops shared form)
+            mode = (root / "stg" / "deploy-record").stat().st_mode
+            self.assertTrue(mode & 0o020)
+
+    def test_record_step_replaces_a_readonly_record(self) -> None:
+        # the other operator's record, not writable by this one: rename
+        # (directory permission) still replaces it, where `>` would fail
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.make_stg_artifacts(root)
+            record = root / "stg" / "deploy-record"
+            record.write_text("sha256=stale\n", encoding="utf-8")
+            record.chmod(0o444)
+            env = self.stub_env(root, "echo 'Fri 2026-11-27 13:20:49 UTC'\n")
+            proc = self.run_record_step(root, env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("stale", record.read_text(encoding="utf-8"))
+            self.assertTrue(record.stat().st_mode & 0o020)
+
+    def test_record_step_fails_when_systemctl_fails(self) -> None:
+        # a failing systemctl must stop the step (its empty output must
+        # NOT become a midnight epoch in a bogus successful record)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.make_stg_artifacts(root)
+            env = self.stub_env(root, "exit 1\n")
+            proc = self.run_record_step(root, env)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse((root / "stg" / "deploy-record").exists())
+
+    def test_record_step_fails_when_systemctl_output_is_empty(self) -> None:
+        # systemctl "succeeds" with no output: still not a timestamp
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.make_stg_artifacts(root)
+            env = self.stub_env(root, "printf ''\n")
+            proc = self.run_record_step(root, env)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse((root / "stg" / "deploy-record").exists())
+
+
 # [covers:deploy-ops.promote-stg-precheck]
 class TestPromoteStgPrecheck(unittest.TestCase):
-    """D-2: healthz + service-start>=mtime precede any prod write, fail-closed."""
+    """D-2 (redesigned): healthz + the deploy-record verification precede
+    any prod write, fail-closed. The record check replaces the /proc
+    process hash, unreadable since stg runs as the kakeiboot account."""
 
     def test_first_step_is_stg_healthz(self) -> None:
         from kakeiboot_ops import build_promote_commands
@@ -1318,17 +1487,25 @@ class TestPromoteStgPrecheck(unittest.TestCase):
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
         self.assertEqual(cmds[0], healthz_command(40282))
 
-    def test_second_step_hashes_running_process_exe_against_disk(self) -> None:
+    # [covers:deploy-ops.deploy-record]
+    def test_second_step_verifies_the_deploy_record(self) -> None:
         from kakeiboot_ops import build_promote_commands
 
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
         self.assertEqual(cmds[1][:2], ["sh", "-c"])
         script = cmds[1][2]
-        self.assertIn("systemctl show kakeiboot-stg", script)
-        self.assertIn("MainPID", script)
-        self.assertIn("/proc/$pid/exe", script)
+        self.assertIn(f"{STG_DIR}/deploy-record", script)
         self.assertIn("sha256sum", script)
         self.assertIn(f"{STG_DIR}/budget-book", script)
+        self.assertIn("script_sha256", script)
+        self.assertIn(f"{STG_DIR}/bin/kakeiboot-backup.sh", script)
+        self.assertIn("dist_sha256", script)
+        self.assertIn(f"{STG_DIR}/frontend/dist", script)
+        self.assertIn("systemctl show kakeiboot-stg", script)
+        self.assertIn("ActiveEnterTimestamp", script)
+        # no /proc, no MainPID: unreadable for another uid's process
+        self.assertNotIn("/proc/", script)
+        self.assertNotIn("MainPID", script)
 
 
 # [covers:deploy-ops.promote-sha256-display]
@@ -1399,8 +1576,8 @@ class TestPromoteShellSteps(unittest.TestCase):
         return build_promote_commands(self.cfg, 40282, 40283)
 
     def write_stub_systemctl(self, body: str) -> None:
-        # leads PATH: `systemctl show kakeiboot-stg -p MainPID --value`
-        # resolves to this stub, whose stdout stands in for the real answer.
+        # leads PATH: `systemctl show ... --value` resolves to this stub,
+        # whose stdout stands in for the real answer.
         stub_dir = self.root / "stub-bin"
         stub_dir.mkdir()
         stub = stub_dir / "systemctl"
@@ -1411,38 +1588,108 @@ class TestPromoteShellSteps(unittest.TestCase):
     def run_step(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(cmd, capture_output=True, text=True, env=self.env)
 
-    def start_sleeper(self) -> subprocess.Popen:
-        # a live process whose /proc/<pid>/exe is the `sleep` binary itself
-        proc = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(proc.wait)
-        self.addCleanup(proc.terminate)
-        return proc
+    # (b) deploy-record precheck. The record is produced by the REAL
+    # deploy_record_step against this layout (stub systemctl returning a
+    # fixed start time), then the promote check step runs against it --
+    # the two sides can only drift if one of them changes alone.
+    STUB_START = "Fri 2026-11-27 13:20:49 UTC"
+    STALE_START = "Fri 2026-11-27 12:20:49 UTC"
 
-    # (b) process-identity precheck: success / empty PID / hash mismatch
-    def test_process_check_passes_when_running_exe_matches_disk(self) -> None:
-        if shutil.which("sha256sum") is None or shutil.which("sleep") is None:
-            self.skipTest("sha256sum/sleep not on PATH")
-        sleeper = self.start_sleeper()
-        self.write_stub_systemctl(f"echo {sleeper.pid}\n")
-        shutil.copyfile(shutil.which("sleep"), self.root / "stg" / "budget-book")
+    def make_stg_artifacts(self) -> None:
+        stg = self.root / "stg"
+        (stg / "bin").mkdir(parents=True, exist_ok=True)
+        (stg / "frontend" / "dist").mkdir(parents=True, exist_ok=True)
+        (stg / "budget-book").write_bytes(b"stg-binary")
+        (stg / "bin" / "kakeiboot-backup.sh").write_bytes(b"#!/bin/sh\n# backup\n")
+        (stg / "frontend" / "dist" / "index.html").write_bytes(b"<html>shell</html>\n")
+
+    def rewrite_stub(self, body: str) -> None:
+        stub = self.root / "stub-bin" / "systemctl"
+        stub.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        stub.chmod(0o755)
+
+    def record(self) -> None:
+        from kakeiboot_ops import deploy_record_step
+
+        proc = self.run_step(deploy_record_step(str(self.root), "stg"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_record_check_passes_when_record_matches(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
+        self.record()
         proc = self.run_step(self.plan()[1])
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
-    def test_process_check_fails_on_empty_pid(self) -> None:
-        # MainPID empty (service not running): must stop, not date-parse ""
-        self.write_stub_systemctl("printf '\\n'\n")
-        (self.root / "stg" / "budget-book").write_bytes(b"whatever")
+    def test_record_check_fails_without_a_record(self) -> None:
+        # stg deployed before records existed: fail closed (redeploy once)
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
         proc = self.run_step(self.plan()[1])
         self.assertNotEqual(proc.returncode, 0)
 
-    def test_process_check_fails_on_hash_mismatch(self) -> None:
-        if shutil.which("sleep") is None:
-            self.skipTest("sleep not on PATH")
-        sleeper = self.start_sleeper()
-        self.write_stub_systemctl(f"echo {sleeper.pid}\n")
-        # disk carries a NEW binary the running process is not made of
-        # (distributed but not restarted -- exactly the state to reject)
-        (self.root / "stg" / "budget-book").write_bytes(b"new-binary-not-running")
+    def test_record_check_fails_on_binary_mismatch(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
+        self.record()
+        # the disk binary was replaced after the verified deploy
+        (self.root / "stg" / "budget-book").write_bytes(b"placed-not-verified")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_on_script_mismatch(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
+        self.record()
+        (self.root / "stg" / "bin" / "kakeiboot-backup.sh").write_bytes(b"tampered")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_on_dist_mismatch(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
+        self.record()
+        (self.root / "stg" / "frontend" / "dist" / "index.html").write_bytes(b"tampered")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_when_systemctl_fails(self) -> None:
+        # systemctl fails with no stdout: its status must stop the check
+        # (the pre-fix form parsed the empty string with date -d, which
+        # yields today's midnight and could pass)
+        self.make_stg_artifacts()
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.record()
+        self.rewrite_stub("exit 1\n")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_when_systemctl_output_is_empty(self) -> None:
+        self.make_stg_artifacts()
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.record()
+        self.rewrite_stub("printf ''\n")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_when_start_predates_the_record(self) -> None:
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum not on PATH")
+        self.write_stub_systemctl(f"echo '{self.STUB_START}'\n")
+        self.make_stg_artifacts()
+        self.record()
+        # the service's current run began an hour BEFORE the start the
+        # deploy verified: it is the stale pre-restart process (binary
+        # placed, restart failed) -- reject
+        self.rewrite_stub(f"echo '{self.STALE_START}'\n")
         proc = self.run_step(self.plan()[1])
         self.assertNotEqual(proc.returncode, 0)
 

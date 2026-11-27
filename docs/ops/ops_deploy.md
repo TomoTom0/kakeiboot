@@ -17,6 +17,7 @@
 ```
 <deploy_root>/<env>/
   budget-book                        # backend binary（作業repo target/debug/budget-book・debug build）
+  deploy-record                      # deployが restart・healthz 成功後に書く配置記録（3成果物のhash・検証した service 起動時刻。promoteの前段チェック2が参照）
   bin/kakeiboot-backup.sh            # backup構成script（作業repo scripts/backup/ のコピー。deployのrsyncで配布）
   configs/<env>/{app,auth,mcp}.toml  # 作業repo configs/<env>/ のコピー
   frontend/dist/                     # backendが配信するSPA shell・widget・assets
@@ -127,6 +128,7 @@ mise run units:install -- --dry-run
 2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
 3. `systemctl restart kakeiboot-stg`
 4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` はrepo `configs/stg/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
+5. 配置記録の書き込み: `<deploy_root>/stg/deploy-record` へ、promoteが配布する3成果物のhash（binary・backup script・frontend dist の集約hash）と、healthzで検証した service の `ActiveEnterTimestamp`（epoch）を KEY=VALUE で書く（promoteの前段チェック2の担保。restart・healthzが成功した場合にのみ書かれる。書き込みは同一dir内の一時fileからのrename差し替えで、先にdeployした運用者の記録を他方の運用者も差し替えられる）
 
 rsyncの対象と除外:
 
@@ -140,19 +142,23 @@ stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの�
 
 標準手順: `mise run stg:deploy` → stg実機検証 → `mise run prod:backup`（rollback前提の直近backup取得）→ `mise run prod:promote`。
 
-処理（`scripts/deploy/kakeiboot_ops.py promote`。11 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
+処理（`scripts/deploy/kakeiboot_ops.py promote`。14 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
 
 1. stg前段チェック1: stg healthz（5回retry。portは **stg運用dir** の配布済み `configs/stg/app.toml` から解決）
-2. stg前段チェック2: 稼働プロセスの実行binaryとstg運用dir binaryのsha256照合（pidは `systemctl show kakeiboot-stg -p MainPID`・`/proc/<pid>/exe` のhashとdisk上 `<stg>/budget-book` のhashを比較。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態を排除。rsync `-a` がmtimeを保持するため起動時刻×mtime比較ではこの状態を検出できない。systemctl失敗・PID空・`/proc` 読み取り不可・hash不一致はすべて非零で停止するfail-closed構成。stgはsystem service（User=muse-agent）として稼働し、現行のssh運用者も同一userのため`/proc/<pid>/exe`は読み取り可）
+2. stg前段チェック2: deploy配置記録との照合（`<stg>/deploy-record` の3つのhash〔binary・backup script・frontend dist の集約hash〕がdisk上の現行hashと一致し、かつ現在の `ActiveEnterTimestamp` が記録された「deployが検証した起動時刻」以降であること。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態は、現在の起動時刻が記録より前になるため排除される。記録不在・hash不一致・systemctl/date失敗はすべて非零で停止するfail-closed構成。記録が無い stg（本機構より前のdeploy）は、stg:deployを1回実行して記録を作ること）
+   - 経緯: 当初は稼働プロセスの `/proc/<pid>/exe` のhashとdisk上binaryのhashを比較していたが、サービスアカウント移行後は stg が専用アカウント `kakeiboot` 実行となり、どちらの運用者からも他uidの `/proc` は読めない（gt430で実測: Permission denied）ため、この形へ置き換えた。記録方式が証明するのは「disk上の3成果物がdeployの検証済み成果物と一致し、現在の稼働が検証時の起動以降であること」で、`/proc` 方式が証明した「稼働中プロセスの実体そのものがdisk上binaryと同一」までは証明しない（成果物を差し替えて再起動し、記録どおりのbytesへ戻す操作は検出できない）。書けるのは両運用者とサービスアカウントに限られ、promoteが配布するdisk上成果物自体はhashで固定されるため、この差分は許容する
 3. binaryのsha256表示（stg側は失敗=停止。prod側はfile不在時 `prod: budget-book not deployed yet` を表示して続行 = 初回構築可能）
 4. configs乖離の補助表示（repo `configs/prod/` → prod運用dirへの転送なしpreview）
 5. 旧成果物退避: prod側binary存在時のみ `<deploy_root>/prod/releases/<UTC timestamp>/` へ binary・`bin/`・`frontend/` を運用機上copy（全操作を `&&` 連結で実行し・date・mkdir・cpのいずれかの失敗はstep全体の非零=promote停止。不在時はskip）
-6. `mkdir -p <deploy_root>/prod/{bin,frontend,configs/prod}`（rsyncは途中階層を作らないため前提dirを機構側で用意）
-7. rsync（運用機上）stg運用dir binary → prod binary（`-a --checksum -i`）
-8. rsync（運用機上）stg運用dir backup script → `prod/bin/`（`-a --checksum -i`）
-9. rsync（運用機上）stg運用dir `frontend/dist/` → `prod/frontend/dist/`（`-a --delete -i`）
-10. `systemctl restart kakeiboot-prod`
-11. healthz（portは **prod運用dir** の配布済み `configs/prod/app.toml` から解決）
+6. `mkdir -p <deploy_root>/prod/{bin,frontend,configs/prod}`（rsync・installは途中階層を作らないため前提dirを機構側で用意）
+7. ラッパー `kakeiboot-deploy install-file`（運用機上）stg運用dir binary → prod binary（`kakeiboot:srvops` 770で配置）
+8. 同 install-file で backup script → `prod/bin/`
+9. rsync（運用機上）stg運用dir `frontend/dist/` → `prod/frontend/dist/`（`-a --no-perms --omit-dir-times --delete -i`）
+10. distのモード正規化（運用者自身の find/chmod。フォルダ2770・ファイルgroup書き込み。自所有entryのみ）
+11. ラッパーの chown-tree で dist の所有付け替え（`kakeiboot:srvops`）
+12. releases世代のモード正規化＋所有付け替え（releases dir不在時はskipする sh -c）
+13. `systemctl restart kakeiboot-prod`
+14. healthz（portは **prod運用dir** の配布済み `configs/prod/app.toml` から解決）
 
 - **configsはpromoteの配布対象に含まない**（環境定義は設定変更時のみ明示更新する。毎回の置き換えは未検証変更の混入余地になる）。step4は乖離の注意喚起表示のみであり、乖離の事前確認の正経路は **`mise run prod:configs -- --preview`**（promote内の表示からコピー開始までに判断の余白がないため、独立した確認操作で判断する）
 - 前段チェック（step1-2）は「stg運用dirの現物がそのままprodへ入る」ことの機械確認であって、**stgで人間による検証（実機確認・MCP実操作等）が行われたことの担保ではない**。検証実施の判断は運用者に残る
