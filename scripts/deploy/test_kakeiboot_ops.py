@@ -33,6 +33,16 @@ longer byte-matches the legacy mise run array (the guarantee is retired
 with this change and the plan is asserted as STG_DEPLOY_PLAN), promote grows
 from 11 to 13 steps, and the backup unit's fixed run user becomes
 User=kakeiboot.
+
+Mode-normalization follow-up: the transferred trees' mode normalization
+(directories 2770, files group-writable) moves OUT of the wrapper's
+chown-tree into the ops tool (deploy_normalize_tree_modes, run as the
+operator right after each transfer, before the chown -- the only moment
+the operator still owns the files and can chmod them). The wrapper stays
+frozen to install-file / chown-tree (ownership only), so deploy policy
+changes never need a root re-run to replace it. deploy grows 12 -> 13
+steps, promote 13 -> 14, and configs gains the normalization as a third
+step (skipped under --preview, which must stay write-free).
 """
 
 from __future__ import annotations
@@ -90,6 +100,8 @@ STG_DEPLOY_PLAN = [
     f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
     f"rsync -a --no-perms --omit-dir-times --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
     f"rsync -a --no-perms --omit-dir-times --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
+    f"sh -c 'find {DEPLOY_ROOT}/stg/frontend/dist -type d -exec chmod 2770 {{}} + "
+    f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -exec chmod g+rw {{}} +'",
     f"sudo /usr/local/sbin/kakeiboot-deploy chown-tree {DEPLOY_ROOT}/stg/frontend/dist",
     f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
@@ -288,8 +300,9 @@ class TestTransportSsh(unittest.TestCase):
     def test_non_rsync_steps_wrapped_in_ssh(self) -> None:
         local_cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
         ssh_cmds = build_deploy_commands(ssh_cfg(), "stg", 40282, STG_STAGE)
-        # mkdir x2, sudo install x2, sudo chown, rm -rf, systemctl restart, healthz
-        for idx in (0, 3, 4, 5, 8, 9, 10, 11):
+        # mkdir x2, sudo install x2, normalize, sudo chown, rm -rf,
+        # systemctl restart, healthz
+        for idx in (0, 3, 4, 5, 8, 9, 10, 11, 12):
             self.assert_ssh_wrapped(ssh_cmds[idx], local_cmds[idx])
 
     def test_every_step_is_host_mediated(self) -> None:
@@ -1022,20 +1035,21 @@ PROD_DIR = f"{DEPLOY_ROOT}/prod"
 # [covers:deploy-ops.promote-rsync-flags]
 # [covers:deploy-ops.artifact-placement-owner]
 class TestPromotePlan(unittest.TestCase):
-    """D-6 fixed 13-step plan (11 steps through TASK-189, +2 ownership steps
-    in the service-account follow-up). Local form is the raw remote_exec argv
-    list; the ssh form (D-5) runs the stg->prod distribution ON gt430
-    (ssh-wrapped, no host: destination prefix) and only the configs preview
-    goes repo->host via rsync_exec."""
+    """D-6 fixed 14-step plan (11 steps through TASK-189, +2 ownership steps
+    in the service-account follow-up, +1 mode-normalization step when the
+    normalization moved into the ops tool). Local form is the raw
+    remote_exec argv list; the ssh form (D-5) runs the stg->prod
+    distribution ON gt430 (ssh-wrapped, no host: destination prefix) and
+    only the configs preview goes repo->host via rsync_exec."""
 
     def build(self, cfg):
         from kakeiboot_ops import build_promote_commands
 
         return build_promote_commands(cfg, 40282, 40283)
 
-    def test_local_plan_is_thirteen_steps_in_design_order(self) -> None:
+    def test_local_plan_is_fourteen_steps_in_design_order(self) -> None:
         cmds = self.build(local_cfg())
-        self.assertEqual(len(cmds), 13)
+        self.assertEqual(len(cmds), 14)
         (
             healthz_stg,
             _process,
@@ -1046,6 +1060,7 @@ class TestPromotePlan(unittest.TestCase):
             install_bin,
             install_script,
             rs_dist,
+            normalize_dist,
             chown_dist,
             chown_releases,
             restart,
@@ -1085,9 +1100,21 @@ class TestPromotePlan(unittest.TestCase):
             rs_dist,
             ["rsync", "-a", "--no-perms", "--omit-dir-times", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
-        # steps 10/11: ownership of the rsynced dist and of the archived
+        # step 10: the rsynced dist's modes are normalized by the operator
+        # (still the owner at this point) right before the re-owning
+        self.assertEqual(
+            normalize_dist,
+            [
+                "sh",
+                "-c",
+                f"find {PROD_DIR}/frontend/dist -type d -exec chmod 2770 {{}} + "
+                f"&& find {PROD_DIR}/frontend/dist -type f -exec chmod g+rw {{}} +",
+            ],
+        )
+        # steps 11/12: ownership of the rsynced dist and of the archived
         # releases generations moves to kakeiboot:srvops (the wrapper's
-        # chown-tree -- install has no recursive form; the releases chown
+        # chown-tree -- install has no recursive form; the releases step
+        # normalizes modes inside the same guard, before its chown, and
         # is guarded so a first deployment without a releases dir does
         # not fail)
         self.assertEqual(chown_dist, [*WRAPPER_CHOWN_TREE, f"{PROD_DIR}/frontend/dist"])
@@ -1095,7 +1122,11 @@ class TestPromotePlan(unittest.TestCase):
         self.assertIn(f"{PROD_DIR}/releases", chown_releases[2])
         self.assertIn("sudo /usr/local/sbin/kakeiboot-deploy chown-tree", chown_releases[2])
         self.assertIn("if", chown_releases[2])
-        # steps 12/13: restart prod, then healthz on the prod runtime-dir port
+        self.assertLess(
+            chown_releases[2].index("chmod 2770"),
+            chown_releases[2].index("chown-tree"),
+        )
+        # steps 13/14: restart prod, then healthz on the prod runtime-dir port
         self.assertEqual(restart, ["systemctl", "restart", "kakeiboot-prod"])
         self.assertEqual(healthz_prod, healthz_command(40283))
 
@@ -1119,13 +1150,13 @@ class TestPromotePlan(unittest.TestCase):
     def test_ssh_plan_runs_remote_steps_on_runtime_host(self) -> None:
         local_cmds = self.build(local_cfg())
         ssh_cmds = self.build(ssh_cfg())
-        self.assertEqual(len(ssh_cmds), 13)
+        self.assertEqual(len(ssh_cmds), 14)
         # step 4 is the only repo->host rsync (rsync_exec: -e option + host:)
         preview = ssh_cmds[3]
         self.assertEqual(preview[preview.index("-e") + 1], SSH_RSYNC_E)
         self.assertEqual(preview[-1], f"gt430:{PROD_DIR}/configs/prod/")
         # every other step is one ssh-wrapped remote string of the local argv
-        for idx in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+        for idx in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
             self.assertEqual(
                 ssh_cmds[idx],
                 ["ssh", *SSH_OPTIONS, "gt430", "--", shlex.join(local_cmds[idx])],
@@ -1178,8 +1209,94 @@ class TestArtifactPlacementOwner(unittest.TestCase):
                 f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
             ],
         )
-        # the dist tree is re-owned wholesale after its rsync
-        self.assertEqual(cmds[8], [*WRAPPER_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
+        # the dist tree is mode-normalized by the operator right after its
+        # rsync, then re-owned wholesale via the wrapper's chown-tree
+        self.assertEqual(
+            cmds[8],
+            [
+                "sh",
+                "-c",
+                f"find {DEPLOY_ROOT}/stg/frontend/dist -type d -exec chmod 2770 {{}} + "
+                f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -exec chmod g+rw {{}} +",
+            ],
+        )
+        self.assertEqual(cmds[9], [*WRAPPER_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
+
+
+# [covers:deploy-ops.mode-normalization]
+class TestNormalizeTreeModes(unittest.TestCase):
+    """Mode normalization lives in the ops tool, not in the root-owned
+    wrapper: deploy_normalize_tree_modes is an operator-run find/chmod
+    step placed after each tree transfer and before the wrapper's
+    chown-tree (after the re-owning the operator could no longer chmod).
+    The wrapper's chown-tree stays ownership-only."""
+
+    def test_helper_is_operator_find_chmod(self) -> None:
+        from kakeiboot_ops import deploy_normalize_tree_modes
+
+        self.assertEqual(
+            deploy_normalize_tree_modes("/some/tree"),
+            [
+                "sh",
+                "-c",
+                "find /some/tree -type d -exec chmod 2770 {} + "
+                "&& find /some/tree -type f -exec chmod g+rw {} +",
+            ],
+        )
+
+    def test_deploy_normalizes_dist_right_before_chown(self) -> None:
+        from kakeiboot_ops import deploy_normalize_tree_modes
+
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282, STG_STAGE)
+        normalize = deploy_normalize_tree_modes(f"{DEPLOY_ROOT}/stg/frontend/dist")
+        idx = cmds.index(normalize)
+        # right after the dist rsync, right before the wrapper chown-tree
+        self.assertEqual(cmds[idx - 1][0], "rsync")
+        self.assertTrue(cmds[idx - 1][-1].endswith("/stg/frontend/dist/"))
+        self.assertEqual(
+            cmds[idx + 1], [*WRAPPER_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"]
+        )
+
+    def test_promote_normalizes_dist_and_releases_before_chown(self) -> None:
+        from kakeiboot_ops import build_promote_commands, deploy_normalize_tree_modes
+
+        cmds = build_promote_commands(local_cfg(), 40282, 40283)
+        normalize = deploy_normalize_tree_modes(f"{PROD_DIR}/frontend/dist")
+        idx = cmds.index(normalize)
+        self.assertEqual(
+            cmds[idx + 1], [*WRAPPER_CHOWN_TREE, f"{PROD_DIR}/frontend/dist"]
+        )
+        # releases: normalization is inside the guarded step, before chown
+        releases_step = cmds[idx + 2][2]
+        self.assertIn("chmod 2770", releases_step)
+        self.assertIn("chmod g+rw", releases_step)
+        self.assertLess(releases_step.index("chmod 2770"), releases_step.index("chown-tree"))
+
+    def test_execution_normalizes_modes(self) -> None:
+        from kakeiboot_ops import deploy_normalize_tree_modes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "tree"
+            sub = root / "sub"
+            sub.mkdir(parents=True)
+            plain = root / "a.txt"
+            plain.write_text("a", encoding="utf-8")
+            nested = sub / "b.txt"
+            nested.write_text("b", encoding="utf-8")
+            os.chmod(root, 0o755)
+            os.chmod(sub, 0o755)
+            os.chmod(plain, 0o644)
+            os.chmod(nested, 0o600)
+            result = subprocess.run(
+                deploy_normalize_tree_modes(str(root)),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(root.stat().st_mode & 0o7777, 0o2770)
+            self.assertEqual(sub.stat().st_mode & 0o7777, 0o2770)
+            self.assertEqual(plain.stat().st_mode & 0o777, 0o664)
+            self.assertEqual(nested.stat().st_mode & 0o777, 0o660)
 
 
 # [covers:deploy-ops.promote-stg-precheck]
@@ -1246,8 +1363,8 @@ class TestPromoteRestartHealthz(unittest.TestCase):
         from kakeiboot_ops import build_promote_commands
 
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
-        self.assertEqual(cmds[11], ["systemctl", "restart", "kakeiboot-prod"])
-        self.assertEqual(cmds[12], healthz_command(40283))
+        self.assertEqual(cmds[12], ["systemctl", "restart", "kakeiboot-prod"])
+        self.assertEqual(cmds[13], healthz_command(40283))
 
 
 # [covers:deploy-ops.promote-shell-execution]
@@ -1467,7 +1584,8 @@ class TestPromoteParser(unittest.TestCase):
 
 # [covers:deploy-ops.configs-command]
 class TestConfigsCommandPlan(unittest.TestCase):
-    """D-7-1/D-7-2: file distribution only (mkdir + checksum rsync); no restart."""
+    """D-7-1/D-7-2: file distribution only (mkdir + checksum rsync + the
+    operator-side mode normalization); no restart."""
 
     def test_local_plan_is_mkdir_then_checksum_rsync_without_restart(self) -> None:
         from kakeiboot_ops import build_configs_commands
@@ -1488,6 +1606,12 @@ class TestConfigsCommandPlan(unittest.TestCase):
                     "configs/prod/",
                     f"{PROD_DIR}/configs/prod/",
                 ],
+                [
+                    "sh",
+                    "-c",
+                    f"find {PROD_DIR}/configs/prod -type d -exec chmod 2770 {{}} + "
+                    f"&& find {PROD_DIR}/configs/prod -type f -exec chmod g+rw {{}} +",
+                ],
             ],
         )
         for cmd in cmds:
@@ -1504,6 +1628,12 @@ class TestConfigsCommandPlan(unittest.TestCase):
         rsync = cmds[1]
         self.assertEqual(rsync[rsync.index("-e") + 1], SSH_RSYNC_E)
         self.assertEqual(rsync[-1], f"gt430:{PROD_DIR}/configs/prod/")
+        # the normalization step is a remote_exec step (ssh-wrapped)
+        local_cmds = build_configs_commands(local_cfg(), "prod")
+        self.assertEqual(
+            cmds[2],
+            ["ssh", *SSH_OPTIONS, "gt430", "--", shlex.join(local_cmds[2])],
+        )
 
     # [covers:deploy-ops.configs-preview-flag]
     def test_preview_adds_rsync_dry_run(self) -> None:
@@ -1512,6 +1642,8 @@ class TestConfigsCommandPlan(unittest.TestCase):
         preview_cmds = build_configs_commands(local_cfg(), "prod", preview=True)
         self.assertEqual(len(preview_cmds), 2)
         self.assertIn("--dry-run", preview_cmds[1])  # rsync's own dry run
+        # preview writes nothing: no mode-normalization step either
+        self.assertNotIn("chmod", " ".join(preview_cmds[-1]))
         plain_cmds = build_configs_commands(local_cfg(), "prod", preview=False)
         self.assertNotIn("--dry-run", plain_cmds[1])
 
