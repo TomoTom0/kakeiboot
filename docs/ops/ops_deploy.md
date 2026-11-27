@@ -17,7 +17,7 @@
 ```
 <deploy_root>/<env>/
   budget-book                        # backend binary（作業repo target/debug/budget-book・debug build）
-  deploy-record                      # deployが restart・healthz 成功後に書く配置記録（binaryのsha256・検証した service 起動時刻。promoteの前段チェック2が参照）
+  deploy-record                      # deployが restart・healthz 成功後に書く配置記録（3成果物のhash・検証した service 起動時刻。promoteの前段チェック2が参照）
   bin/kakeiboot-backup.sh            # backup構成script（作業repo scripts/backup/ のコピー。deployのrsyncで配布）
   configs/<env>/{app,auth,mcp}.toml  # 作業repo configs/<env>/ のコピー
   frontend/dist/                     # backendが配信するSPA shell・widget・assets
@@ -128,7 +128,7 @@ mise run units:install -- --dry-run
 2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
 3. `systemctl restart kakeiboot-stg`
 4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` はrepo `configs/stg/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
-5. 配置記録の書き込み: `<deploy_root>/stg/deploy-record` へ、配置したbinaryのsha256と、healthzで検証した service の `ActiveEnterTimestamp`（epoch）を KEY=VALUE で書く（promoteの前段チェック2の担保。restart・healthzが成功した場合にのみ書かれる。書き込みは同一dir内の一時fileからのrename差し替えで、先にdeployした運用者の記録を他方の運用者も差し替えられる）
+5. 配置記録の書き込み: `<deploy_root>/stg/deploy-record` へ、promoteが配布する3成果物のhash（binary・backup script・frontend dist の集約hash）と、healthzで検証した service の `ActiveEnterTimestamp`（epoch）を KEY=VALUE で書く（promoteの前段チェック2の担保。restart・healthzが成功した場合にのみ書かれる。書き込みは同一dir内の一時fileからのrename差し替えで、先にdeployした運用者の記録を他方の運用者も差し替えられる）
 
 rsyncの対象と除外:
 
@@ -145,8 +145,8 @@ stg検証済み成果物をprodへ配布する。**配布元はstg運用dirの�
 処理（`scripts/deploy/kakeiboot_ops.py promote`。14 step固定順序。step1-4はprodへ書き込まない読み取り専用で、失敗してもprod側に影響を残さない）:
 
 1. stg前段チェック1: stg healthz（5回retry。portは **stg運用dir** の配布済み `configs/stg/app.toml` から解決）
-2. stg前段チェック2: deploy配置記録との照合（`<stg>/deploy-record` のsha256とdisk上 `<stg>/budget-book` のsha256が一致し、かつ現在の `ActiveEnterTimestamp` が記録された「deployが検証した起動時刻」以降であること。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態は、現在の起動時刻が記録より前になるため排除される。記録不在・hash不一致・systemctl/date失敗はすべて非零で停止するfail-closed構成。記録が無い stg（本機構より前のdeploy）は、stg:deployを1回実行して記録を作ること）
-   - 経緯: 当初は稼働プロセスの `/proc/<pid>/exe` のhashとdisk上binaryのhashを比較していたが、サービスアカウント移行後は stg が専用アカウント `kakeiboot` 実行となり、どちらの運用者からも他uidの `/proc` は読めない（gt430で実測: Permission denied）ため、この形へ置き換えた。記録方式が `/proc` 方式より弱い点は「deploy後にbinaryを差し替え→再起動→元へ戻す」操作を検出できないことのみで、書けるのは両運用者とサービスアカウントに限られ、promoteが配布するdisk上binary自体はhashで固定されるため、この差分は許容する
+2. stg前段チェック2: deploy配置記録との照合（`<stg>/deploy-record` の3つのhash〔binary・backup script・frontend dist の集約hash〕がdisk上の現行hashと一致し、かつ現在の `ActiveEnterTimestamp` が記録された「deployが検証した起動時刻」以降であること。「binary配布済み・restart前/失敗で稼働が旧プロセスのまま」の中途状態は、現在の起動時刻が記録より前になるため排除される。記録不在・hash不一致・systemctl/date失敗はすべて非零で停止するfail-closed構成。記録が無い stg（本機構より前のdeploy）は、stg:deployを1回実行して記録を作ること）
+   - 経緯: 当初は稼働プロセスの `/proc/<pid>/exe` のhashとdisk上binaryのhashを比較していたが、サービスアカウント移行後は stg が専用アカウント `kakeiboot` 実行となり、どちらの運用者からも他uidの `/proc` は読めない（gt430で実測: Permission denied）ため、この形へ置き換えた。記録方式が証明するのは「disk上の3成果物がdeployの検証済み成果物と一致し、現在の稼働が検証時の起動以降であること」で、`/proc` 方式が証明した「稼働中プロセスの実体そのものがdisk上binaryと同一」までは証明しない（成果物を差し替えて再起動し、記録どおりのbytesへ戻す操作は検出できない）。書けるのは両運用者とサービスアカウントに限られ、promoteが配布するdisk上成果物自体はhashで固定されるため、この差分は許容する
 3. binaryのsha256表示（stg側は失敗=停止。prod側はfile不在時 `prod: budget-book not deployed yet` を表示して続行 = 初回構築可能）
 4. configs乖離の補助表示（repo `configs/prod/` → prod運用dirへの転送なしpreview）
 5. 旧成果物退避: prod側binary存在時のみ `<deploy_root>/prod/releases/<UTC timestamp>/` へ binary・`bin/`・`frontend/` を運用機上copy（全操作を `&&` 連結で実行し・date・mkdir・cpのいずれかの失敗はstep全体の非零=promote停止。不在時はskip）

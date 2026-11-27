@@ -385,24 +385,27 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     # uid's /proc/<pid>/exe (verified on gt430: Permission denied), so
     # that form now fails closed for everyone. The replacement anchors on
     # the record deploy writes after its restart + healthz succeed
-    # (deploy_record_step: sha256 of the placed binary + the service
-    # start it verified): this step requires the CURRENT on-disk binary
-    # to hash to the recorded value (the distribution source is exactly
-    # the deploy-verified artifact) and the CURRENT ActiveEnterTimestamp
-    # to be at or after the recorded start (the running process started
-    # no earlier than the verified one -- the "binary placed, restart
-    # failed/stale process" mid-state has a start BEFORE the recorded
-    # one and is rejected). Step 1's live healthz completes the picture.
-    # What this does NOT prove, unlike /proc: that the running image is
-    # byte-identical to the disk file at this instant -- a swap-restart-
-    # swap-back of the binary between deploy and promote would pass.
-    # That needs a writer inside the tree between the two operations;
-    # the only writers are the two operators and the service account,
-    # and promote distributes the disk file (hash-pinned here), so the
-    # residual risk is accepted (see the PR discussion). A missing or
-    # unparsable record, a failing systemctl/date, or any mismatch
-    # leaves the && chain non-zero -- fail closed; a stg deployed before
-    # records existed must be redeployed once to create one.
+    # (deploy_record_step): this step requires ALL THREE distribution
+    # artifacts on disk -- the binary, the backup script, and the dist
+    # tree (aggregate hash) -- to hash to the recorded values (the
+    # distribution source is exactly what deploy placed), and the
+    # CURRENT ActiveEnterTimestamp to be at or after the recorded start
+    # (the running process started no earlier than the verified one --
+    # the "binary placed, restart failed/stale process" mid-state has a
+    # start BEFORE the recorded one and is rejected). Step 1's live
+    # healthz completes the picture. What this does NOT prove, unlike
+    # /proc: that the running process image is byte-identical to the
+    # disk binary at this instant -- it proves the disk artifacts are
+    # the deploy-verified ones and the run started no earlier than the
+    # verified run. A writer swapping artifacts AND restarting AND
+    # restoring the recorded bytes between deploy and promote would
+    # pass; the only writers are the two operators and the service
+    # account, and promote distributes the hash-pinned disk files, so
+    # the residual risk is accepted (see the PR discussion). A missing
+    # or unparsable record (including a pre-dist/script record), a
+    # failing systemctl/date, or any mismatch leaves the && chain
+    # non-zero -- fail closed; a stg deployed before records existed
+    # must be redeployed once to create one.
     process_check = (
         f"rec={shlex.quote(f'{stg}/deploy-record')} "
         '&& [ -f "$rec" ] '
@@ -410,6 +413,15 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         '&& [ -n "$want" ] '
         f'&& got=$(sha256sum {stg_bin} | cut -d" " -f1) '
         '&& [ "$got" = "$want" ] '
+        '&& kwant=$(grep "^script_sha256=" "$rec" | cut -d= -f2) '
+        '&& [ -n "$kwant" ] '
+        f"&& kgot=$(sha256sum {shlex.quote(f'{stg}/bin/kakeiboot-backup.sh')} "
+        '| cut -d" " -f1) '
+        '&& [ "$kgot" = "$kwant" ] '
+        '&& dwant=$(grep "^dist_sha256=" "$rec" | cut -d= -f2) '
+        '&& [ -n "$dwant" ] '
+        f"&& dgot=$({dist_aggregate_command(f'{stg}/frontend/dist')}) "
+        '&& [ "$dgot" = "$dwant" ] '
         '&& verified=$(grep "^service_start_epoch=" "$rec" | cut -d= -f2) '
         '&& [ -n "$verified" ] '
         # capture systemctl's output separately (see deploy_record_step):
@@ -658,21 +670,36 @@ def deploy_normalize_tree_modes(path: str) -> list[str]:
     return ["sh", "-c", normalize_tree_modes_command(path)]
 
 
+def dist_aggregate_command(dist_path: str) -> str:
+    """Aggregate hash of a dist tree: sha256 over the sorted per-file
+    sha256sum lines (paths included, so renames change the value).
+    Shared by deploy_record_step (recording) and promote's step 2
+    (verification) so both sides compute the identical value."""
+    return (
+        f"find {shlex.quote(dist_path)} -type f -exec sha256sum {{}} + "
+        "| LC_ALL=C sort | sha256sum | cut -d\" \" -f1"
+    )
+
+
 def deploy_record_step(cfg_root: str, env: str) -> list[str]:
     """Write the deploy record (<root>/<env>/deploy-record) as the final
-    deploy step, after restart + healthz have succeeded: the sha256 of
-    the placed binary and the ActiveEnterTimestamp of the service run
-    that healthz just verified, as KEY=VALUE lines. promote's step 2
-    anchors on this record (build_promote_commands): it is the
-    /proc-free proof that the stg state to be promoted is the state
-    deploy verified. The record is written by the operator into the
-    srvops group-writable env dir (measured on gt430: the operator can
-    create files there and read the kakeiboot-owned binary for hashing);
-    it is a consistency anchor between the two operators' operations,
-    not a security boundary against them. Any failure (hashing, reading
-    the start time) leaves the step non-zero and the deploy failed --
-    a record from a half-finished deploy must not exist."""
+    deploy step, after restart + healthz have succeeded: hashes of ALL
+    THREE artifacts promote distributes (the binary, the backup script,
+    the dist tree as an aggregate) and the ActiveEnterTimestamp of the
+    service run that healthz just verified, as KEY=VALUE lines.
+    recorded_at_epoch is informational (promote does not consult it; the
+    freshness anchor is service_start_epoch). promote's step 2 anchors
+    on this record (build_promote_commands): it is the /proc-free proof
+    that the stg state to be promoted is the state deploy verified. The
+    record is written by the operator into the srvops group-writable
+    env dir (measured on gt430: the operator can create files there and
+    read the kakeiboot-owned artifacts for hashing); it is a consistency
+    anchor between the two operators' operations, not a security
+    boundary against them. Any failure (hashing, reading the start
+    time) leaves the step non-zero and the deploy failed -- a record
+    from a half-finished deploy must not exist."""
     bin_path = shlex.quote(f"{cfg_root}/{env}/budget-book")
+    script_path = shlex.quote(f"{cfg_root}/{env}/bin/kakeiboot-backup.sh")
     record_path = shlex.quote(f"{cfg_root}/{env}/deploy-record")
     # The systemctl output is captured in its own assignment first: the
     # assignment carries systemctl's exit status (a nested $(...) inside
@@ -683,17 +710,26 @@ def deploy_record_step(cfg_root: str, env: str) -> list[str]:
     # same directory and renamed over the destination: `>` truncation
     # needs write permission on the FILE (the first operator's 0644
     # record would block the other operator's deploy), while rename
-    # needs only the srvops group-writable directory.
+    # needs only the srvops group-writable directory. Stale temp files
+    # from a failed earlier run are removed first (rename semantics make
+    # them removable regardless of their owner), and the temp name
+    # carries pid + epoch so a later run never collides with a leftover.
     script = (
-        f"h=$(sha256sum {bin_path} | cut -d\" \" -f1) "
+        f"rm -f {record_path}.tmp.* "
+        f"&& h=$(sha256sum {bin_path} | cut -d\" \" -f1) "
         '&& [ -n "$h" ] '
+        f"&& kh=$(sha256sum {script_path} | cut -d\" \" -f1) "
+        '&& [ -n "$kh" ] '
+        f"&& dh=$({dist_aggregate_command(f'{cfg_root}/{env}/frontend/dist')}) "
+        '&& [ -n "$dh" ] '
         f"&& raw=$(systemctl show kakeiboot-{env} "
         "-p ActiveEnterTimestamp --value) "
         '&& [ -n "$raw" ] '
         '&& s=$(date -d "$raw" +%s) '
-        f"&& tmp={record_path}.tmp.$$ "
-        '&& printf "sha256=%s\\nservice_start_epoch=%s\\n'
-        'recorded_at_epoch=%s\\n" "$h" "$s" "$(date +%s)" > "$tmp" '
+        f"&& tmp={record_path}.tmp.$$.$(date +%s) "
+        '&& printf "sha256=%s\\nscript_sha256=%s\\ndist_sha256=%s\\n'
+        'service_start_epoch=%s\\nrecorded_at_epoch=%s\\n" '
+        '"$h" "$kh" "$dh" "$s" "$(date +%s)" > "$tmp" '
         '&& chmod g+rw "$tmp" '
         f"&& mv -f \"$tmp\" {record_path}"
     )
