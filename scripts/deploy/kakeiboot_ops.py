@@ -593,11 +593,23 @@ def deploy_install_artifact(src: str, dst: str) -> list[str]:
 def normalize_tree_modes_command(path: str) -> str:
     """Shell form of the operator-side mode normalization (the find/chmod
     chain of deploy_normalize_tree_modes), for embedding into a larger
-    sh -c string (promote's guarded releases step)."""
+    sh -c string (promote's guarded releases step).
+
+    Both finds are restricted to entries owned by the invoking operator
+    (-uid of the runtime id): a transfer does NOT re-own what already
+    exists at the destination -- the dist tree's directories stay
+    kakeiboot-owned from the preceding chown-tree, older releases
+    generations may belong to the other operator -- and chmod on those
+    fails with EPERM even when the mode is already correct, which would
+    stop the plan before restart. Entries the operator does not own are
+    already in normalized form (they were normalized while their creator
+    owned them, before their own chown), so skipping them loses nothing;
+    what the current transfer just created or replaced is operator-owned
+    and is exactly what gets normalized."""
     quoted = shlex.quote(path)
     return (
-        "find " + quoted + " -type d -exec chmod 2770 {} +"
-        " && find " + quoted + " -type f -exec chmod g+rw {} +"
+        "find " + quoted + ' -type d -uid "$(id -u)" -exec chmod 2770 {} +'
+        " && find " + quoted + ' -type f -uid "$(id -u)" -exec chmod g+rw {} +'
     )
 
 
@@ -607,13 +619,14 @@ def deploy_normalize_tree_modes(path: str) -> list[str]:
     the next operator-run transfer can write the tree again.
 
     This is the ops tool's own step, NOT the wrapper's: right after the
-    rsync/cp transfer the files are operator-owned, so the operator can
-    chmod them -- but only BEFORE deploy_chown_tree re-owns the tree to
-    kakeiboot, after which the operator can no longer chmod it. Keeping
-    the normalization here (project code, changeable by either operator)
-    instead of inside the root-owned wrapper keeps the wrapper a frozen
-    ownership-only primitive: deploy policy changes never require
-    replacing a root-owned file (and the root re-run that would take)."""
+    rsync/cp transfer the files the transfer created are operator-owned,
+    so the operator can chmod them -- but only BEFORE deploy_chown_tree
+    re-owns the tree to kakeiboot, after which the operator can no
+    longer chmod it. Keeping the normalization here (project code,
+    changeable by either operator) instead of inside the root-owned
+    wrapper keeps the wrapper a frozen ownership-only primitive: deploy
+    policy changes never require replacing a root-owned file (and the
+    root re-run that would take)."""
     return ["sh", "-c", normalize_tree_modes_command(path)]
 
 

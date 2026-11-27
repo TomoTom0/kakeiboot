@@ -100,8 +100,8 @@ STG_DEPLOY_PLAN = [
     f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
     f"rsync -a --no-perms --omit-dir-times --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
     f"rsync -a --no-perms --omit-dir-times --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
-    f"sh -c 'find {DEPLOY_ROOT}/stg/frontend/dist -type d -exec chmod 2770 {{}} + "
-    f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -exec chmod g+rw {{}} +'",
+    f"sh -c 'find {DEPLOY_ROOT}/stg/frontend/dist -type d -uid \"$(id -u)\" -exec chmod 2770 {{}} + "
+    f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -uid \"$(id -u)\" -exec chmod g+rw {{}} +'",
     f"sudo /usr/local/sbin/kakeiboot-deploy chown-tree {DEPLOY_ROOT}/stg/frontend/dist",
     f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
@@ -1107,8 +1107,8 @@ class TestPromotePlan(unittest.TestCase):
             [
                 "sh",
                 "-c",
-                f"find {PROD_DIR}/frontend/dist -type d -exec chmod 2770 {{}} + "
-                f"&& find {PROD_DIR}/frontend/dist -type f -exec chmod g+rw {{}} +",
+                f"find {PROD_DIR}/frontend/dist -type d -uid \"$(id -u)\" -exec chmod 2770 {{}} + "
+                f"&& find {PROD_DIR}/frontend/dist -type f -uid \"$(id -u)\" -exec chmod g+rw {{}} +",
             ],
         )
         # steps 11/12: ownership of the rsynced dist and of the archived
@@ -1216,8 +1216,8 @@ class TestArtifactPlacementOwner(unittest.TestCase):
             [
                 "sh",
                 "-c",
-                f"find {DEPLOY_ROOT}/stg/frontend/dist -type d -exec chmod 2770 {{}} + "
-                f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -exec chmod g+rw {{}} +",
+                f"find {DEPLOY_ROOT}/stg/frontend/dist -type d -uid \"$(id -u)\" -exec chmod 2770 {{}} + "
+                f"&& find {DEPLOY_ROOT}/stg/frontend/dist -type f -uid \"$(id -u)\" -exec chmod g+rw {{}} +",
             ],
         )
         self.assertEqual(cmds[9], [*WRAPPER_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
@@ -1239,8 +1239,8 @@ class TestNormalizeTreeModes(unittest.TestCase):
             [
                 "sh",
                 "-c",
-                "find /some/tree -type d -exec chmod 2770 {} + "
-                "&& find /some/tree -type f -exec chmod g+rw {} +",
+                "find /some/tree -type d -uid \"$(id -u)\" -exec chmod 2770 {} + "
+                "&& find /some/tree -type f -uid \"$(id -u)\" -exec chmod g+rw {} +",
             ],
         )
 
@@ -1297,6 +1297,15 @@ class TestNormalizeTreeModes(unittest.TestCase):
             self.assertEqual(sub.stat().st_mode & 0o7777, 0o2770)
             self.assertEqual(plain.stat().st_mode & 0o777, 0o664)
             self.assertEqual(nested.stat().st_mode & 0o777, 0o660)
+            # rerunning on the already-normalized tree stays green (the
+            # -uid restriction keeps it away from entries the operator
+            # does not own; owned ones are chmod-idempotent)
+            rerun = subprocess.run(
+                deploy_normalize_tree_modes(str(root)),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
 
 
 # [covers:deploy-ops.promote-stg-precheck]
@@ -1609,8 +1618,8 @@ class TestConfigsCommandPlan(unittest.TestCase):
                 [
                     "sh",
                     "-c",
-                    f"find {PROD_DIR}/configs/prod -type d -exec chmod 2770 {{}} + "
-                    f"&& find {PROD_DIR}/configs/prod -type f -exec chmod g+rw {{}} +",
+                    f"find {PROD_DIR}/configs/prod -type d -uid \"$(id -u)\" -exec chmod 2770 {{}} + "
+                    f"&& find {PROD_DIR}/configs/prod -type f -uid \"$(id -u)\" -exec chmod g+rw {{}} +",
                 ],
             ],
         )
