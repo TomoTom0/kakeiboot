@@ -21,6 +21,15 @@ subcommand (--env required, --preview); prod:deploy is removed so the
 PROD_DEPLOY_LEGACY byte-match test is deleted. New names (build_promote_commands,
 build_configs_commands, resolve_runtime_port) follow the same inside-body
 import rule.
+
+Service-account follow-up (dedicated kakeiboot account migration, design
+step 3): deploy/promote place artifacts as kakeiboot:srvops -- single files
+via sudo install (deploy stages them on the target first, the install-units
+pattern), trees via rsync/cp + sudo chown -R. The deploy plan therefore no
+longer byte-matches the legacy mise run array (the guarantee is retired
+with this change and the plan is asserted as STG_DEPLOY_PLAN), promote grows
+from 11 to 13 steps, and the backup unit's fixed run user becomes
+User=kakeiboot.
 """
 
 from __future__ import annotations
@@ -59,14 +68,26 @@ from kakeiboot_ops import (
 
 DEPLOY_ROOT = "/srv/opt/tomo/run/app/tool/kakeiboot"
 
-# Legacy mise run arrays (phase-1 rendered values; the migration guarantee is that
-# local transport reproduces them byte-for-byte via shlex.join).
-STG_DEPLOY_LEGACY = [
-    f"rsync -a target/debug/budget-book {DEPLOY_ROOT}/stg/budget-book",
+# Deploy plan (service-account follow-up form): the single-file artifacts are
+# staged on the target and placed with sudo install as kakeiboot:srvops; the
+# dist tree keeps rsync and is re-owned with sudo chown -R. Until the
+# follow-up, this list byte-matched the legacy mise run array
+# (STG_DEPLOY_LEGACY, 7 lines); that guarantee is retired with the placement
+# change, so the plan is asserted in its new shape directly.
+STG_STAGE = "/tmp/kakeiboot-artifacts-install-stg"
+STG_DEPLOY_PLAN = [
+    f"mkdir -p {STG_STAGE}",
+    f"rsync -a target/debug/budget-book {STG_STAGE}/budget-book",
+    f"rsync -a scripts/backup/kakeiboot-backup.sh {STG_STAGE}/kakeiboot-backup.sh",
+    f"sudo install -o kakeiboot -g srvops -m 770 {STG_STAGE}/budget-book "
+    f"{DEPLOY_ROOT}/stg/budget-book",
     f"mkdir -p {DEPLOY_ROOT}/stg/bin",
-    f"rsync -a scripts/backup/kakeiboot-backup.sh {DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
+    f"sudo install -o kakeiboot -g srvops -m 770 {STG_STAGE}/kakeiboot-backup.sh "
+    f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
     f"rsync -a --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
     f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
+    f"sudo chown -R kakeiboot:srvops {DEPLOY_ROOT}/stg/frontend/dist",
+    f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
     "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; "
     "sleep 1; done; exit 1'",
@@ -116,8 +137,7 @@ def load_pair(base: str, override: str | None) -> DeployConfig:
         return load_config(paths)
 
 
-# [covers:deploy-ops.config-load] deploy.toml + deploy.local.toml merge and validation
-class TestConfigLoad(unittest.TestCase):
+# [covers:deploy-ops.config-load] deploy.toml + deploy.local.toml merge and validationclass TestConfigLoad(unittest.TestCase):
     def test_override_last_wins(self) -> None:
         cfg = load_pair(BASE_TOML, 'transport = "local"\n')
         self.assertEqual(cfg.transport, "local")
@@ -189,11 +209,13 @@ class TestConfigErrorExitCode(unittest.TestCase):
         self.assertEqual(out.getvalue(), "")  # no plan printed: config failed first
 
 
-# [covers:deploy-ops.transport-local] local transport reproduces the legacy run arrays
+# [covers:deploy-ops.transport-local] local transport: backup-status reproduces
+# the legacy run arrays; the deploy plan is asserted in its service-account
+# follow-up shape (STG_DEPLOY_PLAN)
 class TestTransportLocal(unittest.TestCase):
-    def test_stg_deploy_matches_legacy_run_array(self) -> None:
+    def test_stg_deploy_matches_service_account_plan(self) -> None:
         cmds = build_deploy_commands(local_cfg(), "stg", 40282)
-        self.assertEqual([shlex.join(c) for c in cmds], STG_DEPLOY_LEGACY)
+        self.assertEqual([shlex.join(c) for c in cmds], STG_DEPLOY_PLAN)
 
     def test_stg_backup_status_matches_legacy_run_array(self) -> None:
         cmds = build_backup_status_commands(local_cfg(), "stg")
@@ -247,20 +269,22 @@ class TestTransportSsh(unittest.TestCase):
 
     def test_rsync_gets_ssh_e_and_host_prefix(self) -> None:
         cmds = build_deploy_commands(ssh_cfg(), "stg", 40282)
-        first = cmds[0]
-        self.assertEqual(first[0], "rsync")
-        self.assertEqual(first[first.index("-e") + 1], SSH_RSYNC_E)
-        self.assertEqual(first[-1], f"gt430:{DEPLOY_ROOT}/stg/budget-book")
-        # the two --delete rsyncs keep their options plus the ssh transport
-        for idx in (3, 4):
+        # rsync steps: the two artifact stagings, configs, dist (indices 1,2,6,7)
+        for idx in (1, 2, 6, 7):
             cmd = cmds[idx]
+            self.assertEqual(cmd[0], "rsync")
             self.assertEqual(cmd[cmd.index("-e") + 1], SSH_RSYNC_E)
             self.assertTrue(cmd[-1].startswith("gt430:"))
+        self.assertEqual(cmds[1][-1], f"gt430:{STG_STAGE}/budget-book")
+        # the two --delete rsyncs keep their options plus the ssh transport
+        for idx in (6, 7):
+            self.assertIn("--delete", cmds[idx])
 
     def test_non_rsync_steps_wrapped_in_ssh(self) -> None:
         local_cmds = build_deploy_commands(local_cfg(), "stg", 40282)
         ssh_cmds = build_deploy_commands(ssh_cfg(), "stg", 40282)
-        for idx in (1, 5, 6):  # mkdir, systemctl restart, healthz sh -c
+        # mkdir x2, sudo install x2, sudo chown, rm -rf, systemctl restart, healthz
+        for idx in (0, 3, 4, 5, 8, 9, 10, 11):
             self.assert_ssh_wrapped(ssh_cmds[idx], local_cmds[idx])
 
     def test_every_step_is_host_mediated(self) -> None:
@@ -457,11 +481,11 @@ class TestHealthz(unittest.TestCase):
             ["sh", "-c", self.LEGACY_LOOP.format(port=40283)],
         )
 
-    def test_deploy_seventh_element_is_healthz(self) -> None:
+    def test_deploy_last_element_is_healthz(self) -> None:
         cmds = build_deploy_commands(local_cfg(), "stg", 40282)
-        self.assertEqual(cmds[6], healthz_command(40282))
-        joined = shlex.join(cmds[6])
-        self.assertEqual(joined, STG_DEPLOY_LEGACY[6])
+        self.assertEqual(cmds[-1], healthz_command(40282))
+        joined = shlex.join(cmds[-1])
+        self.assertEqual(joined, STG_DEPLOY_PLAN[-1])
         self.assertIn("1 2 3 4 5", joined)
         self.assertIn("sleep 1", joined)
 
@@ -482,6 +506,10 @@ POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
 POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
 UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install-units-render"
 SUDO_INSTALL = ["sudo", "install", "-o", "root", "-g", "root", "-m", "644"]
+# Service-account form (migration follow-up): artifacts are placed as
+# kakeiboot:srvops 770; trees are re-owned with sudo chown -R (same owner:group).
+SUDO_INSTALL_ARTIFACT = ["sudo", "install", "-o", "kakeiboot", "-g", "srvops", "-m", "770"]
+SUDO_CHOWN_TREE = ["sudo", "chown", "-R", "kakeiboot:srvops"]
 
 # Same shape as the repo .in source (D-2): leading no-direct-scp comment,
 # {{deploy_root}} placeholders, %i template instances the render must preserve.
@@ -492,7 +520,7 @@ UNIT_IN_FIXTURE = (
     "\n"
     "[Service]\n"
     "Type=oneshot\n"
-    "User=tomo\n"
+    "User=kakeiboot\n"
     "WorkingDirectory={{deploy_root}}/%i\n"
     "ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i\n"
     "Nice=10\n"
@@ -600,7 +628,7 @@ class TestUnitTemplateSource(unittest.TestCase):
         self.assertIn("ExecStart={{deploy_root}}/%i/bin/kakeiboot-backup.sh %i", text)
         # system form only: the fixed run user lives in the template itself
         # (the unit no longer exists in user scope where the user was implicit)
-        self.assertIn("User=tomo", text)
+        self.assertIn("User=kakeiboot", text)
 
     def test_plain_service_file_is_gone(self) -> None:
         # leaving both would reintroduce a second (unrendered) source of truth
@@ -654,7 +682,7 @@ class TestRenderUnit(unittest.TestCase):
         self.assertNotIn("{{", rendered)
         self.assertIn(f"WorkingDirectory={DEPLOY_ROOT}/%i\n", rendered)
         self.assertIn(f"ExecStart={DEPLOY_ROOT}/%i/bin/kakeiboot-backup.sh %i\n", rendered)
-        self.assertIn("User=tomo\n", rendered)
+        self.assertIn("User=kakeiboot\n", rendered)
 
     # [covers:deploy-ops.render-unit-rejects-leftover-placeholder]
     def test_leftover_placeholder_raises_config_error(self) -> None:
@@ -855,7 +883,7 @@ class TestInstallUnitsCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         printed = out.getvalue()
         self.assertNotIn("{{", printed)
-        self.assertIn("User=tomo", printed)
+        self.assertIn("User=kakeiboot", printed)
         self.assertIn("WorkingDirectory=/custom/root/%i", printed)
         self.assertIn("ExecStart=/custom/root/%i/bin/kakeiboot-backup.sh %i", printed)
         # the polkit rule payload and the /etc-only sudo plan are both shown
@@ -984,36 +1012,40 @@ PROD_DIR = f"{DEPLOY_ROOT}/prod"
 
 # [covers:deploy-ops.promote-plan]
 # [covers:deploy-ops.promote-rsync-flags]
+# [covers:deploy-ops.artifact-placement-owner]
 class TestPromotePlan(unittest.TestCase):
-    """D-6 fixed 11-step plan. Local form is the raw remote_exec argv list; the
-    ssh form (D-5) runs the stg->prod rsyncs ON gt430 (ssh-wrapped rsync, no
-    host: destination prefix) and only the configs preview goes repo->host via
-    rsync_exec."""
+    """D-6 fixed 13-step plan (11 steps through TASK-189, +2 ownership steps
+    in the service-account follow-up). Local form is the raw remote_exec argv
+    list; the ssh form (D-5) runs the stg->prod distribution ON gt430
+    (ssh-wrapped, no host: destination prefix) and only the configs preview
+    goes repo->host via rsync_exec."""
 
     def build(self, cfg):
         from kakeiboot_ops import build_promote_commands
 
         return build_promote_commands(cfg, 40282, 40283)
 
-    def test_local_plan_is_eleven_steps_in_design_order(self) -> None:
+    def test_local_plan_is_thirteen_steps_in_design_order(self) -> None:
         cmds = self.build(local_cfg())
-        self.assertEqual(len(cmds), 11)
+        self.assertEqual(len(cmds), 13)
         (
             healthz_stg,
-            _mtime,
+            _process,
             _sha,
             _preview,
             _archive,
             mkdir,
-            rs_bin,
-            rs_script,
+            install_bin,
+            install_script,
             rs_dist,
+            chown_dist,
+            chown_releases,
             restart,
             healthz_prod,
         ) = cmds
         # step 1: stg healthz (port resolved from the stg RUNTIME-DIR config)
         self.assertEqual(healthz_stg, healthz_command(40282))
-        # step 6: prerequisite dirs (rsync never creates intermediate dirs)
+        # step 6: prerequisite dirs (rsync/install never create intermediate dirs)
         self.assertEqual(
             mkdir,
             [
@@ -1024,28 +1056,36 @@ class TestPromotePlan(unittest.TestCase):
                 f"{PROD_DIR}/configs/prod",
             ],
         )
-        # steps 7/8: single-file rsyncs carry --checksum (mtime-only drift must
-        # not pass); step 9: dist is --delete only, no --checksum (D-3)
+        # steps 7/8: single-file artifacts are placed with sudo install as
+        # kakeiboot:srvops 770 (service-account follow-up; they are already
+        # on the runtime host, so no staging and no rsync)
         self.assertEqual(
-            rs_bin,
-            ["rsync", "-a", "--checksum", "-i", f"{STG_DIR}/budget-book", f"{PROD_DIR}/budget-book"],
+            install_bin,
+            [*SUDO_INSTALL_ARTIFACT, f"{STG_DIR}/budget-book", f"{PROD_DIR}/budget-book"],
         )
         self.assertEqual(
-            rs_script,
+            install_script,
             [
-                "rsync",
-                "-a",
-                "--checksum",
-                "-i",
+                *SUDO_INSTALL_ARTIFACT,
                 f"{STG_DIR}/bin/kakeiboot-backup.sh",
-                f"{PROD_DIR}/bin/",
+                f"{PROD_DIR}/bin/kakeiboot-backup.sh",
             ],
         )
+        # step 9: dist keeps its rsync -- no --checksum (D-3), --delete only
         self.assertEqual(
             rs_dist,
             ["rsync", "-a", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
-        # step 10/11: restart prod, then healthz on the prod runtime-dir port
+        # steps 10/11: ownership of the rsynced dist and of the archived
+        # releases generations moves to kakeiboot:srvops (sudo chown -R --
+        # install has no recursive form; the releases chown is guarded so a
+        # first deployment without a releases dir does not fail)
+        self.assertEqual(chown_dist, [*SUDO_CHOWN_TREE, f"{PROD_DIR}/frontend/dist"])
+        self.assertEqual(chown_releases[:2], ["sh", "-c"])
+        self.assertIn(f"{PROD_DIR}/releases", chown_releases[2])
+        self.assertIn("sudo chown -R kakeiboot:srvops", chown_releases[2])
+        self.assertIn("if", chown_releases[2])
+        # steps 12/13: restart prod, then healthz on the prod runtime-dir port
         self.assertEqual(restart, ["systemctl", "restart", "kakeiboot-prod"])
         self.assertEqual(healthz_prod, healthz_command(40283))
 
@@ -1069,20 +1109,66 @@ class TestPromotePlan(unittest.TestCase):
     def test_ssh_plan_runs_remote_steps_on_runtime_host(self) -> None:
         local_cmds = self.build(local_cfg())
         ssh_cmds = self.build(ssh_cfg())
-        self.assertEqual(len(ssh_cmds), 11)
+        self.assertEqual(len(ssh_cmds), 13)
         # step 4 is the only repo->host rsync (rsync_exec: -e option + host:)
         preview = ssh_cmds[3]
         self.assertEqual(preview[preview.index("-e") + 1], SSH_RSYNC_E)
         self.assertEqual(preview[-1], f"gt430:{PROD_DIR}/configs/prod/")
         # every other step is one ssh-wrapped remote string of the local argv
-        for idx in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10):
+        for idx in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12):
             self.assertEqual(
                 ssh_cmds[idx],
                 ["ssh", *SSH_OPTIONS, "gt430", "--", shlex.join(local_cmds[idx])],
             )
-        # stg->prod rsyncs (steps 7-9) run ON gt430: no host: destination prefix
+        # the stg->prod distribution (steps 7-9) runs ON gt430: the wrapped
+        # remote strings carry no host: destination prefix
         for idx in (6, 7, 8):
             self.assertNotIn("gt430:", ssh_cmds[idx][-1])
+
+
+# [covers:deploy-ops.artifact-placement-owner]
+class TestArtifactPlacementOwner(unittest.TestCase):
+    """Service-account follow-up: the placement helpers put artifacts under
+    the dedicated kakeiboot account (owner kakeiboot, group srvops), while
+    the /etc helper keeps its root:root 644 default (install-units parity)."""
+
+    def test_sudo_install_defaults_stay_root_form(self) -> None:
+        from kakeiboot_ops import sudo_install
+
+        self.assertEqual(sudo_install("src", "dst"), [*SUDO_INSTALL, "src", "dst"])
+
+    def test_sudo_install_artifact_is_kakeiboot_srvops_770(self) -> None:
+        from kakeiboot_ops import sudo_install_artifact
+
+        self.assertEqual(
+            sudo_install_artifact("src", "dst"), [*SUDO_INSTALL_ARTIFACT, "src", "dst"]
+        )
+
+    def test_sudo_chown_tree_is_recursive_kakeiboot_srvops(self) -> None:
+        from kakeiboot_ops import sudo_chown_tree
+
+        self.assertEqual(sudo_chown_tree("/some/tree"), [*SUDO_CHOWN_TREE, "/some/tree"])
+
+    def test_deploy_places_binary_and_script_via_sudo_install(self) -> None:
+        cmds = build_deploy_commands(local_cfg(), "stg", 40282)
+        self.assertEqual(
+            cmds[3],
+            [
+                *SUDO_INSTALL_ARTIFACT,
+                f"{STG_STAGE}/budget-book",
+                f"{DEPLOY_ROOT}/stg/budget-book",
+            ],
+        )
+        self.assertEqual(
+            cmds[5],
+            [
+                *SUDO_INSTALL_ARTIFACT,
+                f"{STG_STAGE}/kakeiboot-backup.sh",
+                f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
+            ],
+        )
+        # the dist tree is re-owned wholesale after its rsync
+        self.assertEqual(cmds[8], [*SUDO_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
 
 
 # [covers:deploy-ops.promote-stg-precheck]
@@ -1149,8 +1235,8 @@ class TestPromoteRestartHealthz(unittest.TestCase):
         from kakeiboot_ops import build_promote_commands
 
         cmds = build_promote_commands(local_cfg(), 40282, 40283)
-        self.assertEqual(cmds[9], ["systemctl", "restart", "kakeiboot-prod"])
-        self.assertEqual(cmds[10], healthz_command(40283))
+        self.assertEqual(cmds[11], ["systemctl", "restart", "kakeiboot-prod"])
+        self.assertEqual(cmds[12], healthz_command(40283))
 
 
 # [covers:deploy-ops.promote-shell-execution]
