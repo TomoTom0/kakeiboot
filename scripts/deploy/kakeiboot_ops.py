@@ -314,8 +314,8 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[s
                 f"{stage}/kakeiboot-backup.sh", f"{root}/{env}/bin/kakeiboot-backup.sh"
             ),
         ),
-        rsync_exec(cfg, ["-a", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
-        rsync_exec(cfg, ["-a", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
+        rsync_exec(cfg, ["-a", "--no-perms", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
+        rsync_exec(cfg, ["-a", "--no-perms", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
         remote_exec(cfg, deploy_chown_tree(f"{root}/{env}/frontend/dist")),
         remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
@@ -415,7 +415,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         remote_exec(cfg, ["sh", "-c", sha_display]),
         rsync_exec(
             cfg,
-            ["-a", "--delete", "--checksum", "-i", "--dry-run"],
+            ["-a", "--no-perms", "--delete", "--checksum", "-i", "--dry-run"],
             "configs/prod/",
             f"{prod}/configs/prod/",
         ),
@@ -435,7 +435,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         ),
         remote_exec(
             cfg,
-            ["rsync", "-a", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
+            ["rsync", "-a", "--no-perms", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
         remote_exec(cfg, deploy_chown_tree(f"{prod}/frontend/dist")),
         remote_exec(cfg, ["sh", "-c", releases_chown]),
@@ -455,7 +455,7 @@ def build_configs_commands(cfg: DeployConfig, env: str, preview: bool = False) -
     diff, the regular drift-check path) -- unlike the script's --dry-run,
     which only prints the plan without touching rsync.
     """
-    opts = ["-a", "--delete", "--checksum", "-i"]
+    opts = ["-a", "--no-perms", "--delete", "--checksum", "-i"]
     if preview:
         opts.append("--dry-run")
     dst = f"{cfg.deploy_root}/{env}/configs/{env}"
@@ -566,7 +566,13 @@ def deploy_chown_tree(path: str) -> list[str]:
     """Re-own a placed tree (frontend dist, releases generations) to
     kakeiboot:srvops via the wrapper's chown-tree. The tree transfers
     themselves stay rsync/cp (install has no recursive form); this is the
-    ownership half of the placement, validated inside the wrapper."""
+    ownership half of the placement, validated inside the wrapper. The
+    wrapper also normalizes modes (directories 2770, files group-writable)
+    so the next operator-run transfer can write the tree again: the rsync
+    steps into these service-owned trees therefore use --no-perms, because
+    propagating the build's 0755/0644 modes would make rsync chmod
+    directories the operator does not own (exit 23) and would strip the
+    group write the following deploy depends on."""
     return ["sudo", DEPLOY_WRAPPER, "chown-tree", path]
 
 

@@ -88,8 +88,8 @@ STG_DEPLOY_PLAN = [
     f"mkdir -p {DEPLOY_ROOT}/stg/bin",
     f"sudo /usr/local/sbin/kakeiboot-deploy install-file {STG_STAGE}/kakeiboot-backup.sh "
     f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
-    f"rsync -a --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
-    f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
+    f"rsync -a --no-perms --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
+    f"rsync -a --no-perms --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
     f"sudo /usr/local/sbin/kakeiboot-deploy chown-tree {DEPLOY_ROOT}/stg/frontend/dist",
     f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
@@ -141,7 +141,8 @@ def load_pair(base: str, override: str | None) -> DeployConfig:
         return load_config(paths)
 
 
-# [covers:deploy-ops.config-load] deploy.toml + deploy.local.toml merge and validationclass TestConfigLoad(unittest.TestCase):
+# [covers:deploy-ops.config-load] deploy.toml + deploy.local.toml merge and validation
+class TestConfigLoad(unittest.TestCase):
     def test_override_last_wins(self) -> None:
         cfg = load_pair(BASE_TOML, 'transport = "local"\n')
         self.assertEqual(cfg.transport, "local")
@@ -1082,7 +1083,7 @@ class TestPromotePlan(unittest.TestCase):
         # step 9: dist keeps its rsync -- no --checksum (D-3), --delete only
         self.assertEqual(
             rs_dist,
-            ["rsync", "-a", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
+            ["rsync", "-a", "--no-perms", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
         # steps 10/11: ownership of the rsynced dist and of the archived
         # releases generations moves to kakeiboot:srvops (the wrapper's
@@ -1103,7 +1104,7 @@ class TestPromotePlan(unittest.TestCase):
         cmds = self.build(local_cfg())
         preview = cmds[3]
         self.assertEqual(preview[0], "rsync")
-        self.assertEqual(preview[1:6], ["-a", "--delete", "--checksum", "-i", "--dry-run"])
+        self.assertEqual(preview[1:7], ["-a", "--no-perms", "--delete", "--checksum", "-i", "--dry-run"])
         self.assertEqual(preview[-2:], ["configs/prod/", f"{PROD_DIR}/configs/prod/"])
 
     def test_plan_does_not_distribute_configs_or_touch_var(self) -> None:
@@ -1479,6 +1480,7 @@ class TestConfigsCommandPlan(unittest.TestCase):
                 [
                     "rsync",
                     "-a",
+                    "--no-perms",
                     "--delete",
                     "--checksum",
                     "-i",
