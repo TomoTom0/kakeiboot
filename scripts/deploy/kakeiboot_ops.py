@@ -13,19 +13,20 @@ either locally or over ssh depending on the `transport` key:
                        enabled via configs/deploy.local.toml)
 
 Subcommands (env is an argument; the stg/prod task prefix maps to --env):
-  deploy         stage artifacts on the target -> sudo install the binary and
-                 the backup script as kakeiboot:srvops -> rsync configs + dist
-                 (dist re-owned by sudo chown -R) -> systemctl restart ->
-                 healthz retry loop
+  deploy         stage artifacts on the target -> place the binary and the
+                 backup script via the kakeiboot-deploy wrapper (installed
+                 as kakeiboot:srvops) -> rsync configs + dist (dist re-owned
+                 via the wrapper) -> systemctl restart -> healthz retry loop
                  (stg only: prod distribution goes through promote -- TASK-189)
   promote        distribute the RUNNING stg runtime-dir artifacts to prod:
                  stg prechecks (healthz + service start >= binary mtime),
                  sha256 display both sides, configs drift preview, archive the
-                 previous prod artifacts to releases/<utc-timestamp>/, sudo
-                 install binary + backup script and rsync dist stg->prod ON
-                 the runtime host (artifacts re-owned to kakeiboot:srvops),
-                 restart kakeiboot-prod, healthz. No build (repo-independent),
-                 no configs distribution (that is the configs subcommand).
+                 previous prod artifacts to releases/<utc-timestamp>/, place
+                 binary + backup script via the kakeiboot-deploy wrapper and
+                 rsync dist stg->prod ON the runtime host (artifacts re-owned
+                 to kakeiboot:srvops), restart kakeiboot-prod, healthz. No
+                 build (repo-independent), no configs distribution (that is
+                 the configs subcommand).
   configs        mkdir + rsync configs/<env>/ to the runtime dir (--checksum,
                  --delete; no restart/healthz). --preview adds rsync's own
                  --dry-run: the transfer-free itemized diff (drift check path).
@@ -95,21 +96,25 @@ BACKUP_UNIT_STAGE_PREFIX = "/tmp/kakeiboot-units-install"
 # Service-account migration (dedicated `kakeiboot` account runs stg + prod +
 # backup; design: kakeiboot service-account migration, step 3): deploy/promote
 # place the artifacts as kakeiboot:srvops so the run user owns what the deploy
-# procedure chmods and replaces. Single files go through `sudo install` (the
-# install-units pattern below, with the artifact owner/group); trees (the
+# procedure chmods and replaces. The placement goes through the root-owned
+# wrapper /usr/local/sbin/kakeiboot-deploy (installed on the target by the
+# host migration, step 4): gt430's sudo is sudo-rs, whose sudoers parser
+# accepts NO wildcards in command arguments, so a sudoers grant cannot scope
+# `install`/`chown` by path -- the wrapper validates that every target path
+# is inside the kakeiboot tree and runs install -o kakeiboot -g srvops
+# -m 0770 / chown -R kakeiboot:srvops itself, and the sudoers entry names
+# only the wrapper. Single files use its install-file subcommand; trees (the
 # frontend dist, the releases generations) keep their rsync/cp transfer and
-# are re-owned with `sudo chown -R` -- install has no recursive form. Both
-# sudo forms stay inside the migration's narrow sudoers grant for the
-# operator (install / chown, kakeiboot tree only), which takes effect with
+# are re-owned with its chown-tree subcommand. The wrapper takes effect with
 # the host migration (step 4): until then these plans must not be run
 # against the real host.
-ARTIFACT_OWNER = "kakeiboot"
-ARTIFACT_GROUP = "srvops"
+DEPLOY_WRAPPER = "/usr/local/sbin/kakeiboot-deploy"
 # Deploy staging dir on the target (per env): the artifact sources are local
-# files (build output, repo script), while `sudo install` reads a path on
-# the target, so the binary and the backup script are rsynced here first and
-# removed at the end of the plan -- the install-units staging pattern, with
-# the env as the per-invocation discriminator instead of a local staged dir.
+# files (build output, repo script), while the wrapper's install-file reads
+# a path on the target, so the binary and the backup script are rsynced here
+# first and removed at the end of the plan -- the install-units staging
+# pattern, with the env as the per-invocation discriminator instead of a
+# local staged dir.
 ARTIFACT_STAGE_PREFIX = "/tmp/kakeiboot-artifacts-install"
 
 # Polkit rule installed alongside the units (same content as the host
@@ -273,18 +278,19 @@ def rsync_exec(cfg: DeployConfig, opts: list[str], src: str, dst: str) -> list[s
 
 def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[str]]:
     """Deploy plan: stage the single-file artifacts on the target, place them
-    with sudo install as kakeiboot:srvops (service-account migration), rsync
-    configs + dist (dist re-owned by sudo chown -R), restart, healthz.
+    via the kakeiboot-deploy wrapper as kakeiboot:srvops (service-account
+    migration), rsync configs + dist (dist re-owned via the wrapper's
+    chown-tree), restart, healthz.
 
-    The binary and the backup script are placed by `sudo install`, not rsync:
-    the operator cannot chown, so an rsynced file would stay operator-owned
-    while the service (running as the dedicated kakeiboot account) is the
-    identity that must own what deploy replaces and chmods. The staging dir
-    follows the install-units pattern (target-side dir, removed at the end
-    of the plan). The dist tree keeps its rsync --delete transfer (install
-    has no recursive form) and is re-owned wholesale afterwards; configs
-    keep their rsync too (their ownership form is the configs subcommand's
-    concern, unchanged here).
+    The binary and the backup script are placed by the wrapper's
+    install-file, not rsync: the operator cannot chown, so an rsynced file
+    would stay operator-owned while the service (running as the dedicated
+    kakeiboot account) is the identity that must own what deploy replaces
+    and chmods. The staging dir follows the install-units pattern
+    (target-side dir, removed at the end of the plan). The dist tree keeps
+    its rsync --delete transfer (install has no recursive form) and is
+    re-owned wholesale afterwards; configs keep their rsync too (their
+    ownership form is the configs subcommand's concern, unchanged here).
     """
     root = cfg.deploy_root
     stage = f"{ARTIFACT_STAGE_PREFIX}-{env}"
@@ -299,18 +305,18 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[s
         ),
         remote_exec(
             cfg,
-            sudo_install_artifact(f"{stage}/budget-book", f"{root}/{env}/budget-book"),
+            deploy_install_artifact(f"{stage}/budget-book", f"{root}/{env}/budget-book"),
         ),
         remote_exec(cfg, ["mkdir", "-p", f"{root}/{env}/bin"]),
         remote_exec(
             cfg,
-            sudo_install_artifact(
+            deploy_install_artifact(
                 f"{stage}/kakeiboot-backup.sh", f"{root}/{env}/bin/kakeiboot-backup.sh"
             ),
         ),
         rsync_exec(cfg, ["-a", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
         rsync_exec(cfg, ["-a", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
-        remote_exec(cfg, sudo_chown_tree(f"{root}/{env}/frontend/dist")),
+        remote_exec(cfg, deploy_chown_tree(f"{root}/{env}/frontend/dist")),
         remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
         remote_exec(cfg, healthz_command(port)),
@@ -333,9 +339,10 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
 
     Placement form (service-account migration, step 3): the binary and the
     backup script are single files already on the runtime host, so they are
-    placed with `sudo install -o kakeiboot -g srvops -m 770` directly (no
-    staging, unlike deploy); the dist tree keeps its rsync (install has no
-    recursive form) and is re-owned by `sudo chown -R`, as are the releases
+    placed with the kakeiboot-deploy wrapper's install-file directly (the
+    wrapper installs them as kakeiboot:srvops 0770; no staging, unlike
+    deploy); the dist tree keeps its rsync (install has no recursive form)
+    and is re-owned by the wrapper's chown-tree, as are the releases
     generations the archive step just copied as the operator.
 
     Both healthz ports come from the deployed runtime-dir configs (callers
@@ -399,7 +406,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     # releases dir yet and must not fail here.
     releases_chown = (
         f"if [ -d {shlex.quote(f'{prod}/releases')} ]; then "
-        f"{shlex.join(sudo_chown_tree(f'{prod}/releases'))}; fi"
+        f"{shlex.join(deploy_chown_tree(f'{prod}/releases'))}; fi"
     )
 
     return [
@@ -418,11 +425,11 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
             ["mkdir", "-p", f"{prod}/bin", f"{prod}/frontend", f"{prod}/configs/prod"],
         ),
         remote_exec(
-            cfg, sudo_install_artifact(f"{stg}/budget-book", f"{prod}/budget-book")
+            cfg, deploy_install_artifact(f"{stg}/budget-book", f"{prod}/budget-book")
         ),
         remote_exec(
             cfg,
-            sudo_install_artifact(
+            deploy_install_artifact(
                 f"{stg}/bin/kakeiboot-backup.sh", f"{prod}/bin/kakeiboot-backup.sh"
             ),
         ),
@@ -430,7 +437,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
             cfg,
             ["rsync", "-a", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
-        remote_exec(cfg, sudo_chown_tree(f"{prod}/frontend/dist")),
+        remote_exec(cfg, deploy_chown_tree(f"{prod}/frontend/dist")),
         remote_exec(cfg, ["sh", "-c", releases_chown]),
         remote_exec(cfg, ["systemctl", "restart", "kakeiboot-prod"]),
         remote_exec(cfg, healthz_command(prod_port)),
@@ -536,27 +543,31 @@ def sudo_install(
     """Place one file with sudo install (owner/group/mode set in one step).
 
     The defaults are the /etc form (root:root 644, the systemd/polkit
-    default) used by install-units; sudo_install_artifact passes the
-    service-account form instead.
+    default) used by install-units; the kakeiboot-tree artifacts do NOT use
+    this helper -- they go through the kakeiboot-deploy wrapper instead
+    (deploy_install_artifact / deploy_chown_tree).
     """
     return ["sudo", "install", "-o", owner, "-g", group, "-m", mode, src, dst]
 
 
-def sudo_install_artifact(src: str, dst: str, mode: str = "770") -> list[str]:
-    """Place one deploy artifact as kakeiboot:srvops (service-account
-    migration): the dedicated run user owns the binary and the backup
-    script it executes. Mode 770 is the design's artifact mode (binary and
-    bin/ row); the caller passes another mode only for a non-executable
-    artifact."""
-    return sudo_install(src, dst, owner=ARTIFACT_OWNER, group=ARTIFACT_GROUP, mode=mode)
+def deploy_install_artifact(src: str, dst: str) -> list[str]:
+    """Place one deploy artifact via the root-owned kakeiboot-deploy
+    wrapper (service-account migration): the wrapper validates that dst is
+    inside the kakeiboot tree and installs the file as kakeiboot:srvops
+    0770 itself -- the dedicated run user owns the binary and the backup
+    script it executes. The call goes through sudo because the wrapper is
+    root-owned and the migration's sudoers entry names only the wrapper
+    (gt430's sudo-rs accepts no argument wildcards, so the operator's grant
+    cannot name install/chown with path arguments directly)."""
+    return ["sudo", DEPLOY_WRAPPER, "install-file", src, dst]
 
 
-def sudo_chown_tree(path: str) -> list[str]:
+def deploy_chown_tree(path: str) -> list[str]:
     """Re-own a placed tree (frontend dist, releases generations) to
-    kakeiboot:srvops. The tree transfers themselves stay rsync/cp (install
-    has no recursive form); this is the ownership half of the placement,
-    inside the same narrow sudoers grant (chown -R, kakeiboot tree only)."""
-    return ["sudo", "chown", "-R", f"{ARTIFACT_OWNER}:{ARTIFACT_GROUP}", path]
+    kakeiboot:srvops via the wrapper's chown-tree. The tree transfers
+    themselves stay rsync/cp (install has no recursive form); this is the
+    ownership half of the placement, validated inside the wrapper."""
+    return ["sudo", DEPLOY_WRAPPER, "chown-tree", path]
 
 
 def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[list[str]]:

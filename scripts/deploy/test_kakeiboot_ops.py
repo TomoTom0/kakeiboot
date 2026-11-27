@@ -24,8 +24,11 @@ import rule.
 
 Service-account follow-up (dedicated kakeiboot account migration, design
 step 3): deploy/promote place artifacts as kakeiboot:srvops -- single files
-via sudo install (deploy stages them on the target first, the install-units
-pattern), trees via rsync/cp + sudo chown -R. The deploy plan therefore no
+via the root-owned kakeiboot-deploy wrapper's install-file (deploy stages
+them on the target first, the install-units pattern), trees via rsync/cp +
+the wrapper's chown-tree. (gt430's sudo-rs accepts no wildcards in sudoers
+command arguments, so the grant names only the wrapper; the wrapper itself
+validates the paths and runs install/chown.) The deploy plan therefore no
 longer byte-matches the legacy mise run array (the guarantee is retired
 with this change and the plan is asserted as STG_DEPLOY_PLAN), promote grows
 from 11 to 13 steps, and the backup unit's fixed run user becomes
@@ -69,8 +72,9 @@ from kakeiboot_ops import (
 DEPLOY_ROOT = "/srv/opt/tomo/run/app/tool/kakeiboot"
 
 # Deploy plan (service-account follow-up form): the single-file artifacts are
-# staged on the target and placed with sudo install as kakeiboot:srvops; the
-# dist tree keeps rsync and is re-owned with sudo chown -R. Until the
+# staged on the target and placed via the kakeiboot-deploy wrapper (which
+# installs them as kakeiboot:srvops); the dist tree keeps rsync and is
+# re-owned via the wrapper's chown-tree. Until the
 # follow-up, this list byte-matched the legacy mise run array
 # (STG_DEPLOY_LEGACY, 7 lines); that guarantee is retired with the placement
 # change, so the plan is asserted in its new shape directly.
@@ -79,14 +83,14 @@ STG_DEPLOY_PLAN = [
     f"mkdir -p {STG_STAGE}",
     f"rsync -a target/debug/budget-book {STG_STAGE}/budget-book",
     f"rsync -a scripts/backup/kakeiboot-backup.sh {STG_STAGE}/kakeiboot-backup.sh",
-    f"sudo install -o kakeiboot -g srvops -m 770 {STG_STAGE}/budget-book "
+    f"sudo /usr/local/sbin/kakeiboot-deploy install-file {STG_STAGE}/budget-book "
     f"{DEPLOY_ROOT}/stg/budget-book",
     f"mkdir -p {DEPLOY_ROOT}/stg/bin",
-    f"sudo install -o kakeiboot -g srvops -m 770 {STG_STAGE}/kakeiboot-backup.sh "
+    f"sudo /usr/local/sbin/kakeiboot-deploy install-file {STG_STAGE}/kakeiboot-backup.sh "
     f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
     f"rsync -a --delete configs/stg/ {DEPLOY_ROOT}/stg/configs/stg/",
     f"rsync -a --delete frontend/dist/ {DEPLOY_ROOT}/stg/frontend/dist/",
-    f"sudo chown -R kakeiboot:srvops {DEPLOY_ROOT}/stg/frontend/dist",
+    f"sudo /usr/local/sbin/kakeiboot-deploy chown-tree {DEPLOY_ROOT}/stg/frontend/dist",
     f"rm -rf {STG_STAGE}",
     "systemctl restart kakeiboot-stg",
     "sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:40282/healthz && exit 0; "
@@ -506,10 +510,13 @@ POLKIT_RULES_DIR = "/etc/polkit-1/rules.d"
 POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
 UNIT_STAGE_DIR = "/tmp/kakeiboot-units-install-units-render"
 SUDO_INSTALL = ["sudo", "install", "-o", "root", "-g", "root", "-m", "644"]
-# Service-account form (migration follow-up): artifacts are placed as
-# kakeiboot:srvops 770; trees are re-owned with sudo chown -R (same owner:group).
-SUDO_INSTALL_ARTIFACT = ["sudo", "install", "-o", "kakeiboot", "-g", "srvops", "-m", "770"]
-SUDO_CHOWN_TREE = ["sudo", "chown", "-R", "kakeiboot:srvops"]
+# Service-account form (migration follow-up): artifacts are placed through
+# the root-owned kakeiboot-deploy wrapper (literal path asserted, not
+# imported, like the other values here): install-file installs as
+# kakeiboot:srvops 770 inside the wrapper; chown-tree re-owns recursively.
+DEPLOY_WRAPPER_PATH = "/usr/local/sbin/kakeiboot-deploy"
+WRAPPER_INSTALL_FILE = ["sudo", DEPLOY_WRAPPER_PATH, "install-file"]
+WRAPPER_CHOWN_TREE = ["sudo", DEPLOY_WRAPPER_PATH, "chown-tree"]
 
 # Same shape as the repo .in source (D-2): leading no-direct-scp comment,
 # {{deploy_root}} placeholders, %i template instances the render must preserve.
@@ -1056,17 +1063,18 @@ class TestPromotePlan(unittest.TestCase):
                 f"{PROD_DIR}/configs/prod",
             ],
         )
-        # steps 7/8: single-file artifacts are placed with sudo install as
-        # kakeiboot:srvops 770 (service-account follow-up; they are already
+        # steps 7/8: single-file artifacts are placed via the
+        # kakeiboot-deploy wrapper's install-file (as kakeiboot:srvops 770
+        # inside the wrapper; service-account follow-up; they are already
         # on the runtime host, so no staging and no rsync)
         self.assertEqual(
             install_bin,
-            [*SUDO_INSTALL_ARTIFACT, f"{STG_DIR}/budget-book", f"{PROD_DIR}/budget-book"],
+            [*WRAPPER_INSTALL_FILE, f"{STG_DIR}/budget-book", f"{PROD_DIR}/budget-book"],
         )
         self.assertEqual(
             install_script,
             [
-                *SUDO_INSTALL_ARTIFACT,
+                *WRAPPER_INSTALL_FILE,
                 f"{STG_DIR}/bin/kakeiboot-backup.sh",
                 f"{PROD_DIR}/bin/kakeiboot-backup.sh",
             ],
@@ -1077,13 +1085,14 @@ class TestPromotePlan(unittest.TestCase):
             ["rsync", "-a", "--delete", "-i", f"{STG_DIR}/frontend/dist/", f"{PROD_DIR}/frontend/dist/"],
         )
         # steps 10/11: ownership of the rsynced dist and of the archived
-        # releases generations moves to kakeiboot:srvops (sudo chown -R --
-        # install has no recursive form; the releases chown is guarded so a
-        # first deployment without a releases dir does not fail)
-        self.assertEqual(chown_dist, [*SUDO_CHOWN_TREE, f"{PROD_DIR}/frontend/dist"])
+        # releases generations moves to kakeiboot:srvops (the wrapper's
+        # chown-tree -- install has no recursive form; the releases chown
+        # is guarded so a first deployment without a releases dir does
+        # not fail)
+        self.assertEqual(chown_dist, [*WRAPPER_CHOWN_TREE, f"{PROD_DIR}/frontend/dist"])
         self.assertEqual(chown_releases[:2], ["sh", "-c"])
         self.assertIn(f"{PROD_DIR}/releases", chown_releases[2])
-        self.assertIn("sudo chown -R kakeiboot:srvops", chown_releases[2])
+        self.assertIn("sudo /usr/local/sbin/kakeiboot-deploy chown-tree", chown_releases[2])
         self.assertIn("if", chown_releases[2])
         # steps 12/13: restart prod, then healthz on the prod runtime-dir port
         self.assertEqual(restart, ["systemctl", "restart", "kakeiboot-prod"])
@@ -1128,33 +1137,34 @@ class TestPromotePlan(unittest.TestCase):
 
 # [covers:deploy-ops.artifact-placement-owner]
 class TestArtifactPlacementOwner(unittest.TestCase):
-    """Service-account follow-up: the placement helpers put artifacts under
-    the dedicated kakeiboot account (owner kakeiboot, group srvops), while
-    the /etc helper keeps its root:root 644 default (install-units parity)."""
+    """Service-account follow-up: the placement helpers route through the
+    root-owned kakeiboot-deploy wrapper (which installs/re-owns as the
+    dedicated kakeiboot account, owner kakeiboot group srvops), while the
+    /etc helper keeps its root:root 644 default (install-units parity)."""
 
     def test_sudo_install_defaults_stay_root_form(self) -> None:
         from kakeiboot_ops import sudo_install
 
         self.assertEqual(sudo_install("src", "dst"), [*SUDO_INSTALL, "src", "dst"])
 
-    def test_sudo_install_artifact_is_kakeiboot_srvops_770(self) -> None:
-        from kakeiboot_ops import sudo_install_artifact
+    def test_deploy_install_artifact_goes_through_wrapper(self) -> None:
+        from kakeiboot_ops import deploy_install_artifact
 
         self.assertEqual(
-            sudo_install_artifact("src", "dst"), [*SUDO_INSTALL_ARTIFACT, "src", "dst"]
+            deploy_install_artifact("src", "dst"), [*WRAPPER_INSTALL_FILE, "src", "dst"]
         )
 
-    def test_sudo_chown_tree_is_recursive_kakeiboot_srvops(self) -> None:
-        from kakeiboot_ops import sudo_chown_tree
+    def test_deploy_chown_tree_goes_through_wrapper(self) -> None:
+        from kakeiboot_ops import deploy_chown_tree
 
-        self.assertEqual(sudo_chown_tree("/some/tree"), [*SUDO_CHOWN_TREE, "/some/tree"])
+        self.assertEqual(deploy_chown_tree("/some/tree"), [*WRAPPER_CHOWN_TREE, "/some/tree"])
 
-    def test_deploy_places_binary_and_script_via_sudo_install(self) -> None:
+    def test_deploy_places_binary_and_script_via_wrapper(self) -> None:
         cmds = build_deploy_commands(local_cfg(), "stg", 40282)
         self.assertEqual(
             cmds[3],
             [
-                *SUDO_INSTALL_ARTIFACT,
+                *WRAPPER_INSTALL_FILE,
                 f"{STG_STAGE}/budget-book",
                 f"{DEPLOY_ROOT}/stg/budget-book",
             ],
@@ -1162,13 +1172,13 @@ class TestArtifactPlacementOwner(unittest.TestCase):
         self.assertEqual(
             cmds[5],
             [
-                *SUDO_INSTALL_ARTIFACT,
+                *WRAPPER_INSTALL_FILE,
                 f"{STG_STAGE}/kakeiboot-backup.sh",
                 f"{DEPLOY_ROOT}/stg/bin/kakeiboot-backup.sh",
             ],
         )
         # the dist tree is re-owned wholesale after its rsync
-        self.assertEqual(cmds[8], [*SUDO_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
+        self.assertEqual(cmds[8], [*WRAPPER_CHOWN_TREE, f"{DEPLOY_ROOT}/stg/frontend/dist"])
 
 
 # [covers:deploy-ops.promote-stg-precheck]
