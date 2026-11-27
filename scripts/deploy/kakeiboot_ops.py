@@ -15,8 +15,9 @@ either locally or over ssh depending on the `transport` key:
 Subcommands (env is an argument; the stg/prod task prefix maps to --env):
   deploy         stage artifacts on the target -> place the binary and the
                  backup script via the kakeiboot-deploy wrapper (installed
-                 as kakeiboot:srvops) -> rsync configs + dist (dist re-owned
-                 via the wrapper) -> systemctl restart -> healthz retry loop
+                 as kakeiboot:srvops) -> rsync configs + dist (dist mode-
+                 normalized by the operator, then re-owned via the wrapper)
+                 -> systemctl restart -> healthz retry loop
                  (stg only: prod distribution goes through promote -- TASK-189)
   promote        distribute the RUNNING stg runtime-dir artifacts to prod:
                  stg prechecks (healthz + service start >= binary mtime),
@@ -28,8 +29,10 @@ Subcommands (env is an argument; the stg/prod task prefix maps to --env):
                  build (repo-independent), no configs distribution (that is
                  the configs subcommand).
   configs        mkdir + rsync configs/<env>/ to the runtime dir (--checksum,
-                 --delete; no restart/healthz). --preview adds rsync's own
-                 --dry-run: the transfer-free itemized diff (drift check path).
+                 --delete; no restart/healthz) + operator-side mode
+                 normalization of the transferred tree. --preview adds rsync's
+                 own --dry-run: the transfer-free itemized diff (drift check
+                 path; normalization is skipped, preview writes nothing).
   exec           ./budget-book <args...> --config-dir configs/<env> in the runtime dir
   service        systemctl <verb...> kakeiboot-<env>
   backup         systemctl --user start kakeiboot-backup@<env>.service
@@ -106,7 +109,11 @@ BACKUP_UNIT_STAGE_PREFIX = "/tmp/kakeiboot-units-install"
 # -m 0770 / chown -R kakeiboot:srvops itself, and the sudoers entry names
 # only the wrapper. Single files use its install-file subcommand; trees (the
 # frontend dist, the releases generations) keep their rsync/cp transfer and
-# are re-owned with its chown-tree subcommand. The wrapper takes effect with
+# are re-owned with its chown-tree subcommand. The wrapper is frozen to
+# those two primitives (install-file / chown-tree): the mode normalization
+# of transferred trees is the ops tool's own step (deploy_normalize_tree_
+# modes), never the wrapper's, so deploy changes need no root re-run. The
+# wrapper takes effect with
 # the host migration (step 4): until then these plans must not be run
 # against the real host.
 DEPLOY_WRAPPER = "/usr/local/sbin/kakeiboot-deploy"
@@ -280,8 +287,8 @@ def rsync_exec(cfg: DeployConfig, opts: list[str], src: str, dst: str) -> list[s
 def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) -> list[list[str]]:
     """Deploy plan: stage the single-file artifacts on the target, place them
     via the kakeiboot-deploy wrapper as kakeiboot:srvops (service-account
-    migration), rsync configs + dist (dist re-owned via the wrapper's
-    chown-tree), restart, healthz.
+    migration), rsync configs + dist (dist mode-normalized by the operator,
+    then re-owned via the wrapper's chown-tree), restart, healthz.
 
     The binary and the backup script are placed by the wrapper's
     install-file, not rsync: the operator cannot chown, so an rsynced file
@@ -293,7 +300,9 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) ->
     strand a failed run's staging dir under /tmp's sticky bit, owned by one
     operator and unremovable by the other, blocking the recovery deploy.
     The dist tree keeps its rsync --delete transfer (install has no
-    recursive form) and is re-owned wholesale afterwards; configs keep
+    recursive form); its modes are normalized by the operator right after
+    the transfer (deploy_normalize_tree_modes -- while the files are still
+    operator-owned) and it is re-owned wholesale afterwards. configs keep
     their rsync too (their ownership form is the configs subcommand's
     concern, unchanged here).
     """
@@ -320,6 +329,7 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) ->
         ),
         rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
         rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
+        remote_exec(cfg, deploy_normalize_tree_modes(f"{root}/{env}/frontend/dist")),
         remote_exec(cfg, deploy_chown_tree(f"{root}/{env}/frontend/dist")),
         remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
@@ -329,24 +339,26 @@ def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) ->
 
 def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> list[list[str]]:
     """Promote plan (TASK-189 D-6, extended by the service-account migration):
-    the 13 fixed steps, stg -> prod.
+    the 14 fixed steps, stg -> prod.
 
     The distribution source is the stg RUNTIME dir -- the artifacts stg is
     actually running, never the work repo; that structural identity is
     promote's whole point (D-1). Steps 1-4 are read-only (stg prechecks and
     displays: failure leaves nothing written on prod), step 5 archives the
     previous prod artifacts right before the distributing steps 7-9
-    overwrite them, steps 10-11 put every placed/archived artifact under
-    the dedicated service account (kakeiboot:srvops), then restart +
-    healthz. configs/ and var/ are never written: configs distribution is
-    the separate `configs` subcommand (D-1/D-7), var/ is runtime data.
+    overwrite them, steps 10-12 normalize the transferred trees' modes as
+    the operator and put every placed/archived artifact under the
+    dedicated service account (kakeiboot:srvops), then restart + healthz.
+    configs/ and var/ are never written: configs distribution is the
+    separate `configs` subcommand (D-1/D-7), var/ is runtime data.
 
     Placement form (service-account migration, step 3): the binary and the
     backup script are single files already on the runtime host, so they are
     placed with the kakeiboot-deploy wrapper's install-file directly (the
     wrapper installs them as kakeiboot:srvops 0770; no staging, unlike
-    deploy); the dist tree keeps its rsync (install has no recursive form)
-    and is re-owned by the wrapper's chown-tree, as are the releases
+    deploy); the dist tree keeps its rsync (install has no recursive form),
+    is mode-normalized by the operator (deploy_normalize_tree_modes) and
+    is re-owned by the wrapper's chown-tree, as are the releases
     generations the archive step just copied as the operator.
 
     Both healthz ports come from the deployed runtime-dir configs (callers
@@ -404,12 +416,14 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         '&& echo "archived previous prod artifacts to $rel"; fi'
     )
 
-    # Step 11: the archive step's copies are operator-owned (cp -a cannot
-    # preserve another user's ownership unprivileged); re-own all releases
-    # generations to kakeiboot:srvops. Guarded: a first deployment has no
-    # releases dir yet and must not fail here.
+    # Step 12: the archive step's copies are operator-owned (cp -a cannot
+    # preserve another user's ownership unprivileged); normalize their
+    # modes as the operator, then re-own all releases generations to
+    # kakeiboot:srvops. Guarded: a first deployment has no releases dir
+    # yet and must not fail here.
     releases_chown = (
         f"if [ -d {shlex.quote(f'{prod}/releases')} ]; then "
+        f"{normalize_tree_modes_command(f'{prod}/releases')} && "
         f"{shlex.join(deploy_chown_tree(f'{prod}/releases'))}; fi"
     )
 
@@ -441,6 +455,7 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
             cfg,
             ["rsync", "-a", "--no-perms", "--omit-dir-times", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
+        remote_exec(cfg, deploy_normalize_tree_modes(f"{prod}/frontend/dist")),
         remote_exec(cfg, deploy_chown_tree(f"{prod}/frontend/dist")),
         remote_exec(cfg, ["sh", "-c", releases_chown]),
         remote_exec(cfg, ["systemctl", "restart", "kakeiboot-prod"]),
@@ -449,7 +464,11 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
 
 
 def build_configs_commands(cfg: DeployConfig, env: str, preview: bool = False) -> list[list[str]]:
-    """configs plan (TASK-189 D-7-1): mkdir + checksum rsync, repo -> runtime dir.
+    """configs plan (TASK-189 D-7-1): mkdir + checksum rsync, repo -> runtime
+    dir, then the operator-side mode normalization of the transferred tree
+    (deploy_normalize_tree_modes: the files are operator-owned here, and
+    the normalized form is what lets the other operator's next configs run
+    write the tree).
 
     File distribution only -- no restart/healthz step: the backend loads its
     config once at startup (no reload mechanism), so a restart inside configs
@@ -457,16 +476,21 @@ def build_configs_commands(cfg: DeployConfig, env: str, preview: bool = False) -
     reflection belongs to promote's restart or an explicit service operation
     (D-7-2). --preview adds rsync's own --dry-run (the transfer-free itemized
     diff, the regular drift-check path) -- unlike the script's --dry-run,
-    which only prints the plan without touching rsync.
+    which only prints the plan without touching rsync. Preview writes
+    nothing, so the normalization step is part of the plan only when not
+    previewing.
     """
     opts = ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i"]
     if preview:
         opts.append("--dry-run")
     dst = f"{cfg.deploy_root}/{env}/configs/{env}"
-    return [
+    cmds = [
         remote_exec(cfg, ["mkdir", "-p", dst]),
         rsync_exec(cfg, opts, f"configs/{env}/", f"{dst}/"),
     ]
+    if not preview:
+        cmds.append(remote_exec(cfg, deploy_normalize_tree_modes(dst)))
+    return cmds
 
 
 def build_exec_command(cfg: DeployConfig, env: str, args: list[str]) -> tuple[list[str], str | None]:
@@ -566,18 +590,60 @@ def deploy_install_artifact(src: str, dst: str) -> list[str]:
     return ["sudo", DEPLOY_WRAPPER, "install-file", src, dst]
 
 
+def normalize_tree_modes_command(path: str) -> str:
+    """Shell form of the operator-side mode normalization (the find/chmod
+    chain of deploy_normalize_tree_modes), for embedding into a larger
+    sh -c string (promote's guarded releases step).
+
+    Both finds are restricted to entries owned by the invoking operator
+    (-uid of the runtime id): a transfer does NOT re-own what already
+    exists at the destination -- the dist tree's directories stay
+    kakeiboot-owned from the preceding chown-tree, older releases
+    generations may belong to the other operator -- and chmod on those
+    fails with EPERM even when the mode is already correct, which would
+    stop the plan before restart. Entries the operator does not own are
+    already in normalized form (they were normalized while their creator
+    owned them, before their own chown), so skipping them loses nothing;
+    what the current transfer just created or replaced is operator-owned
+    and is exactly what gets normalized."""
+    quoted = shlex.quote(path)
+    return (
+        "find " + quoted + ' -type d -uid "$(id -u)" -exec chmod 2770 {} +'
+        " && find " + quoted + ' -type f -uid "$(id -u)" -exec chmod g+rw {} +'
+    )
+
+
+def deploy_normalize_tree_modes(path: str) -> list[str]:
+    """Normalize a just-transferred tree's modes as the operator:
+    directories 2770 (the srvops setgid form), files group-writable, so
+    the next operator-run transfer can write the tree again.
+
+    This is the ops tool's own step, NOT the wrapper's: right after the
+    rsync/cp transfer the files the transfer created are operator-owned,
+    so the operator can chmod them -- but only BEFORE deploy_chown_tree
+    re-owns the tree to kakeiboot, after which the operator can no
+    longer chmod it. Keeping the normalization here (project code,
+    changeable by either operator) instead of inside the root-owned
+    wrapper keeps the wrapper a frozen ownership-only primitive: deploy
+    policy changes never require replacing a root-owned file (and the
+    root re-run that would take)."""
+    return ["sh", "-c", normalize_tree_modes_command(path)]
+
+
 def deploy_chown_tree(path: str) -> list[str]:
     """Re-own a placed tree (frontend dist, releases generations) to
     kakeiboot:srvops via the wrapper's chown-tree. The tree transfers
     themselves stay rsync/cp (install has no recursive form); this is the
     ownership half of the placement, validated inside the wrapper. The
-    wrapper also normalizes modes (directories 2770, files group-writable)
-    so the next operator-run transfer can write the tree again: the rsync
-    steps into these service-owned trees therefore use --no-perms and
-    --omit-dir-times, because propagating the build's 0755/0644 modes (or
-    setting directory timestamps) would make rsync chmod/utime directories
-    the operator does not own (exit 23) and would strip the group write
-    the following deploy depends on."""
+    wrapper's chown-tree is ownership ONLY -- the mode normalization that
+    pairs with it is the ops tool's own step (deploy_normalize_tree_modes)
+    and runs before this one, while the transferred files are still
+    operator-owned. The rsync steps into these service-owned trees
+    therefore use --no-perms and --omit-dir-times, because propagating
+    the build's 0755/0644 modes (or setting directory timestamps) would
+    make rsync chmod/utime directories the operator does not own
+    (exit 23) and would strip the group write the following deploy
+    depends on."""
     return ["sudo", DEPLOY_WRAPPER, "chown-tree", path]
 
 
