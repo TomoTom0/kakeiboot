@@ -412,8 +412,13 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         '&& [ "$got" = "$want" ] '
         '&& verified=$(grep "^service_start_epoch=" "$rec" | cut -d= -f2) '
         '&& [ -n "$verified" ] '
-        '&& start=$(date -d "$(systemctl show kakeiboot-stg '
-        '-p ActiveEnterTimestamp --value)" +%s) '
+        # capture systemctl's output separately (see deploy_record_step):
+        # a nested $(...) would discard its failure and date -d "" would
+        # silently yield today's midnight
+        '&& raw=$(systemctl show kakeiboot-stg '
+        "-p ActiveEnterTimestamp --value) "
+        '&& [ -n "$raw" ] '
+        '&& start=$(date -d "$raw" +%s) '
         '&& [ "$start" -ge "$verified" ]'
     )
     # D-3: show the binary hash on both sides. A failing stg-side sha256sum
@@ -669,14 +674,28 @@ def deploy_record_step(cfg_root: str, env: str) -> list[str]:
     a record from a half-finished deploy must not exist."""
     bin_path = shlex.quote(f"{cfg_root}/{env}/budget-book")
     record_path = shlex.quote(f"{cfg_root}/{env}/deploy-record")
+    # The systemctl output is captured in its own assignment first: the
+    # assignment carries systemctl's exit status (a nested $(...) inside
+    # date -d would discard it, and GNU date parses an empty string as
+    # today's midnight with exit 0 -- a failed systemctl would otherwise
+    # produce a bogus epoch instead of stopping the deploy).
+    # The record itself is written to a per-invocation temp file in the
+    # same directory and renamed over the destination: `>` truncation
+    # needs write permission on the FILE (the first operator's 0644
+    # record would block the other operator's deploy), while rename
+    # needs only the srvops group-writable directory.
     script = (
         f"h=$(sha256sum {bin_path} | cut -d\" \" -f1) "
         '&& [ -n "$h" ] '
-        f"&& s=$(date -d \"$(systemctl show kakeiboot-{env} "
-        '-p ActiveEnterTimestamp --value)" +%s) '
+        f"&& raw=$(systemctl show kakeiboot-{env} "
+        "-p ActiveEnterTimestamp --value) "
+        '&& [ -n "$raw" ] '
+        '&& s=$(date -d "$raw" +%s) '
+        f"&& tmp={record_path}.tmp.$$ "
         '&& printf "sha256=%s\\nservice_start_epoch=%s\\n'
-        'recorded_at_epoch=%s\\n" "$h" "$s" "$(date +%s)" '
-        f"> {record_path}"
+        'recorded_at_epoch=%s\\n" "$h" "$s" "$(date +%s)" > "$tmp" '
+        '&& chmod g+rw "$tmp" '
+        f"&& mv -f \"$tmp\" {record_path}"
     )
     return ["sh", "-c", script]
 

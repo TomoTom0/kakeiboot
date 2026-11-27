@@ -128,7 +128,7 @@ mise run units:install -- --dry-run
 2. 配布 5操作（rsync 4行 + `bin/` 作成。対象・除外は下記。処理は `scripts/deploy/kakeiboot_ops.py`）
 3. `systemctl restart kakeiboot-stg`
 4. healthz確認: `sh -c 'for i in 1 2 3 4 5; do curl -fsS http://localhost:<port>/healthz && exit 0; sleep 1; done; exit 1'`（5回retry・`<port>` はrepo `configs/stg/app.toml` `[server] port` の解決値。ssh時は運用機上のlocalhost宛で実行）
-5. 配置記録の書き込み: `<deploy_root>/stg/deploy-record` へ、配置したbinaryのsha256と、healthzで検証した service の `ActiveEnterTimestamp`（epoch）を KEY=VALUE で書く（promoteの前段チェック2の担保。restart・healthzが成功した場合にのみ書かれる）
+5. 配置記録の書き込み: `<deploy_root>/stg/deploy-record` へ、配置したbinaryのsha256と、healthzで検証した service の `ActiveEnterTimestamp`（epoch）を KEY=VALUE で書く（promoteの前段チェック2の担保。restart・healthzが成功した場合にのみ書かれる。書き込みは同一dir内の一時fileからのrename差し替えで、先にdeployした運用者の記録を他方の運用者も差し替えられる）
 
 rsyncの対象と除外:
 

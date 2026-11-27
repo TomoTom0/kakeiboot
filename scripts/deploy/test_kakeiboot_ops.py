@@ -109,9 +109,14 @@ STG_DEPLOY_PLAN = [
     "sleep 1; done; exit 1'",
     f"sh -c 'h=$(sha256sum {DEPLOY_ROOT}/stg/budget-book | cut -d\" \" -f1) "
     f"&& [ -n \"$h\" ] "
-    f"&& s=$(date -d \"$(systemctl show kakeiboot-stg -p ActiveEnterTimestamp --value)\" +%s) "
+    f"&& raw=$(systemctl show kakeiboot-stg -p ActiveEnterTimestamp --value) "
+    f"&& [ -n \"$raw\" ] "
+    f"&& s=$(date -d \"$raw\" +%s) "
+    f"&& tmp={DEPLOY_ROOT}/stg/deploy-record.tmp.$$ "
     f"&& printf \"sha256=%s\\nservice_start_epoch=%s\\nrecorded_at_epoch=%s\\n\" "
-    f"\"$h\" \"$s\" \"$(date +%s)\" > {DEPLOY_ROOT}/stg/deploy-record'",
+    f"\"$h\" \"$s\" \"$(date +%s)\" > \"$tmp\" "
+    f"&& chmod g+rw \"$tmp\" "
+    f"&& mv -f \"$tmp\" {DEPLOY_ROOT}/stg/deploy-record'",
 ]
 STG_BACKUP_STATUS_LEGACY = [
     "sh -c 'echo \"last_success: $(cat "
@@ -1338,9 +1343,20 @@ class TestDeployRecord(unittest.TestCase):
         self.assertIn(f"sha256sum {DEPLOY_ROOT}/stg/budget-book", script)
         self.assertIn("systemctl show kakeiboot-stg", script)
         self.assertIn("ActiveEnterTimestamp", script)
-        self.assertIn(f"> {DEPLOY_ROOT}/stg/deploy-record", script)
+        self.assertIn(f"{DEPLOY_ROOT}/stg/deploy-record", script)
         self.assertIn("sha256=%s", script)
         self.assertIn("service_start_epoch=%s", script)
+        # systemctl output is captured in its own assignment (its exit
+        # status must stop the step; a nested $(...) inside date -d
+        # would discard it and date -d "" yields today's midnight)
+        self.assertIn("raw=$(systemctl show kakeiboot-stg", script)
+        self.assertIn('[ -n "$raw" ]', script)
+        self.assertIn('date -d "$raw"', script)
+        # written via a per-invocation temp file + rename, so the OTHER
+        # operator can replace a record they do not own (rename needs
+        # only the group-writable directory, not the file's write bit)
+        self.assertIn(".tmp.$$", script)
+        self.assertIn("mv -f", script)
 
     def test_record_step_execution_writes_a_parseable_record(self) -> None:
         if shutil.which("sha256sum") is None:
@@ -1372,6 +1388,27 @@ class TestDeployRecord(unittest.TestCase):
             )
             self.assertEqual(fields["service_start_epoch"], str(expected_epoch))
             self.assertIn("recorded_at_epoch", fields)
+            # the temp file was renamed over the destination, not left behind
+            self.assertEqual(list((root / "stg").glob("deploy-record.tmp.*")), [])
+
+    def test_record_step_fails_when_systemctl_fails(self) -> None:
+        # a failing systemctl must stop the step (its empty output must
+        # NOT become a midnight epoch in a bogus successful record)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            cfg = DeployConfig(deploy_root=str(root), transport="local", runtime_host=None)
+            (root / "stg").mkdir(parents=True)
+            (root / "stg" / "budget-book").write_bytes(b"placed-binary")
+            stub_dir = root / "stub-bin"
+            stub_dir.mkdir()
+            stub = stub_dir / "systemctl"
+            stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            stub.chmod(0o755)
+            env = {**os.environ, "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"}
+            cmds = build_deploy_commands(cfg, "stg", 40282, STG_STAGE)
+            proc = subprocess.run(cmds[-1], capture_output=True, text=True, env=env)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse((root / "stg" / "deploy-record").exists())
 
 
 # [covers:deploy-ops.promote-stg-precheck]
@@ -1527,6 +1564,16 @@ class TestPromoteShellSteps(unittest.TestCase):
         # been replaced by an unverified one
         self.write_record(b"verified-binary", self.stub_start_epoch())
         (self.root / "stg" / "budget-book").write_bytes(b"placed-not-verified")
+        proc = self.run_step(self.plan()[1])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_record_check_fails_when_systemctl_fails(self) -> None:
+        # systemctl fails with no stdout: its status must stop the check.
+        # (The pre-fix form parsed the empty string with date -d, which
+        # yields today's midnight and would pass against this record,
+        # whose service_start_epoch is 1.)
+        self.write_stub_systemctl("exit 1\\n")
+        self.write_record(b"stg-binary", 1)
         proc = self.run_step(self.plan()[1])
         self.assertNotEqual(proc.returncode, 0)
 
