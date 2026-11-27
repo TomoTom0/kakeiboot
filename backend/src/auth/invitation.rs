@@ -1,6 +1,10 @@
-//! Setup / invite / recovery tokens stored in `invitations`
+//! Setup / recovery tokens stored in `invitations`
 //! (spec_auth.md sections 2-1, 2-8, 9): 256-bit random value, DB keeps the
 //! SHA-256 hash, the plaintext is shown exactly once by the issuing surface.
+//! Legacy invite rows (kind='invite') remain in the table until the sweep
+//! and stay visible to the admin CLI list / revoke, but they are no longer
+//! issued or accepted as registration tokens (share design section 9-4,
+//! T8); the `Invite` kind variant exists only to read those leftover rows.
 
 use sqlx::sqlite::SqliteConnection;
 use sqlx::{Connection, SqlitePool};
@@ -140,7 +144,7 @@ pub struct NewInvitation {
     pub operator_note: Option<String>,
     /// recovery target.
     pub target_user_id: Option<i64>,
-    /// invite only.
+    /// legacy invite rows only (no current issuance path sets these).
     pub created_by: Option<i64>,
     pub ledger_id: Option<i64>,
     pub role: Option<String>,

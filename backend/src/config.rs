@@ -294,13 +294,12 @@ pub struct CeremonySettings {
 #[serde(deny_unknown_fields)]
 pub struct InvitationSettings {
     pub setup_ttl_hours: i64,
-    pub invite_ttl_hours: i64,
     pub recovery_ttl_hours: i64,
     pub recovery_ttl_max_hours: i64,
     /// register invitation (web, any active user) TTL in hours (TASK-32).
     pub register_ttl_hours: i64,
     /// ledger share ticket (web, ledger owner) TTL in hours (share design
-    /// section 3-1, D-J4: 168h, split from `invite_ttl_hours`).
+    /// section 3-1, D-J4: 168h).
     pub share_ttl_hours: i64,
 }
 
@@ -439,7 +438,6 @@ impl AuthSettings {
         if self.invitation.recovery_ttl_hours <= 0
             || self.invitation.recovery_ttl_hours > self.invitation.recovery_ttl_max_hours
             || self.invitation.setup_ttl_hours <= 0
-            || self.invitation.invite_ttl_hours <= 0
             || self.invitation.register_ttl_hours <= 0
             || self.invitation.share_ttl_hours <= 0
         {
@@ -735,7 +733,6 @@ ttl_secs = 300
 
 [auth.invitation]
 setup_ttl_hours = 24
-invite_ttl_hours = 168
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 register_ttl_hours = 168

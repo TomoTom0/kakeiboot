@@ -2,7 +2,8 @@
 //! ledger owner, non-consuming info, session-only accept that grants
 //! membership only (no user creation, no default-ledger change),
 //! upgrade-only role changes, idempotent retries, revoke, expiry, and the
-//! `POST /api/invitations` compatibility delegation to `/share?token=…`.
+//! T8 removal of the legacy invite path (`POST /api/invitations` and
+//! `invitations.kind='invite'` registration acceptance).
 
 mod common;
 
@@ -407,61 +408,48 @@ async fn issue_requires_ownership() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-// [covers:share-tickets.invitations-compat-delegation]
+// [covers:share-tickets.invitations-endpoint-removed]
 #[tokio::test]
-async fn invitations_compat_returns_share_url() {
+async fn invitations_endpoint_is_removed() {
     let (router, pool) = setup().await;
     let mut owner = Client::new();
     let owner_id = register_setup_user(&mut owner, &router, &pool, "owner").await;
     let ledger = default_ledger(&pool, owner_id).await;
 
-    // explicit ledger_id
-    let resp = owner
-        .post(
-            &router,
-            "/api/invitations",
-            serde_json::json!({ "role": "viewer", "ledger_id": ledger }),
-        )
-        .await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let body = body_json(resp).await;
-    let url = body["url"].as_str().unwrap();
-    assert!(
-        url.contains("/share?token="),
-        "compat url is a share url: {url}"
-    );
-    assert!(!url.contains("/register?token="), "no legacy register url");
-    // and it is a real share ticket: info resolves it, invitations has no row
-    let (status, info_body) = info(&Client::new(), &router, &token_of(url)).await;
-    assert_eq!(status, StatusCode::OK, "{info_body}");
+    // The compatibility delegation ended with the migration window (T8):
+    // the legacy path no longer exists, with or without a ledger_id, and
+    // nothing is issued through it.
+    for body in [
+        serde_json::json!({ "role": "viewer", "ledger_id": ledger }),
+        serde_json::json!({ "role": "editor" }),
+    ] {
+        let resp = owner.post(&router, "/api/invitations", body).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+    let tickets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ledger_share_tickets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tickets, 0, "no share ticket is issued via the legacy path");
     let inv_rows: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM invitations WHERE kind = 'invite'")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(inv_rows, 0, "no legacy invitation row is created");
-
-    // no ledger_id: the default-ledger resolution of the legacy shape holds
-    let resp = owner
-        .post(
-            &router,
-            "/api/invitations",
-            serde_json::json!({ "role": "editor" }),
-        )
-        .await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let body = body_json(resp).await;
-    assert!(body["url"].as_str().unwrap().contains("/share?token="));
 }
 
-// [covers:share-tickets.register-info-flags-legacy-invite]
+// [covers:share-tickets.register-info-rejects-legacy-invite]
 #[tokio::test]
-async fn register_info_flags_legacy_invite_as_share_migrated() {
+async fn register_info_rejects_legacy_invite() {
     let (router, pool) = setup().await;
     let mut owner = Client::new();
     let owner_id = register_setup_user(&mut owner, &router, &pool, "owner").await;
     let ledger = default_ledger(&pool, owner_id).await;
     let token = issue_invite_token(&pool, owner_id, ledger, "editor", Some("family")).await;
+    // A leftover legacy invite row is indistinguishable from an unknown
+    // token: registration acceptance for kind='invite' ended with the
+    // migration window (T8).
     let resp = Client::new()
         .post(
             &router,
@@ -469,8 +457,23 @@ async fn register_info_flags_legacy_invite_as_share_migrated() {
             serde_json::json!({ "token": token }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp).await;
-    assert_eq!(body["kind"], "invite");
-    assert_eq!(body["share_migrated"], true);
+    assert_eq!(body["error"], "invalid_token");
+    // register/start refuses it too, and the row stays unused.
+    let resp = Client::new()
+        .post(
+            &router,
+            "/api/webauthn/register/start",
+            serde_json::json!({ "token": token, "display_name": "花子" }),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let used: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invitations WHERE kind = 'invite' AND used_at IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(used, 0, "the legacy invite row is never consumed");
 }

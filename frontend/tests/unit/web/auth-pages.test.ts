@@ -205,42 +205,6 @@ describe('RegisterPage', () => {
     expect(f.to('POST', '/api/webauthn/register/start')[0]!.body).toEqual({ token: 'T' })
   })
 
-  it('[covers:web-register.invite-no-default-choice] invite は家計簿を示すが既定化の選択肢は無く finish にも送らない', async () => {
-    const f = mockFetch({
-      'POST /api/webauthn/register/info': {
-        body: { kind: 'invite', needs_display_name: true, ledger_name: '家族', role: 'editor', share_migrated: true },
-      },
-      'POST /api/webauthn/register/start': { body: CCR },
-      'POST /api/webauthn/register/finish': { body: {} },
-      'GET /api/auth/me': { body: ME },
-      'GET /api/passkeys': { body: [] },
-    })
-    const { wrapper } = await mountApp('/register?token=T')
-    const text = wrapper.find('[data-test="invite-info"]').text()
-    expect(text).toContain('家族')
-    expect(text).toContain('編集')
-    // no default-ledger checkbox anywhere in the registration flow (D-D1)
-    expect(wrapper.find('[data-test="use-invited-default"]').exists()).toBe(false)
-    // share_migrated: an already-registered visitor is pointed at a fresh
-    // share URL instead of this form (design section 9-2)
-    expect(wrapper.find('[data-test="share-migrated"]').text()).toContain('新しい共有 URL を依頼してください')
-    await wrapper.find('[data-test="display-name"]').setValue('花子')
-    await wrapper.find('form').trigger('submit')
-    await settle()
-    expect(f.to('POST', '/api/webauthn/register/finish')[0]!.body).toEqual({ credential: ATTESTATION })
-  })
-
-  it('[covers:web-register.invite-no-migrated-note] share_migrated でない invite には移行導線を出さない', async () => {
-    mockFetch({
-      'POST /api/webauthn/register/info': {
-        body: { kind: 'invite', needs_display_name: true, ledger_name: '家族', role: 'viewer' },
-      },
-    })
-    const { wrapper } = await mountApp('/register?token=T')
-    expect(wrapper.find('[data-test="invite-info"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="share-migrated"]').exists()).toBe(false)
-  })
-
   it('[covers:web-register.register-landing] register は setup と同じ画面で招待元家計簿の選択なし', async () => {
     const f = mockFetch({
       'POST /api/webauthn/register/info': { body: { kind: 'register', needs_display_name: true } },

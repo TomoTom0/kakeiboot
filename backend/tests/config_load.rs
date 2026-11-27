@@ -288,7 +288,6 @@ ttl_secs = 300
 
 [auth.invitation]
 setup_ttl_hours = 24
-invite_ttl_hours = 72
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 register_ttl_hours = {hours}
@@ -333,11 +332,10 @@ note_total_max_chars = 1000
 }
 
 // [covers:auth-invitation.register-ttl-config]
-// [covers:auth-invitation.invite-ttl-config]
 #[test]
 fn register_ttl_hours_config() {
-    // 1. every environment's auth.toml carries the web-issued TTLs extended
-    //    by TASK-46 (register 24 -> 168, invite 72 -> 168)
+    // 1. every environment's auth.toml carries the web-issued register TTL
+    //    extended by TASK-46 (register 24 -> 168)
     //    (deny_unknown_fields: the keys are mandatory once the code knows them)
     let tomls = env_auth_tomls();
     assert_eq!(tomls.len(), 3, "dev / stg / prod");
@@ -355,14 +353,12 @@ fn register_ttl_hours_config() {
                 panic!("configs/{env}/auth.toml register_ttl_hours is not an integer")
             });
         assert_eq!(hours, 168, "register ttl in {env}");
-        let invite = invitation
-            .get("invite_ttl_hours")
-            .unwrap_or_else(|| panic!("configs/{env}/auth.toml is missing invite_ttl_hours"))
-            .as_integer()
-            .unwrap_or_else(|| {
-                panic!("configs/{env}/auth.toml invite_ttl_hours is not an integer")
-            });
-        assert_eq!(invite, 168, "invite ttl in {env}");
+        // T8: the legacy invite TTL setting is gone from every environment
+        // (an unknown key would also fail the deny_unknown_fields load).
+        assert!(
+            invitation.get("invite_ttl_hours").is_none(),
+            "configs/{env}/auth.toml still carries invite_ttl_hours"
+        );
     }
 
     // 2. the key is a known field and the default 24 resolves cleanly

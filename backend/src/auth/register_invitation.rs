@@ -256,8 +256,9 @@ pub async fn revoke_by_hash(pool: &SqlitePool, hash: &[u8], now: i64) -> anyhow:
 // ---------------------------------------------------------------------------
 // registration-token resolution across both tables
 
-/// A registration token resolved across `invitations` (setup / invite /
-/// recovery) and `register_invitations` (register). Tokens are 256-bit
+/// A registration token resolved across `invitations` (setup / recovery;
+/// legacy invite rows are excluded) and `register_invitations` (register).
+/// Tokens are 256-bit
 /// random values, so a hash matches at most one row in one table; the fixed
 /// lookup order (invitations first) makes the resolution deterministic.
 #[derive(Debug, Clone)]
@@ -275,7 +276,8 @@ impl RegistrationToken {
         )
     }
 
-    /// 'setup' | 'invite' | 'recovery' | 'register' (audit / info 用).
+    /// 'setup' | 'recovery' | 'register' (audit / info 用). Legacy invite
+    /// rows never resolve into a RegistrationToken (see `is_accepted`).
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Invitation(inv) => inv.kind.as_str(),
@@ -313,7 +315,7 @@ impl RegistrationToken {
         }
     }
 
-    /// Lineage + optional invited-ledger join for user creation.
+    /// Lineage for user creation.
     pub fn user_origin(&self) -> UserOrigin {
         match self {
             Self::Invitation(inv) => match inv.kind {
@@ -322,20 +324,16 @@ impl RegistrationToken {
                     invite_note: None,
                     invited_by: None,
                     via_kind: "setup",
-                    join_ledger: None,
                 },
+                // Legacy invite rows are filtered out during token
+                // resolution (share design section 9-4, T8), so this arm
+                // never runs; kept total over InvitationKind with the
+                // no-lineage shape.
                 InvitationKind::Invite => UserOrigin {
                     admin_note: None,
-                    invite_note: inv.inviter_note.clone(),
-                    invited_by: inv.created_by,
+                    invite_note: None,
+                    invited_by: None,
                     via_kind: "invite",
-                    join_ledger: Some((
-                        inv.ledger_id
-                            .expect("invite rows carry ledger_id (CHECK-enforced)"),
-                        inv.role
-                            .clone()
-                            .expect("invite rows carry role (CHECK-enforced)"),
-                    )),
                 },
                 // recovery never creates a user (register_finish branches on
                 // is_recovery first); kept unreachable-shaped for totality.
@@ -344,7 +342,6 @@ impl RegistrationToken {
                     invite_note: None,
                     invited_by: None,
                     via_kind: "recovery",
-                    join_ledger: None,
                 },
             },
             Self::Register(r) => UserOrigin {
@@ -352,38 +349,46 @@ impl RegistrationToken {
                 invite_note: Some(r.inviter_note.clone()),
                 invited_by: Some(r.created_by),
                 via_kind: "register",
-                join_ledger: None,
             },
         }
     }
 }
 
-/// Lineage and the optional invited-ledger join carried into user creation
-/// (spec_auth.md section 7-3). `invitations` rows validate their invite-only
-/// fields at issuance (CHECK-enforced), so the expects in the Invite arm
-/// cannot fire for well-formed rows; an invariant break surfaces as an
-/// explicit panic instead of a silent ledger_id=0 / empty-role fallback.
+/// Lineage carried into user creation (spec_auth.md section 7-3). User
+/// creation never joins a ledger: membership is granted only by accepting
+/// a share ticket (share design section 2-1).
 #[derive(Debug, Clone)]
 pub struct UserOrigin {
-    /// users.admin_note (setup の CLI --note のみ。invite/register は None).
+    /// users.admin_note (setup の CLI --note のみ。register は None).
     pub admin_note: Option<String>,
-    /// users.invite_note (invite の任意メモ・register の必須メモ).
+    /// users.invite_note (register の必須メモ。setup は None).
     pub invite_note: Option<String>,
     /// users.invited_by (setup は None).
     pub invited_by: Option<i64>,
-    /// users.invited_via_kind ('setup' | 'invite' | 'register').
+    /// users.invited_via_kind ('setup' | 'register').
     pub via_kind: &'static str,
-    /// invite のみ: 招待元 ledger への所属 (ledger_id, role)。setup/register は None.
-    pub join_ledger: Option<(i64, String)>,
+}
+
+/// Whether an `invitations` row is still accepted as a registration token.
+/// Legacy invite rows (kind='invite') stopped being accepted when the
+/// migration window ended (share design section 9-4, T8): the row stays in
+/// the table for the sweep and for CLI list / revoke, but it no longer
+/// resolves as a registration token.
+fn is_accepted(inv: &InvitationRow) -> bool {
+    inv.kind != InvitationKind::Invite
 }
 
 /// Look up a token: `invitations` first, then `register_invitations`.
-/// None when the hash is unknown in both tables.
+/// None when the hash is unknown in both tables (or names a legacy invite
+/// row, which is no longer accepted).
 pub async fn find_registration_token(
     conn: &mut SqliteConnection,
     token: &[u8; 32],
 ) -> sqlx::Result<Option<RegistrationToken>> {
-    if let Some(inv) = invitation::find_by_token(conn, token).await? {
+    if let Some(inv) = invitation::find_by_token(conn, token)
+        .await?
+        .filter(is_accepted)
+    {
         return Ok(Some(RegistrationToken::Invitation(inv)));
     }
     let reg = find_by_token(conn, token).await?;
@@ -395,7 +400,10 @@ pub async fn find_registration_by_hash(
     conn: &mut SqliteConnection,
     hash: &[u8],
 ) -> sqlx::Result<Option<RegistrationToken>> {
-    if let Some(inv) = invitation::find_by_hash(conn, hash).await? {
+    if let Some(inv) = invitation::find_by_hash(conn, hash)
+        .await?
+        .filter(is_accepted)
+    {
         return Ok(Some(RegistrationToken::Invitation(inv)));
     }
     let reg = find_by_hash(conn, hash).await?;

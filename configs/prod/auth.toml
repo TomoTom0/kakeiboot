@@ -44,8 +44,6 @@ ttl_secs = 300
 [auth.invitation]
 # setup token (operator CLI): default 24 hours.
 setup_ttl_hours = 24
-# invite token (web, ledger owner): 168 hours (TASK-46).
-invite_ttl_hours = 168
 # recovery token (operator CLI): default 1 hour.
 recovery_ttl_hours = 1
 # recovery --ttl upper bound.

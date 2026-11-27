@@ -41,15 +41,9 @@ export interface Passkey {
 }
 
 export interface RegisterInfo {
-  kind: 'setup' | 'invite' | 'register' | 'recovery'
+  kind: 'setup' | 'register' | 'recovery'
   needs_display_name: boolean
-  ledger_name?: string | null
-  role?: LedgerRole | null
   user_display_name?: string | null
-  /** Legacy invite only: ledger sharing has moved to share tickets
-   * (/share), so an already-registered visitor is pointed at a fresh
-   * share URL instead of this registration form. */
-  share_migrated?: boolean
 }
 
 /** POST /api/share/info: what a share ticket joins, and who is asking.
@@ -169,7 +163,7 @@ export const authApi = {
   deleteShareTicket: (ticketRef: string) =>
     request<void>('DELETE', `/api/share-tickets/${encodeURIComponent(ticketRef)}`),
   // Registration-only invitation (TASK-32): any active user, the note is
-  // mandatory, no ledger join. Separate endpoint from /api/invitations.
+  // mandatory, no ledger join.
   createRegisterInvitation: (inviterNote: string) =>
     request<IssuedInvitation>('POST', '/api/register-invitations', { inviter_note: inviterNote }),
   // TASK-13: the user-level default ledger (web initial selection and the

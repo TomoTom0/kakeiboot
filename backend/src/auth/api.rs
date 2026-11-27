@@ -188,7 +188,6 @@ pub fn routes(state: AuthApiState) -> Router {
             "/api/passkeys/{id}",
             axum::routing::patch(rename_passkey).delete(delete_passkey),
         )
-        .route("/api/invitations", post(create_invitation))
         .route(
             "/api/share-tickets",
             post(create_share_ticket).get(list_share_tickets),
@@ -368,10 +367,12 @@ struct RegisterInfoReq {
 }
 
 /// Minimal token introspection for the registration landing form: the kind
-/// and the bits the form needs to render (display name input, invited ledger,
-/// recovery target). Tokens travel in the POST body, not the URL. The token
-/// resolves across `invitations` (setup / invite / recovery) and
-/// `register_invitations` (register).
+/// and the bits the form needs to render (display name input, recovery
+/// target). Tokens travel in the POST body, not the URL. The token
+/// resolves across `invitations` (setup / recovery) and
+/// `register_invitations` (register). Legacy invite tokens
+/// (`invitations.kind='invite'`) are no longer resolved (share design
+/// section 9-4, T8): they return the same `invalid_token` as unknown ones.
 async fn register_info(
     State(state): State<AuthApiState>,
     Json(req): Json<RegisterInfoReq>,
@@ -396,24 +397,11 @@ async fn register_info(
     let body = match &reg {
         RegistrationToken::Invitation(inv) => match inv.kind {
             InvitationKind::Setup => json!({ "kind": "setup", "needs_display_name": true }),
+            // Legacy invite rows are filtered out during token resolution
+            // (T8), so an invite never reaches this match; refuse
+            // defensively with the uniform error anyway.
             InvitationKind::Invite => {
-                let ledger: Option<String> =
-                    sqlx::query_scalar("SELECT name FROM ledgers WHERE id = ?")
-                        .bind(inv.ledger_id)
-                        .fetch_optional(&mut *conn)
-                        .await
-                        .map_err(ApiError::sqlx)?;
-                json!({
-                    "kind": "invite",
-                    "needs_display_name": true,
-                    "ledger_name": ledger,
-                    "role": inv.role,
-                    // share design section 9: legacy invite URLs keep
-                    // working during the migration window, but issuance
-                    // has moved to share tickets; the frontend uses this
-                    // flag for the migration guidance.
-                    "share_migrated": true,
-                })
+                return Err(ApiError::bad_request("invalid_token"));
             }
             InvitationKind::Recovery => {
                 let display: Option<String> = sqlx::query_scalar(
@@ -483,8 +471,6 @@ struct RegisterFinishReq {
     credential: RegisterPublicKeyCredential,
     #[serde(default)]
     label: Option<String>,
-    #[serde(default)]
-    use_invited_ledger_as_default: Option<bool>,
 }
 
 async fn register_finish(
@@ -507,7 +493,6 @@ async fn register_finish(
         &ceremony_token,
         &req.credential,
         req.label.as_deref(),
-        req.use_invited_ledger_as_default.unwrap_or(false),
         user_agent.as_deref(),
         state.tools.limits.max_ledger_name_chars,
         now,
@@ -808,18 +793,7 @@ async fn delete_passkey(
 }
 
 // ---------------------------------------------------------------------------
-// invitations from the web (spec_auth.md sections 2-1, 3-2)
-
-#[derive(Deserialize)]
-struct CreateInvitationReq {
-    role: String,
-    /// Target ledger (TASK-78): the issuer must own it. Absent = the
-    /// issuer's default ledger (the pre-TASK-78 shape).
-    #[serde(default)]
-    ledger_id: Option<i64>,
-    #[serde(default)]
-    inviter_note: Option<String>,
-}
+// share tickets from the web (share design sections 4, 6, 7)
 
 /// Resolve an explicitly named target ledger for share-ticket issuance:
 /// the issuer must own it (membership and ownership distinguish 404 from
@@ -845,36 +819,9 @@ async fn resolve_owned_ledger(
     }
 }
 
-/// The issuer's default ledger, owner only (the pre-TASK-78 invitation
-/// shape, kept for the `POST /api/invitations` compatibility input).
-async fn resolve_default_owned_ledger(state: &AuthApiState, user_id: i64) -> Result<i64, ApiError> {
-    let default_ledger: Option<Option<i64>> = sqlx::query_scalar(
-        "SELECT default_ledger_id FROM users WHERE id = ? AND disabled_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::sqlx)?;
-    let Some(Some(ledger_id)) = default_ledger else {
-        return Err(ApiError::bad_request("no_default_ledger"));
-    };
-    let role: Option<String> =
-        sqlx::query_scalar("SELECT role FROM ledger_members WHERE ledger_id = ? AND user_id = ?")
-            .bind(ledger_id)
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(ApiError::sqlx)?;
-    if role.as_deref() != Some("owner") {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "owner_required"));
-    }
-    Ok(ledger_id)
-}
-
 /// Issue one share ticket for an already-resolved owned ledger and build
-/// the 201 response. Shared by `POST /api/share-tickets` and the
-/// `POST /api/invitations` compatibility delegation (share design section
-/// 7-1): both return the `/share?token=…` URL, plaintext exactly once.
+/// the 201 response (`POST /api/share-tickets`): returns the
+/// `/share?token=…` URL, plaintext exactly once.
 async fn issue_share_ticket(
     state: &AuthApiState,
     user_id: i64,
@@ -922,27 +869,6 @@ async fn issue_share_ticket(
     *resp.status_mut() = StatusCode::CREATED;
     Ok(resp)
 }
-
-/// Compatibility delegation (share design sections 7-1, 9): the legacy
-/// invitation path keeps its input shape ({role, ledger_id?,
-/// inviter_note?}, default-ledger resolution when ledger_id is absent)
-/// but issuance now creates a share ticket and returns a `/share?token=…`
-/// URL; `/register?token=…` URLs are no longer issued here.
-async fn create_invitation(
-    State(state): State<AuthApiState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateInvitationReq>,
-) -> Result<Response, ApiError> {
-    let (s, _) = require_session(&state, &headers).await?;
-    let ledger_id = match req.ledger_id {
-        Some(explicit) => resolve_owned_ledger(&state, s.user_id, explicit).await?,
-        None => resolve_default_owned_ledger(&state, s.user_id).await?,
-    };
-    issue_share_ticket(&state, s.user_id, ledger_id, &req.role, req.inviter_note).await
-}
-
-// ---------------------------------------------------------------------------
-// share tickets from the web (share design sections 4, 6, 7)
 
 #[derive(Deserialize)]
 struct CreateShareTicketReq {

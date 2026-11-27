@@ -8,7 +8,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 
 | 役割 | 内容 | 主なパス |
 |---|---|---|
-| WebAuthn Relying Party | パスキー登録・ログイン・step-up、web セッション発行 | `/api/webauthn/*`、`/api/passkeys*`、`/api/auth/*`、`/api/invitations`、`/api/register-invitations` |
+| WebAuthn Relying Party | パスキー登録・ログイン・step-up、web セッション発行 | `/api/webauthn/*`、`/api/passkeys*`、`/api/auth/*`、`/api/register-invitations` |
 | OAuth 2.1 認可サーバー | CIMD によるクライアント識別、認可コード + PKCE、token 発行・refresh rotation・失効 | `/.well-known/oauth-authorization-server`、`/oauth/*`、`/api/oauth/*` |
 | MCP リソースサーバー | Bearer 検証、scope / role 検査、tool 実行 | `/.well-known/oauth-protected-resource[/mcp]`、`/mcp` |
 
@@ -32,22 +32,22 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 
 ### 2-1 登録の入口
 
-登録は招待制とし、オープン登録は持たない。登録用の1回限り token は `invitations`（setup / invite / recovery）と `register_invitations`（register）に保存する（256bit 乱数、DB は SHA-256 hash、平文は1回だけ表示）。
+登録は招待制とし、オープン登録は持たない。登録用の1回限り token は `invitations`（setup / recovery）と `register_invitations`（register）に保存する（256bit 乱数、DB は SHA-256 hash、平文は1回だけ表示）。
 
 | kind | 発行者 | 既定 TTL | できること |
 |---|---|---|---|
 | `setup` | 運用者 CLI（`admin token issue --kind setup --note`） | 24時間 | 新規 user と個人 ledger の作成 |
-| `invite` | 対象 ledger の owner が web 画面から（対象 ledger は発行時に選択。TASK-78） | 168時間（`invite_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成 + 招待元 ledger への参加（role は editor / viewer）。新規発行は参加チケット（2-1A）へ移行済みで、本行の受理は移行期間のみ |
+| `invite`（廃止） | — | — | 旧形式の招待 URL。参加チケット（2-1A）への移行期間終了に伴い受理を終了した（T8）。`invitations` に行が残る場合があるが登録 token としては解決されず、未知 token と同一視する。admin CLI の token 一覧・失効では残存行を引き続き扱う |
 | `recovery` | 運用者 CLI（`admin token issue --kind recovery` / `admin recovery resolve`） | 1時間（`--ttl` で最大24時間） | 対象 user へのパスキー追加のみ |
 | `register`（保存は `register_invitations` 表） | アクティブ user が web 画面から（メモ必須） | 168時間（`register_ttl_hours`。TASK-46） | 新規 user と個人 ledger の作成（家計簿への参加を伴わない） |
 
-- invite の対象 ledger は発行時に選ぶ（自分が owner の ledger のみ。無指定なら発行者の既定 ledger）。web 画面（設定の認証tab）での呼称: invite の発行 UI は「家計簿を共有」の共有語（対象家計簿名は発行 dialog で明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
+- web 画面（設定の認証tab）での呼称: 共有の発行 UI は「家計簿を共有」の共有語（対象家計簿名は発行 dialog で明示）とし、register の発行 UI を「登録の招待」とする。UI で「招待」の語を使うのは register のみ。
 
 - URL は `https://<host>/register?token=<T>`。frontend は URL から token を読んだ直後に `history.replaceState` で消し、以降は POST body で送る。
 - 未使用の register token は発行者ごとに5本まで（超過時 400 `register_open_limit`）。
 - register の inviter_note は必須・200文字まで。
-- register の発行は `POST /api/register-invitations`（invite とは別 endpoint）。
-- invite で登録した user も個人 ledger を持つ。`default_ledger_id` は常に個人 ledger とする。登録画面に既定の選択肢は置かず、`register/finish` の `use_invited_ledger_as_default` は互換のため受理するがサーバーは無視する（2-1A の分離に伴う変更。既定の変更は設定画面の `PUT /api/auth/me/default-ledger` のみ）。
+- register の発行は `POST /api/register-invitations`。
+- 登録した user は個人 ledger を持ち、`default_ledger_id` は常に個人 ledger とする。登録画面に既定の選択肢は置かない（2-1A の分離に伴う変更。既定の変更は設定画面の `PUT /api/auth/me/default-ledger` のみ）。
 - 受理 API は kind ごとに許可操作を分ける。recovery では user・ledger の作成、表示名の入力・変更、grant の変更を受け付けない。
 - 同じ user の未使用 recovery token は常に1本（発行時に既存の未使用 token を行削除してから INSERT）。
 - `users.disabled_at` が非 NULL の user はログイン・回復・招待受諾をすべて拒否する。
@@ -62,7 +62,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 - 所属付与の規則: 既存メンバーでない場合はチケットの role で参加する。既存メンバーで既存 role がチケットより弱い場合は格上げのみ行い、強い場合は変更しない（格下げはしない）。既に自分が受諾済みのチケットの再送は `already_member` として冪等に成功する。受諾は `users.default_ledger_id` と grant の `active_ledger_id` を変更しない。受諾時点で発行者の権限は再検査しない（チケットは発行時点の owner の委任として期限まで有効）。
 - 対象者は登録済み user のみとする。未登録者向けに共有 URL から登録へ橋渡しする経路は持たない（登録は register / setup の招待で別に行う）。受諾画面に登録への言及は置かず、アカウントを持たない受領者を画面から登録へ誘導しない。チケットは消費しない。
 - 一覧・失効: 発行者は `GET /api/share-tickets` で自分の未受諾チケットを一覧でき、`DELETE /api/share-tickets/{ticket_ref}`（ticket_ref は token hash の先頭8 hex。認証要素としては使わない）で失効（行削除 + audit）できる。平文 URL は発行時にしか表示されない。
-- 互換: `POST /api/invitations` は移行期間中、共有チケット発行へ委譲し `/share?token=…` 形式の URL を返す。旧形式 invite（`/register?token=…`）の受理は移行期間（新規 backend のデプロイから7日）だけ残し、その後は受理コードごと削除する。admin CLI の token 一覧・失効は `ledger_share_tickets` も横断対象とする。
+- 旧形式 invite からの移行は終了した（T8）: `POST /api/invitations`（互換委譲を含む）は削除し、旧形式 invite token は未知 token と同一視して受理しない。admin CLI の token 一覧・失効は `ledger_share_tickets` も横断対象とする。
 
 ### 2-2 ユーザー識別
 
@@ -75,7 +75,7 @@ backend（Rust / axum）が次の3役を1プロセス・単一 origin で担う�
 
 - `start_passkey_registration(uuid, name, display_name, exclude_credentials = 当該 user の既存 credential 全件)` を呼び、返された `authenticator_selection.resident_key` を `Preferred`（`requireResidentKey=false`）に上書きし、`userVerification=required` とし、passkey API 既定の拡張（credProt / uvm / credProps）を除去してから送る。`Required` は一部クライアントで端末・クラウドのパスキー（iCloud キーチェーン / Google パスワードマネージャー等）を選択肢から隠したため（TASK-7 実機確認）。これらのパスキー提供元は discoverable credential を作成するため、ボタンからのログイン（2-4）は成立する。
 - user verification は常に required（webauthn-rs passkey API の既定）。attestation は none。authenticator の機種制限はしない。
-- 新規 user 登録（setup / invite / register）の finish では、start の challenge に載せた uuid（ceremony の envelope に保持）を `users.webauthn_user_handle` として保存する。recovery と settings からの追加は既存 user の handle を使うため影響しない。
+- 新規 user 登録（setup / register）の finish では、start の challenge に載せた uuid（ceremony の envelope に保持）を `users.webauthn_user_handle` として保存する。recovery と settings からの追加は既存 user の handle を使うため影響しない。
 - ラベル（`webauthn_credentials.label`）は登録時にユーザー入力、未入力なら User-Agent 由来の既定名。
 - 登録完了の tx（`BEGIN IMMEDIATE`）で、当該 token 表（`invitations` / `register_invitations`）の `used_at` を条件付き UPDATE で設定（二重使用防止）し、kind 別処理・`webauthn_credentials` INSERT・新 web session 発行・audit を行う。recovery の場合は当該 user の既存 web session をすべて失効させる（既存パスキーと OAuth grant は変更しない）。
 
@@ -151,8 +151,8 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | メソッド・パス | 入力 | 成功 |
 |---|---|---|
 | `POST /api/webauthn/register/info` | `{token}`（受付画面用の最小情報。token は URL query でなく body で受け取る） | 200 `{kind, needs_display_name, ledger_name?, role?, user_display_name?}` |
-| `POST /api/webauthn/register/start` | `{token, display_name?}`（setup / invite / recovery。recovery は display_name を受け付けない） | 200 CreationChallengeResponse + ceremony cookie |
-| `POST /api/webauthn/register/finish` | `{credential, label?, use_invited_ledger_as_default?}` | 200 + session cookie |
+| `POST /api/webauthn/register/start` | `{token, display_name?}`（setup / register / recovery。recovery は display_name を受け付けない） | 200 CreationChallengeResponse + ceremony cookie |
+| `POST /api/webauthn/register/finish` | `{credential, label?}` | 200 + session cookie |
 | `POST /api/webauthn/login/start` | `{req?}` | 200 RequestChallengeResponse + ceremony cookie |
 | `POST /api/webauthn/login/finish` | `{credential}` | 200 `{next}` + session cookie |
 | `POST /api/webauthn/reauth/start` / `finish` | session | 200（`auth_at` 更新） |
@@ -160,7 +160,6 @@ WHERE c.credential_id = :cred_id AND u.disabled_at IS NULL;
 | `GET /api/passkeys` | session | `[{id, label, created_at, last_used_at, backup_state}]` |
 | `PATCH /api/passkeys/{id}` | session、`{label}` | 200 |
 | `DELETE /api/passkeys/{id}` | session + step-up | 204 / 409（最後の1本） |
-| `POST /api/invitations` | session、対象 ledger の owner（`ledger_id` で指定。無指定は既定 ledger。TASK-78）、`{role, ledger_id?, inviter_note?}` | 201 `{url, expires_at}`（URL は1回だけ返す。対象が editor 以下なら 403 `owner_required`・非所属/不在は 404） |
 | `POST /api/register-invitations` | session（全アクティブuser）、`{inviter_note}`（必須・200文字まで） | 201 `{url, expires_at}`（URL は1回だけ返す） |
 | `POST /api/share-tickets` | session、対象 ledger の owner、`{ledger_id, role, inviter_note?}` | 201 `{url, expires_at}`（URL は `/share?token=…` で1回だけ返す。非所属は 404、owner でない所属は 403 `owner_required`） |
 | `GET /api/share-tickets` | session | 200 `[{ticket_ref, ledger_id, ledger_name, role, created_at, expires_at, inviter_note}]`（自分の未受諾・期限内のチケット。平文は含めない） |
@@ -484,13 +483,13 @@ MCP の対象 ledger は grant 単位の選択状態 `oauth_grants.active_ledger
 | メモ | 書く人 | 保存先 | 編集 |
 |---|---|---|---|
 | 運用者メモ | 運用者（setup token 発行時の `--note` は必須、recovery 発行時は任意） | `invitations.operator_note` → 登録時に `users.admin_note` へ複製 | `admin user note` のみ |
-| 招待者メモ | 招待者（web の invite 発行時に任意入力・登録招待〔register〕発行時は必須） | `invitations.inviter_note` / `register_invitations.inviter_note` → 登録時に `users.invite_note` へ複製 | なし |
+| 招待者メモ | 招待者（登録招待〔register〕発行時に必須入力。共有チケット発行時は任意） | `register_invitations.inviter_note` / `ledger_share_tickets.inviter_note` → 登録時に `users.invite_note` へ複製（register のみ） | なし |
 
 - どちらも運用者 CLI だけで表示し、web 画面・MCP には出さない。CLI では招待者メモが運用者の確認した情報ではないことを区別して表示する。
 
 ### 7-3 招待の系譜
 
-- 登録時に `users.invited_by`（招待した user。setup は NULL）と `users.invited_via_kind`（setup / invite / register）を記録する（`invitations` / `register_invitations` は TTL で削除されるため）。invite・register とも `invited_by` に発行者が入る。
+- 登録時に `users.invited_by`（招待した user。setup は NULL）と `users.invited_via_kind`（setup / register。新規登録ではこの2値のみ。過去に invite で登録した user の行には `invite` が残る）を記録する（`invitations` / `register_invitations` は TTL で削除されるため）。register は `invited_by` に発行者が入る。
 - CLI の `user show` で招待元の連鎖・所属 ledger・同じ ledger の他メンバーを表示する。
 
 ### 7-4 subject hash の記録
@@ -546,7 +545,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 | `admin session list <user_id>` / `session revoke <session_id \| --all-of <user_id>>` | web session 一覧（作成・最終利用日時、User-Agent。hash の先頭 8 hex で識別）と失効 |
 | `admin token issue --kind setup --note <誰に渡したか> [--ttl <dur>]` | setup URL 発行（既定 TTL 24時間、`--note` 必須） |
 | `admin token issue --kind recovery --user <user_id> [--ttl <dur>]` | パスキー再登録 URL 発行（既定 TTL 1時間、上限24時間）。同 user の未使用 recovery token を行削除してから発行 |
-| `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。invite / register の発行は web のみ（CLI では不可） |
+| `admin token list [--kind] [--user]` / `token revoke <token_id>` | 未使用 token の一覧・失効（行削除。hash の先頭 8 hex で識別）。`--kind register` は `register_invitations` から表示（`issued_by=`・`inviter:` 接頭辞。`--user` との併用は不可: register token に target user の概念は無い）。--kind 無しは両表を日時降順で merge。`token revoke` の hash prefix は `invitations` と `register_invitations` の両表から解決（合算で一意なこと）。register の発行は web のみ（CLI では不可）。invite は廃止済みで発行経路を持たない |
 | `admin recovery list [--status open]` / `recovery show <R-番号>` | 回復依頼の一覧・詳細（受付日時、note、候補 user のアカウント番号・表示名・admin_note・系譜・候補の根拠と subject の first / last seen）。一覧の先頭に全体上限の超過件数を表示 |
 | `admin recovery resolve <R-番号> --user <user_id>` / `recovery reject <R-番号> [--reason]` | 帯域外の本人確認後に再登録 URL を発行して解決（`token issue --kind recovery` と同じ処理・確認）／却下 |
 | `admin backup --dest <file>` | DB の一貫 snapshot（単一 file）を `--dest` へ生成。db path は `--config-dir` の config から解決する（script に絶対 path を書かない）。WAL 運用中（サーバー稼働中）でも取得可。運用 backup（`docs/ops/ops_deploy.md`）と script（`scripts/backup/`）から利用 |
@@ -638,7 +637,7 @@ CLI（`budget-book admin ...`）はサーバーと同じ `configs/` を読み、
 
 ## 11. シーケンス
 
-### 11-1 登録（setup / invite / register / recovery 共通）
+### 11-1 登録（setup / register / recovery 共通）
 
 ```mermaid
 sequenceDiagram
@@ -655,7 +654,7 @@ sequenceDiagram
   U->>B: POST /api/webauthn/register/finish {credential, label}
   B->>D: ceremony 取得・削除
   B->>B: finish_passkey_registration
-  B->>D: BEGIN IMMEDIATE: 当該 token 表の used_at（invitations / register_invitations。条件付き UPDATE）/ kind 別処理（setup・invite・register: users・ledgers・ledger_members 作成、メモと系譜の複製〔register は参加なし〕。recovery: パスキー追加のみ）/ webauthn_credentials INSERT / recovery は既存 web_sessions 全失効 / web_sessions INSERT / audit / COMMIT
+  B->>D: BEGIN IMMEDIATE: 当該 token 表の used_at（invitations / register_invitations。条件付き UPDATE）/ kind 別処理（setup・register: users・ledgers・ledger_members 作成、メモと系譜の複製〔いずれも参加なし〕。recovery: パスキー追加のみ）/ webauthn_credentials INSERT / recovery は既存 web_sessions 全失効 / web_sessions INSERT / audit / COMMIT
   B-->>U: 200 + Set-Cookie __Host-bb_session
 ```
 

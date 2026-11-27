@@ -9,9 +9,11 @@ import { useSessionStore } from '../stores/session'
 import AppIcon from '../components/AppIcon.vue'
 import BrandLogo from '@/shared/components/BrandLogo.vue'
 
-// Registration landing for setup / invite / register / recovery URLs
+// Registration landing for setup / register / recovery URLs
 // (spec_auth.md 2-1, 2-3, 3-2). The token is read once, removed from the
 // URL with a history replace, and only sent in POST bodies afterwards.
+// Legacy invite URLs are no longer accepted (share design section 9-4):
+// ledger sharing lives on ShareAcceptPage (/share) now.
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
@@ -25,7 +27,6 @@ const busy = ref(false)
 const displayName = ref('')
 const label = ref('')
 
-const ROLE_LABEL: Record<string, string> = { owner: 'オーナー', editor: '編集', viewer: '閲覧のみ' }
 const title = computed(() =>
   info.value?.kind === 'recovery' ? 'パスキーの再登録' : 'アカウント登録',
 )
@@ -118,20 +119,6 @@ async function submit(): Promise<void> {
       <p v-if="info.kind === 'setup' || info.kind === 'register'">
         新しいアカウントと、あなた専用の家計簿を作成します。
       </p>
-      <div
-        v-if="info.kind === 'invite'"
-        data-test="invite-info"
-      >
-        <p>
-          家計簿「{{ info.ledger_name }}」に{{ ROLE_LABEL[info.role ?? ''] ?? info.role }}の権限で招待されています。あなた専用の家計簿も作成されます。
-        </p>
-        <p
-          v-if="info.share_migrated"
-          data-test="share-migrated"
-        >
-          既にアカウントをお持ちの方は、発行者に新しい共有 URL を依頼してください。
-        </p>
-      </div>
       <p
         v-if="info.kind === 'recovery'"
         data-test="recovery-info"

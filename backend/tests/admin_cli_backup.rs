@@ -71,7 +71,6 @@ ttl_secs = 300
 
 [auth.invitation]
 setup_ttl_hours = 24
-invite_ttl_hours = 168
 recovery_ttl_hours = 1
 recovery_ttl_max_hours = 24
 register_ttl_hours = 168

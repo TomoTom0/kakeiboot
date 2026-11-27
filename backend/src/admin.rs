@@ -255,7 +255,9 @@ pub fn validate_args(cli: &Cli) -> anyhow::Result<()> {
                 anyhow::bail!("--user is only valid for --kind recovery");
             }
         }
-        TokenKind::Invite => anyhow::bail!("invite tokens are issued from the web UI, not the CLI"),
+        TokenKind::Invite => anyhow::bail!(
+            "invite tokens are no longer issued (abolished kind; ledger sharing uses share tickets)"
+        ),
         TokenKind::Register => {
             anyhow::bail!("register tokens are issued from the web UI, not the CLI")
         }
@@ -996,7 +998,7 @@ async fn token_issue(
         TokenKind::Setup => ttl
             .and_then(parse_ttl)
             .unwrap_or(auth.invitation.setup_ttl_hours * 3_600_000),
-        TokenKind::Invite => anyhow::bail!("invite tokens are issued from the web UI"),
+        TokenKind::Invite => anyhow::bail!("invite tokens are no longer issued (abolished kind)"),
         // validate_args bails first; kept symmetric to the invite arm.
         TokenKind::Register => anyhow::bail!("register tokens are issued from the web UI"),
         TokenKind::Recovery => {

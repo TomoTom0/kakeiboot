@@ -1,5 +1,5 @@
 //! WebAuthn ceremony service (spec_auth.md sections 2-3 .. 2-7, 11-1, 11-2):
-//! registration (setup / invite / recovery), discoverable login, step-up
+//! registration (setup / register / recovery), discoverable login, step-up
 //! re-authentication, and adding a passkey while logged in.
 //!
 //! Ceremony state lives in `webauthn_ceremonies` (TTL from config), wrapped in
@@ -26,7 +26,7 @@ use crate::store;
 struct Envelope {
     /// Invitation token hash (hex) when this registration consumes a token.
     invitation_hash: Option<String>,
-    /// Display name captured at register/start (setup / invite only).
+    /// Display name captured at register/start (setup / register only).
     display_name: Option<String>,
     /// The user handle (uuid bytes) issued in the register/start challenge.
     /// New-user registrations MUST persist this exact handle as
@@ -149,7 +149,7 @@ pub struct RegisterStartOutcome {
 /// Validate the token (invitations / register_invitations), start a
 /// discoverable-credential registration with `resident_key = preferred`
 /// (spec_auth.md section 2-3). Recovery targets an existing user; every
-/// other kind (setup / invite / register) creates a new one.
+/// other kind (setup / register) creates a new one.
 pub async fn register_start(
     pool: &SqlitePool,
     webauthn: &Webauthn,
@@ -284,7 +284,6 @@ pub async fn register_finish(
     ceremony_token: &[u8; TOKEN_LEN],
     credential: &RegisterPublicKeyCredential,
     label: Option<&str>,
-    use_invited_ledger_as_default: bool,
     user_agent: Option<&str>,
     max_ledger_name_chars: usize,
     now: i64,
@@ -350,18 +349,14 @@ pub async fn register_finish(
             .clone()
             .ok_or(RegisterFinishError::Invariant)?;
         let handle = Uuid::from_slice(&handle).map_err(|_| RegisterFinishError::Invariant)?;
-        // Share design section 5 (D-D1): `use_invited_ledger_as_default`
-        // is accepted for request compatibility during the migration
-        // window but ignored server-side — a new user's default is always
+        // Share design section 5 (D-D1): a new user's default is always
         // their personal ledger; the default changes only through
         // PUT /api/auth/me/default-ledger.
-        let _ = use_invited_ledger_as_default;
         create_user_with_personal_ledger(
             &mut tx,
             &handle,
             &display_name,
             &reg.user_origin(),
-            false,
             max_ledger_name_chars,
             now,
         )
@@ -443,21 +438,19 @@ pub async fn register_finish(
 }
 
 /// Create a user with a personal ledger (owner) and the category seed, then
-/// set `default_ledger_id` (spec_data-model.md section 4). Lineage comes
-/// from the `UserOrigin`; when it carries an invited-ledger join (invite
-/// only) the user additionally joins that ledger with the invited role, and
-/// `use_invited_ledger_as_default` may make it the default instead. Setup
-/// and register (no join) behave identically. `handle` is the uuid from the
-/// register/start challenge — the value the credential will present at every
-/// login, so it must be the stored `webauthn_user_handle` verbatim. The
-/// personal ledger is named `<表示名>の家計簿` (TASK-79), capped to
+/// set `default_ledger_id` to the personal ledger (spec_data-model.md
+/// section 4). Lineage comes from the `UserOrigin`; user creation never
+/// joins another ledger (share design section 2-1: identity creation does
+/// not change membership). `handle` is the uuid from the register/start
+/// challenge — the value the credential will present at every login, so it
+/// must be the stored `webauthn_user_handle` verbatim. The personal ledger
+/// is named `<表示名>の家計簿` (TASK-79), capped to
 /// `max_ledger_name_chars` by `store::personal_ledger_name`.
 async fn create_user_with_personal_ledger(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     handle: &Uuid,
     display_name: &str,
     origin: &UserOrigin,
-    use_invited_ledger_as_default: bool,
     max_ledger_name_chars: usize,
     now: i64,
 ) -> Result<i64, RegisterFinishError> {
@@ -503,26 +496,8 @@ async fn create_user_with_personal_ledger(
     .execute(&mut **tx)
     .await
     .map_err(anyhow::Error::from)?;
-    let default_ledger_id = match (&origin.join_ledger, use_invited_ledger_as_default) {
-        (Some((join_ledger, _)), true) => Some(*join_ledger),
-        _ => Some(ledger_id),
-    };
-    if let Some((join_ledger, role)) = &origin.join_ledger {
-        let color = store::assign_member_color(tx, user_id).await?;
-        sqlx::query(
-            "INSERT INTO ledger_members (ledger_id, user_id, role, created_at, color) VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(join_ledger)
-        .bind(user_id)
-        .bind(role)
-        .bind(now)
-        .bind(color)
-        .execute(&mut **tx)
-        .await
-        .map_err(anyhow::Error::from)?;
-    }
     sqlx::query("UPDATE users SET default_ledger_id = ? WHERE id = ?")
-        .bind(default_ledger_id)
+        .bind(ledger_id)
         .bind(user_id)
         .execute(&mut **tx)
         .await
