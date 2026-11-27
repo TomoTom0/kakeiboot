@@ -51,6 +51,64 @@ pub struct AuthenticatedClient {
     pub client_id: String,
 }
 
+/// Why a client authentication attempt was rejected, logged at warn level
+/// with a stable `reason` tag. Every rejection otherwise collapses into a
+/// bare `invalid_client` response, which made a run of token-endpoint 401s
+/// (2026-11-27, ChatGPT refresh + code exchange) impossible to attribute to
+/// a specific check. Only non-secret material is logged: the header alg/kid,
+/// the client_id (a public CIMD URL), and — on decode failure — the
+/// *unverified* claims' iss/sub/aud/exp/iat values plus the jti's presence.
+/// The signature, the jti value, and the assertion itself are never logged.
+fn warn_rejected(reason: &'static str, client_id: &str) {
+    tracing::warn!(reason, client_id, "client assertion rejected");
+}
+
+/// The unverified claims of an assertion, for rejection diagnostics only
+/// (see `warn_rejected`). Parsed from the payload without any verification;
+/// never used for an authentication decision.
+struct UnverifiedClaims {
+    iss: Option<String>,
+    sub: Option<String>,
+    aud: Option<String>,
+    exp: Option<i64>,
+    iat: Option<i64>,
+    jti_present: bool,
+}
+
+fn unverified_claims(assertion: &str) -> Option<UnverifiedClaims> {
+    let mut parts = assertion.split('.');
+    let (_h, p) = (parts.next()?, parts.next()?);
+    let payload = crate::auth::tokens::b64url_decode(p)?;
+    let value: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let aud = match value.get("aud") {
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(serde_json::Value::Array(a)) => Some(
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    };
+    Some(UnverifiedClaims {
+        iss: value
+            .get("iss")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        sub: value
+            .get("sub")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        aud,
+        exp: value.get("exp").and_then(|v| v.as_i64()),
+        iat: value.get("iat").and_then(|v| v.as_i64()),
+        jti_present: value
+            .get("jti")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty()),
+    })
+}
+
 /// Verify client authentication per the CIMD-declared method.
 ///
 /// * `method == none`: `client_id` form parameter only (PKCE carries the rest).
@@ -73,14 +131,17 @@ pub async fn authenticate_client(
         AuthMethod::None => {
             if client_assertion.is_some() {
                 // a client declaring `none` must not send assertions
+                warn_rejected("assertion_unexpected_for_none", &record.client_id);
                 return Err(AssertionError::MethodMismatch(
                     "client_assertion sent but the client declares token_endpoint_auth_method=none",
                 ));
             }
             let Some(client_id) = form_client_id else {
+                warn_rejected("client_id_missing", &record.client_id);
                 return Err(AssertionError::Invalid);
             };
             if client_id != record.client_id {
+                warn_rejected("client_id_mismatch", &record.client_id);
                 return Err(AssertionError::Invalid);
             }
             Ok(AuthenticatedClient {
@@ -88,19 +149,36 @@ pub async fn authenticate_client(
             })
         }
         AuthMethod::PrivateKeyJwt => {
-            let assertion = client_assertion.ok_or(AssertionError::Missing)?;
+            let Some(assertion) = client_assertion else {
+                warn_rejected("assertion_missing", &record.client_id);
+                return Err(AssertionError::Missing);
+            };
             // the URN is REQUIRED (RFC 7523 2.2): absent and mismatched values
             // are both rejected
             if client_assertion_type != Some(ASSERTION_TYPE) {
+                tracing::warn!(
+                    reason = "assertion_type_mismatch",
+                    client_id = record.client_id,
+                    assertion_type = client_assertion_type.unwrap_or("<absent>"),
+                    "client assertion rejected"
+                );
                 return Err(AssertionError::Invalid);
             }
             if let Some(cid) = form_client_id
                 && cid != record.client_id
             {
+                warn_rejected("client_id_mismatch", &record.client_id);
                 return Err(AssertionError::Invalid);
             }
             let claims = verify_assertion(pool, fetch, cfg, record, assertion, now).await?;
             if claims.iss != record.client_id || claims.sub != record.client_id {
+                tracing::warn!(
+                    reason = "iss_sub_mismatch",
+                    client_id = record.client_id,
+                    iss = claims.iss,
+                    sub = claims.sub,
+                    "client assertion rejected"
+                );
                 return Err(AssertionError::Invalid);
             }
             register_jti(pool, &record.client_id, &claims.jti, claims.exp).await?;
@@ -129,17 +207,55 @@ async fn verify_assertion(
     assertion: &str,
     now: i64,
 ) -> Result<AssertionClaims, AssertionError> {
-    let header = decode_header(assertion).map_err(|_| AssertionError::Invalid)?;
+    let header = match decode_header(assertion) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(
+                reason = "header_parse",
+                client_id = record.client_id,
+                error_kind = ?e.kind(),
+                "client assertion rejected"
+            );
+            return Err(AssertionError::Invalid);
+        }
+    };
     let alg = match header.alg {
         Algorithm::RS256 | Algorithm::PS256 | Algorithm::ES256 => header.alg,
-        _ => return Err(AssertionError::Invalid),
+        other => {
+            tracing::warn!(
+                reason = "alg_rejected",
+                client_id = record.client_id,
+                alg = ?other,
+                "client assertion rejected"
+            );
+            return Err(AssertionError::Invalid);
+        }
     };
     let Some(kid) = header.kid else {
+        tracing::warn!(
+            reason = "kid_missing",
+            client_id = record.client_id,
+            alg = ?alg,
+            "client assertion rejected"
+        );
         return Err(AssertionError::Invalid);
     };
 
     let jwk = select_jwk(pool, fetch, cfg, record, alg, &kid, now).await?;
-    let key = DecodingKey::from_jwk(&jwk).map_err(|_| AssertionError::Invalid)?;
+    let key = match DecodingKey::from_jwk(&jwk) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!(
+                reason = "jwk_decode_failed",
+                client_id = record.client_id,
+                alg = ?alg,
+                kid,
+                error_kind = ?e.kind(),
+                "client assertion rejected"
+            );
+            return Err(AssertionError::Invalid);
+        }
+    };
 
     // Validation for exactly this alg; aud covers issuer and token endpoint;
     // leeway = clock_skew_secs; required claims verified by the lib.
@@ -153,19 +269,62 @@ async fn verify_assertion(
     // aud must be present (a missing aud is not "any audience")
     validation.set_required_spec_claims(&["exp", "aud", "iss", "sub"]);
 
-    let data = decode::<AssertionClaims>(assertion, &key, &validation)
-        .map_err(|_| AssertionError::Invalid)?;
+    // On failure the error kind discriminates the cause (InvalidSignature,
+    // InvalidAudience, InvalidIssuer, InvalidSubject, ExpiredSignature,
+    // ImmatureSignature, MissingRequiredClaim, ...); the unverified claims
+    // are logged alongside so e.g. an audience mismatch is visible directly.
+    let data = match decode::<AssertionClaims>(assertion, &key, &validation) {
+        Ok(d) => d,
+        Err(e) => {
+            let peek = unverified_claims(assertion);
+            tracing::warn!(
+                reason = "signature_or_claims",
+                client_id = record.client_id,
+                alg = ?alg,
+                kid,
+                error_kind = ?e.kind(),
+                iss = peek.as_ref().and_then(|p| p.iss.as_deref()).unwrap_or("<absent>"),
+                sub = peek.as_ref().and_then(|p| p.sub.as_deref()).unwrap_or("<absent>"),
+                aud = peek.as_ref().and_then(|p| p.aud.as_deref()).unwrap_or("<absent>"),
+                exp = ?peek.as_ref().and_then(|p| p.exp),
+                iat = ?peek.as_ref().and_then(|p| p.iat),
+                jti_present = peek.as_ref().is_some_and(|p| p.jti_present),
+                "client assertion rejected"
+            );
+            return Err(AssertionError::Invalid);
+        }
+    };
     let claims = data.claims;
 
     // manual checks beyond the library (spec_auth.md 4-4)
     if claims.exp - claims.iat > 300 {
+        tracing::warn!(
+            reason = "exp_iat_window",
+            client_id = record.client_id,
+            exp = claims.exp,
+            iat = claims.iat,
+            "client assertion rejected"
+        );
         return Err(AssertionError::Invalid);
     }
     // iat must not be more than 60s in the future
     if claims.iat > now / 1000 + cfg.oauth.clock_skew_secs {
+        tracing::warn!(
+            reason = "iat_future",
+            client_id = record.client_id,
+            iat = claims.iat,
+            now_secs = now / 1000,
+            "client assertion rejected"
+        );
         return Err(AssertionError::Invalid);
     }
     if claims.jti.is_empty() || claims.jti.len() > 256 {
+        tracing::warn!(
+            reason = "jti_shape",
+            client_id = record.client_id,
+            jti_len = claims.jti.len(),
+            "client assertion rejected"
+        );
         return Err(AssertionError::Invalid);
     }
     Ok(claims)
@@ -185,7 +344,16 @@ async fn select_jwk(
     let source: String = match (&record.jwks_uri, &record.jwks_inline) {
         (Some(uri), _) => uri.clone(),
         (None, Some(_)) => super::cimd::inline_jwks_cache_key(&record.client_id),
-        _ => return Err(AssertionError::Invalid),
+        _ => {
+            tracing::warn!(
+                reason = "jwks_source_missing",
+                client_id = record.client_id,
+                alg = ?alg,
+                kid,
+                "client assertion rejected"
+            );
+            return Err(AssertionError::Invalid);
+        }
     };
 
     let load = |jwks_json: &str| -> Option<Jwk> {
@@ -210,11 +378,42 @@ async fn select_jwk(
         }
         // fresh cache without the kid: refetch only after 60 seconds
         if now - fetched_at < 60_000 {
+            tracing::warn!(
+                reason = "jwks_kid_not_found",
+                client_id = record.client_id,
+                alg = ?alg,
+                kid,
+                detail = "fresh_cache_refetch_throttled",
+                "client assertion rejected"
+            );
             return Err(AssertionError::Invalid);
         }
         return match refetch(pool, fetch, &source, etag.clone(), now).await? {
-            Some(json) => load(&json).ok_or(AssertionError::Invalid),
-            None => Err(AssertionError::Invalid),
+            Some(json) => match load(&json) {
+                Some(k) => Ok(k),
+                None => {
+                    tracing::warn!(
+                        reason = "jwks_kid_not_found",
+                        client_id = record.client_id,
+                        alg = ?alg,
+                        kid,
+                        detail = "after_refetch",
+                        "client assertion rejected"
+                    );
+                    Err(AssertionError::Invalid)
+                }
+            },
+            None => {
+                tracing::warn!(
+                    reason = "jwks_kid_not_found",
+                    client_id = record.client_id,
+                    alg = ?alg,
+                    kid,
+                    detail = "refetch_no_change",
+                    "client assertion rejected"
+                );
+                Err(AssertionError::Invalid)
+            }
         };
     }
 
@@ -228,7 +427,20 @@ async fn select_jwk(
     )
     .await?
     {
-        Some(json) => load(&json).ok_or(AssertionError::Invalid),
+        Some(json) => match load(&json) {
+            Some(k) => Ok(k),
+            None => {
+                tracing::warn!(
+                    reason = "jwks_kid_not_found",
+                    client_id = record.client_id,
+                    alg = ?alg,
+                    kid,
+                    detail = "after_fetch",
+                    "client assertion rejected"
+                );
+                Err(AssertionError::Invalid)
+            }
+        },
         None => {
             if let Some((jwks_json, _, _, expires_at)) = &row
                 && expires_at + 24 * 86_400_000 > now
@@ -236,6 +448,14 @@ async fn select_jwk(
             {
                 return Ok(k);
             }
+            tracing::warn!(
+                reason = "jwks_unavailable",
+                client_id = record.client_id,
+                alg = ?alg,
+                kid,
+                detail = "fetch_failed_or_not_modified_and_no_usable_stale_cache",
+                "client assertion rejected"
+            );
             Err(AssertionError::Invalid)
         }
     }
@@ -317,7 +537,15 @@ async fn refetch(
             Ok(Some(body))
         }
         Ok(None) => Ok(None),
-        Err(_) => Ok(None),
+        Err(e) => {
+            tracing::warn!(
+                reason = "jwks_fetch_failed",
+                jwks_uri,
+                error = %e,
+                "JWKS fetch failed; falling back to the stale cache if usable"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -348,6 +576,12 @@ async fn register_jti(
             Ok(())
         }
         Err(sqlx::Error::Database(ref e)) if e.is_unique_violation() => {
+            tracing::warn!(
+                reason = "jti_replay",
+                client_id,
+                jti_len = jti.len(),
+                "client assertion rejected"
+            );
             Err(AssertionError::Invalid)
         }
         Err(e) => Err(anyhow::Error::from(e).into()),
