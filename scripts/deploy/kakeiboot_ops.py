@@ -13,15 +13,20 @@ either locally or over ssh depending on the `transport` key:
                        enabled via configs/deploy.local.toml)
 
 Subcommands (env is an argument; the stg/prod task prefix maps to --env):
-  deploy         rsync 5 steps -> systemctl restart -> healthz retry loop
+  deploy         stage artifacts on the target -> place the binary and the
+                 backup script via the kakeiboot-deploy wrapper (installed
+                 as kakeiboot:srvops) -> rsync configs + dist (dist re-owned
+                 via the wrapper) -> systemctl restart -> healthz retry loop
                  (stg only: prod distribution goes through promote -- TASK-189)
   promote        distribute the RUNNING stg runtime-dir artifacts to prod:
                  stg prechecks (healthz + service start >= binary mtime),
                  sha256 display both sides, configs drift preview, archive the
-                 previous prod artifacts to releases/<utc-timestamp>/, rsync
-                 binary + backup script + dist stg->prod ON the runtime host,
-                 restart kakeiboot-prod, healthz. No build (repo-independent),
-                 no configs distribution (that is the configs subcommand).
+                 previous prod artifacts to releases/<utc-timestamp>/, place
+                 binary + backup script via the kakeiboot-deploy wrapper and
+                 rsync dist stg->prod ON the runtime host (artifacts re-owned
+                 to kakeiboot:srvops), restart kakeiboot-prod, healthz. No
+                 build (repo-independent), no configs distribution (that is
+                 the configs subcommand).
   configs        mkdir + rsync configs/<env>/ to the runtime dir (--checksum,
                  --delete; no restart/healthz). --preview adds rsync's own
                  --dry-run: the transfer-free itemized diff (drift check path).
@@ -46,6 +51,7 @@ Standard library only. Run with: uv run --no-project python scripts/deploy/kakei
 from __future__ import annotations
 
 import argparse
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -71,7 +77,7 @@ ENVS = ("stg", "prod")
 
 # install-units destinations (system form, matching the gt430 host-side
 # conversion script for the 2026-11-17 system-service conversion): the backup
-# units live only as system units now, so the fixed run user (User=tomo) is in
+# units live only as system units now, so the fixed run user (User=kakeiboot) is in
 # the .in template and /etc writes go through `sudo install` (root:root 644 =
 # the systemd/polkit default). Standard system locations, not environment
 # settings -- deploy_root stays the single deploy.toml path source.
@@ -87,6 +93,30 @@ BACKUP_POLKIT_RULE_NAME = "49-dual-operator-kakeiboot-backup.rules"
 # the first operator's run as a 0700 dir owned by them and blocks the other
 # operator's rsync.
 BACKUP_UNIT_STAGE_PREFIX = "/tmp/kakeiboot-units-install"
+
+# Service-account migration (dedicated `kakeiboot` account runs stg + prod +
+# backup; design: kakeiboot service-account migration, step 3): deploy/promote
+# place the artifacts as kakeiboot:srvops so the run user owns what the deploy
+# procedure chmods and replaces. The placement goes through the root-owned
+# wrapper /usr/local/sbin/kakeiboot-deploy (installed on the target by the
+# host migration, step 4): gt430's sudo is sudo-rs, whose sudoers parser
+# accepts NO wildcards in command arguments, so a sudoers grant cannot scope
+# `install`/`chown` by path -- the wrapper validates that every target path
+# is inside the kakeiboot tree and runs install -o kakeiboot -g srvops
+# -m 0770 / chown -R kakeiboot:srvops itself, and the sudoers entry names
+# only the wrapper. Single files use its install-file subcommand; trees (the
+# frontend dist, the releases generations) keep their rsync/cp transfer and
+# are re-owned with its chown-tree subcommand. The wrapper takes effect with
+# the host migration (step 4): until then these plans must not be run
+# against the real host.
+DEPLOY_WRAPPER = "/usr/local/sbin/kakeiboot-deploy"
+# Deploy staging dir on the target (per env): the artifact sources are local
+# files (build output, repo script), while the wrapper's install-file reads
+# a path on the target, so the binary and the backup script are rsynced here
+# first and removed at the end of the plan -- the install-units staging
+# pattern, with the env as the per-invocation discriminator instead of a
+# local staged dir.
+ARTIFACT_STAGE_PREFIX = "/tmp/kakeiboot-artifacts-install"
 
 # Polkit rule installed alongside the units (same content as the host
 # conversion script): both operators manage the backup unit instances as
@@ -247,36 +277,77 @@ def rsync_exec(cfg: DeployConfig, opts: list[str], src: str, dst: str) -> list[s
     return ["rsync", *opts, src, dst]
 
 
-def build_deploy_commands(cfg: DeployConfig, env: str, port: int) -> list[list[str]]:
-    """Deploy plan, same order and strings as the legacy mise run array (local mode)."""
+def build_deploy_commands(cfg: DeployConfig, env: str, port: int, stage: str) -> list[list[str]]:
+    """Deploy plan: stage the single-file artifacts on the target, place them
+    via the kakeiboot-deploy wrapper as kakeiboot:srvops (service-account
+    migration), rsync configs + dist (dist re-owned via the wrapper's
+    chown-tree), restart, healthz.
+
+    The binary and the backup script are placed by the wrapper's
+    install-file, not rsync: the operator cannot chown, so an rsynced file
+    would stay operator-owned while the service (running as the dedicated
+    kakeiboot account) is the identity that must own what deploy replaces
+    and chmods. The staging dir follows the install-units pattern
+    (target-side dir, removed at the end of the plan) and is unique per
+    invocation -- the caller (cmd_deploy) generates it: a fixed name would
+    strand a failed run's staging dir under /tmp's sticky bit, owned by one
+    operator and unremovable by the other, blocking the recovery deploy.
+    The dist tree keeps its rsync --delete transfer (install has no
+    recursive form) and is re-owned wholesale afterwards; configs keep
+    their rsync too (their ownership form is the configs subcommand's
+    concern, unchanged here).
+    """
     root = cfg.deploy_root
     return [
-        rsync_exec(cfg, ["-a"], "target/debug/budget-book", f"{root}/{env}/budget-book"),
-        remote_exec(cfg, ["mkdir", "-p", f"{root}/{env}/bin"]),
+        remote_exec(cfg, ["mkdir", "-p", stage]),
+        rsync_exec(cfg, ["-a"], "target/debug/budget-book", f"{stage}/budget-book"),
         rsync_exec(
             cfg,
             ["-a"],
             "scripts/backup/kakeiboot-backup.sh",
-            f"{root}/{env}/bin/kakeiboot-backup.sh",
+            f"{stage}/kakeiboot-backup.sh",
         ),
-        rsync_exec(cfg, ["-a", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
-        rsync_exec(cfg, ["-a", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
+        remote_exec(
+            cfg,
+            deploy_install_artifact(f"{stage}/budget-book", f"{root}/{env}/budget-book"),
+        ),
+        remote_exec(cfg, ["mkdir", "-p", f"{root}/{env}/bin"]),
+        remote_exec(
+            cfg,
+            deploy_install_artifact(
+                f"{stage}/kakeiboot-backup.sh", f"{root}/{env}/bin/kakeiboot-backup.sh"
+            ),
+        ),
+        rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], f"configs/{env}/", f"{root}/{env}/configs/{env}/"),
+        rsync_exec(cfg, ["-a", "--no-perms", "--omit-dir-times", "--delete"], "frontend/dist/", f"{root}/{env}/frontend/dist/"),
+        remote_exec(cfg, deploy_chown_tree(f"{root}/{env}/frontend/dist")),
+        remote_exec(cfg, ["rm", "-rf", stage]),
         remote_exec(cfg, ["systemctl", "restart", f"kakeiboot-{env}"]),
         remote_exec(cfg, healthz_command(port)),
     ]
 
 
 def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> list[list[str]]:
-    """Promote plan (TASK-189 D-6): the 11 fixed steps, stg -> prod.
+    """Promote plan (TASK-189 D-6, extended by the service-account migration):
+    the 13 fixed steps, stg -> prod.
 
     The distribution source is the stg RUNTIME dir -- the artifacts stg is
     actually running, never the work repo; that structural identity is
     promote's whole point (D-1). Steps 1-4 are read-only (stg prechecks and
     displays: failure leaves nothing written on prod), step 5 archives the
-    previous prod artifacts right before the overwriting steps 6-9, then
-    restart + healthz. configs/ and var/ are never written: configs
-    distribution is the separate `configs` subcommand (D-1/D-7), var/ is
-    runtime data.
+    previous prod artifacts right before the distributing steps 7-9
+    overwrite them, steps 10-11 put every placed/archived artifact under
+    the dedicated service account (kakeiboot:srvops), then restart +
+    healthz. configs/ and var/ are never written: configs distribution is
+    the separate `configs` subcommand (D-1/D-7), var/ is runtime data.
+
+    Placement form (service-account migration, step 3): the binary and the
+    backup script are single files already on the runtime host, so they are
+    placed with the kakeiboot-deploy wrapper's install-file directly (the
+    wrapper installs them as kakeiboot:srvops 0770; no staging, unlike
+    deploy); the dist tree keeps its rsync (install has no recursive form)
+    and is re-owned by the wrapper's chown-tree, as are the releases
+    generations the archive step just copied as the operator.
 
     Both healthz ports come from the deployed runtime-dir configs (callers
     use resolve_runtime_port), so the whole plan is repo-config independent.
@@ -297,6 +368,12 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
     # whose User= matches the ssh operator on the current route, so
     # /proc/<pid>/exe is readable; an operator different from the unit's
     # run user fails closed here on /proc permission instead.
+    # NOTE (service-account migration): once stg runs as the dedicated
+    # kakeiboot account, NEITHER operator matches the run user, so this
+    # step fails closed for both (verified: a different-uid reader gets
+    # Permission denied on /proc/<pid>/exe). The precheck needs a redesign
+    # that does not read another user's /proc; that is a separate follow-up
+    # from the placement changes in this area and is NOT settled here.
     process_check = (
         "pid=$(systemctl show kakeiboot-stg -p MainPID --value) "
         '&& [ -n "$pid" ] && [ "$pid" != "0" ] '
@@ -327,13 +404,22 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
         '&& echo "archived previous prod artifacts to $rel"; fi'
     )
 
+    # Step 11: the archive step's copies are operator-owned (cp -a cannot
+    # preserve another user's ownership unprivileged); re-own all releases
+    # generations to kakeiboot:srvops. Guarded: a first deployment has no
+    # releases dir yet and must not fail here.
+    releases_chown = (
+        f"if [ -d {shlex.quote(f'{prod}/releases')} ]; then "
+        f"{shlex.join(deploy_chown_tree(f'{prod}/releases'))}; fi"
+    )
+
     return [
         remote_exec(cfg, healthz_command(stg_port)),
         remote_exec(cfg, ["sh", "-c", process_check]),
         remote_exec(cfg, ["sh", "-c", sha_display]),
         rsync_exec(
             cfg,
-            ["-a", "--delete", "--checksum", "-i", "--dry-run"],
+            ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i", "--dry-run"],
             "configs/prod/",
             f"{prod}/configs/prod/",
         ),
@@ -343,16 +429,20 @@ def build_promote_commands(cfg: DeployConfig, stg_port: int, prod_port: int) -> 
             ["mkdir", "-p", f"{prod}/bin", f"{prod}/frontend", f"{prod}/configs/prod"],
         ),
         remote_exec(
-            cfg, ["rsync", "-a", "--checksum", "-i", f"{stg}/budget-book", f"{prod}/budget-book"]
+            cfg, deploy_install_artifact(f"{stg}/budget-book", f"{prod}/budget-book")
         ),
         remote_exec(
             cfg,
-            ["rsync", "-a", "--checksum", "-i", f"{stg}/bin/kakeiboot-backup.sh", f"{prod}/bin/"],
+            deploy_install_artifact(
+                f"{stg}/bin/kakeiboot-backup.sh", f"{prod}/bin/kakeiboot-backup.sh"
+            ),
         ),
         remote_exec(
             cfg,
-            ["rsync", "-a", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
+            ["rsync", "-a", "--no-perms", "--omit-dir-times", "--delete", "-i", f"{stg}/frontend/dist/", f"{prod}/frontend/dist/"],
         ),
+        remote_exec(cfg, deploy_chown_tree(f"{prod}/frontend/dist")),
+        remote_exec(cfg, ["sh", "-c", releases_chown]),
         remote_exec(cfg, ["systemctl", "restart", "kakeiboot-prod"]),
         remote_exec(cfg, healthz_command(prod_port)),
     ]
@@ -369,7 +459,7 @@ def build_configs_commands(cfg: DeployConfig, env: str, preview: bool = False) -
     diff, the regular drift-check path) -- unlike the script's --dry-run,
     which only prints the plan without touching rsync.
     """
-    opts = ["-a", "--delete", "--checksum", "-i"]
+    opts = ["-a", "--no-perms", "--omit-dir-times", "--delete", "--checksum", "-i"]
     if preview:
         opts.append("--dry-run")
     dst = f"{cfg.deploy_root}/{env}/configs/{env}"
@@ -451,9 +541,44 @@ def render_unit(text: str, deploy_root: str) -> str:
     return rendered
 
 
-def sudo_install(src: str, dst: str) -> list[str]:
-    """Place one file as root:root mode 644 (the systemd/polkit default)."""
-    return ["sudo", "install", "-o", "root", "-g", "root", "-m", "644", src, dst]
+def sudo_install(
+    src: str, dst: str, owner: str = "root", group: str = "root", mode: str = "644"
+) -> list[str]:
+    """Place one file with sudo install (owner/group/mode set in one step).
+
+    The defaults are the /etc form (root:root 644, the systemd/polkit
+    default) used by install-units; the kakeiboot-tree artifacts do NOT use
+    this helper -- they go through the kakeiboot-deploy wrapper instead
+    (deploy_install_artifact / deploy_chown_tree).
+    """
+    return ["sudo", "install", "-o", owner, "-g", group, "-m", mode, src, dst]
+
+
+def deploy_install_artifact(src: str, dst: str) -> list[str]:
+    """Place one deploy artifact via the root-owned kakeiboot-deploy
+    wrapper (service-account migration): the wrapper validates that dst is
+    inside the kakeiboot tree and installs the file as kakeiboot:srvops
+    0770 itself -- the dedicated run user owns the binary and the backup
+    script it executes. The call goes through sudo because the wrapper is
+    root-owned and the migration's sudoers entry names only the wrapper
+    (gt430's sudo-rs accepts no argument wildcards, so the operator's grant
+    cannot name install/chown with path arguments directly)."""
+    return ["sudo", DEPLOY_WRAPPER, "install-file", src, dst]
+
+
+def deploy_chown_tree(path: str) -> list[str]:
+    """Re-own a placed tree (frontend dist, releases generations) to
+    kakeiboot:srvops via the wrapper's chown-tree. The tree transfers
+    themselves stay rsync/cp (install has no recursive form); this is the
+    ownership half of the placement, validated inside the wrapper. The
+    wrapper also normalizes modes (directories 2770, files group-writable)
+    so the next operator-run transfer can write the tree again: the rsync
+    steps into these service-owned trees therefore use --no-perms and
+    --omit-dir-times, because propagating the build's 0755/0644 modes (or
+    setting directory timestamps) would make rsync chmod/utime directories
+    the operator does not own (exit 23) and would strip the group write
+    the following deploy depends on."""
+    return ["sudo", DEPLOY_WRAPPER, "chown-tree", path]
 
 
 def build_install_units_commands(cfg: DeployConfig, staged_dir: str) -> list[list[str]]:
@@ -549,7 +674,10 @@ def run_commands(
 def cmd_deploy(args: argparse.Namespace) -> int:
     cfg = load_config(config_paths())
     port = resolve_port(REPO_ROOT, args.env)
-    cmds = build_deploy_commands(cfg, args.env, port)
+    # Per-invocation staging dir (install-units pattern): unique, so a failed
+    # run never leaves a fixed-name dir the other operator cannot clear.
+    stage = f"{ARTIFACT_STAGE_PREFIX}-{args.env}-{secrets.token_hex(4)}"
+    cmds = build_deploy_commands(cfg, args.env, port, stage)
     executed, rc = run_commands(cmds, args.dry_run, cwd=REPO_ROOT)
     if rc != 0:
         print("steps executed before failure:", file=sys.stderr)
