@@ -435,6 +435,11 @@ describe('ConsentPage', () => {
     expect(wrapper.find('[data-test="user-display-name"]').text()).toBe('太郎')
     expect(wrapper.find('[data-test="allow"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="deny"]').exists()).toBe(true)
+    // ボタン配置: 左に拒否（副アクション）、右に許可（主アクション）
+    const buttons = wrapper.findAll('.actions button')
+    expect(buttons.map((b) => b.attributes('data-test'))).toEqual(['deny', 'allow'])
+    expect(wrapper.find('[data-test="allow"]').classes()).toContain('btn-primary')
+    expect(wrapper.find('[data-test="deny"]').classes()).not.toContain('btn-primary')
 
     // a request with no initial ledger (ledger_color null) shows the name
     // without a chip
