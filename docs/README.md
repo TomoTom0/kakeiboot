@@ -9,6 +9,7 @@ docs 配下の恒久文書（仕様・運用手順・索引・参照資料・cha
 - `spec/`: 仕様
 - `ops/`: 運用
 - `dev/`: 開発
+- `changelog/`: 変更履歴
 
 ## usage
 
@@ -44,3 +45,11 @@ docs 配下の恒久文書（仕様・運用手順・索引・参照資料・cha
 | ファイル | 目的 | 正本となる範囲 |
 |---|---|---|
 | [dev/dev_setup.md](dev/dev_setup.md) | 開発環境の構成と実行手順 | repo の構成、生成物の集約先、セットアップ、実行、環境別 configs の選択、port 割当、外部公開 URL、backend/migrations コメントの旧 docs パスの扱い |
+
+## changelog
+
+| ファイル | 目的 | 正本となる範囲 |
+|---|---|---|
+| [changelog/README.md](changelog/README.md) | 変更履歴の索引と運用規則 | バージョン一覧、書き方（区分・ファイル名）、リリース時の手順 |
+| [changelog/unreleased.md](changelog/unreleased.md) | 次期バージョン（未リリース）の変更 | 未リリースの変更の集約先。リリース時に版別ファイルへ移す |
+| [changelog/v0.1.0.md](changelog/v0.1.0.md) | v0.1.0 の変更 | changelog 導入時点で実装済みの機能（初版） |
