@@ -146,20 +146,20 @@ async function decide(decision: 'allow' | 'deny'): Promise<void> {
         </p>
         <div class="actions actions-fill">
           <button
-            class="btn btn-primary"
-            :disabled="busy"
-            data-test="allow"
-            @click="decide('allow')"
-          >
-            許可
-          </button>
-          <button
             class="btn"
             :disabled="busy"
             data-test="deny"
             @click="decide('deny')"
           >
             拒否
+          </button>
+          <button
+            class="btn btn-primary"
+            :disabled="busy"
+            data-test="allow"
+            @click="decide('allow')"
+          >
+            許可
           </button>
         </div>
       </div>
